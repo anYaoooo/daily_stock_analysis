@@ -31,6 +31,7 @@
 """
 
 from .base import BaseFetcher, DataFetcherManager
+from .crypto_fetcher import CryptoFetcher, is_crypto_code
 from .efinance_fetcher import EfinanceFetcher
 from .tencent_fetcher import TencentFetcher
 from .akshare_fetcher import AkshareFetcher, is_hk_stock_code
@@ -46,6 +47,7 @@ from .us_index_mapping import is_us_index_code, is_us_stock_code, get_us_index_y
 __all__ = [
     'BaseFetcher',
     'DataFetcherManager',
+    'CryptoFetcher',
     'EfinanceFetcher',
     'TencentFetcher',
     'AkshareFetcher',
@@ -59,6 +61,7 @@ __all__ = [
     'is_us_index_code',
     'is_us_stock_code',
     'is_hk_stock_code',
+    'is_crypto_code',
     'get_us_index_yf_symbol',
     'US_INDEX_MAPPING',
 ]

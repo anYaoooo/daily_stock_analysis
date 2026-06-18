@@ -23,6 +23,7 @@ from api.v1.schemas.stocks import (
     ExtractFromImageResponse,
     ExtractItem,
     KLineData,
+    StockNewsItem,
     StockHistoryResponse,
     StockQuote,
 )
@@ -404,6 +405,104 @@ def remove_from_watchlist(
         )
 
 
+def _build_stock_news_items(stock_code: str, stock_name: Optional[str]) -> list[StockNewsItem]:
+    """Best-effort latest-news payload for quote responses."""
+    try:
+        from src.search_service import get_search_service
+
+        service = get_search_service()
+        response = service.search_stock_news(
+            stock_code=stock_code,
+            stock_name=stock_name or stock_code,
+            max_results=3,
+        )
+        news_items = []
+        for item in response.results[:3] if response.success and response.results else []:
+            translated_title, summary_zh = _localize_stock_news_item(item)
+            news_items.append(
+                StockNewsItem(
+                    title=item.title,
+                    translated_title=translated_title,
+                    snippet=item.snippet,
+                    summary_zh=summary_zh,
+                    url=item.url,
+                    source=item.source,
+                    published_date=item.published_date,
+                    relevance_score=item.relevance_score,
+                    relevance_category=item.relevance_category,
+                    relevance_reasons=item.relevance_reasons or [],
+                )
+            )
+        return news_items
+    except Exception as e:
+        logger.warning("获取 %s 资讯失败，行情接口将继续返回价格数据: %s", stock_code, e)
+        return []
+
+
+def _btc_news_zh_title_and_summary(title: str, snippet: Optional[str] = None) -> tuple[str, str]:
+    """Return a compact Chinese title and one-line summary for BTC news."""
+    text = " ".join(part for part in [title, snippet or ""] if part).lower()
+    title_zh = title
+    drivers: list[str] = []
+    impacts: list[str] = []
+
+    if "dollar index" in text or "dxy" in text or "stronger dollar" in text:
+        title_zh = "美元指数接近关键突破，比特币承压"
+        drivers.append("美元指数走强")
+        impacts.append("通常会压制以美元计价的风险资产和比特币表现")
+    elif "bond market" in text or "treasury" in text or "yield" in text:
+        title_zh = "债券市场释放利率信号，比特币多头需关注"
+        drivers.append("美债收益率和利率预期变化")
+        impacts.append("会影响市场流动性和风险偏好")
+    elif "interest rate" in text or "rate-cut" in text or "rate cut" in text:
+        title_zh = "利率预期变化影响比特币流动性"
+        drivers.append("降息/利率预期重新定价")
+        impacts.append("可能改变资金对加密资产的配置意愿")
+    elif "cpi" in text or "ppi" in text or "inflation" in text:
+        title_zh = "通胀数据影响美联储预期和比特币走势"
+        drivers.append("CPI/PPI 或通胀预期变化")
+        impacts.append("会影响降息节奏和风险资产估值")
+    elif "jobs" in text or "unemployment" in text or "claims" in text:
+        title_zh = "就业数据影响美联储路径和比特币风险偏好"
+        drivers.append("就业或失业金数据变化")
+        impacts.append("会影响市场对美联储政策的判断")
+    elif "fed" in text or "hawkish" in text or "dovish" in text:
+        title_zh = "美联储政策信号牵动比特币走势"
+        drivers.append("美联储政策口径变化")
+        impacts.append("会影响美元、利率和风险资产情绪")
+    elif "war" in text or "conflict" in text or "geopolitical" in text:
+        title_zh = "地缘冲突升温，比特币波动风险上升"
+        drivers.append("战争、冲突或地缘风险")
+        impacts.append("可能推高避险情绪并放大加密市场波动")
+    elif "etf" in text or "inflow" in text or "outflow" in text:
+        title_zh = "比特币 ETF 资金流变化影响短线情绪"
+        drivers.append("ETF 资金流入/流出")
+        impacts.append("会直接影响现货需求和市场情绪")
+    elif "liquidation" in text:
+        title_zh = "加密市场清算风险影响比特币短线波动"
+        drivers.append("杠杆清算压力")
+        impacts.append("可能放大短线价格波动")
+    elif "bitcoin" in text or "btc" in text:
+        title_zh = "比特币市场出现新的价格驱动因素"
+        drivers.append("比特币相关新闻")
+        impacts.append("需结合美元、利率和资金流判断影响")
+
+    if not drivers:
+        drivers.append("宏观或加密市场消息")
+    if not impacts:
+        impacts.append("可能影响比特币短线波动和风险偏好")
+
+    summary_zh = f"关注点：{drivers[0]}；影响：{impacts[0]}。"
+    return title_zh, summary_zh
+
+
+def _localize_stock_news_item(item) -> tuple[Optional[str], Optional[str]]:
+    title = item.title or ""
+    if not title:
+        return None, None
+    return _btc_news_zh_title_and_summary(title, item.snippet)
+
+
 @router.get(
     "/{stock_code}/quote",
     response_model=StockQuote,
@@ -415,7 +514,10 @@ def remove_from_watchlist(
     summary="获取股票实时行情",
     description="获取指定股票的最新行情数据"
 )
-def get_stock_quote(stock_code: str) -> StockQuote:
+def get_stock_quote(
+    stock_code: str,
+    include_news: bool = Query(False, description="是否附带最新资讯（仅建议 BTC 等需要资讯联动的入口使用）"),
+) -> StockQuote:
     """
     获取股票实时行情
     
@@ -445,9 +547,12 @@ def get_stock_quote(stock_code: str) -> StockQuote:
                 }
             )
         
+        stock_name = result.get("stock_name")
+        news = _build_stock_news_items(stock_code, stock_name) if include_news else None
+
         return StockQuote(
             stock_code=result.get("stock_code", stock_code),
-            stock_name=result.get("stock_name"),
+            stock_name=stock_name,
             current_price=result.get("current_price", 0.0),
             change=result.get("change"),
             change_percent=result.get("change_percent"),
@@ -457,7 +562,8 @@ def get_stock_quote(stock_code: str) -> StockQuote:
             prev_close=result.get("prev_close"),
             volume=result.get("volume"),
             amount=result.get("amount"),
-            update_time=result.get("update_time")
+            update_time=result.get("update_time"),
+            news=news,
         )
         
     except HTTPException:
@@ -486,7 +592,7 @@ def get_stock_quote(stock_code: str) -> StockQuote:
 )
 def get_stock_history(
     stock_code: str,
-    period: str = Query("daily", description="K 线周期", pattern="^(daily|weekly|monthly)$"),
+    period: str = Query("daily", description="K 线周期", pattern="^(hourly|four_hour|daily|weekly|monthly)$"),
     days: int = Query(30, ge=1, le=365, description="获取天数")
 ) -> StockHistoryResponse:
     """
@@ -496,7 +602,7 @@ def get_stock_history(
     
     Args:
         stock_code: 股票代码
-        period: K 线周期 (daily/weekly/monthly)
+        period: K 线周期 (hourly/four_hour/daily/weekly/monthly)
         days: 获取天数
         
     Returns:

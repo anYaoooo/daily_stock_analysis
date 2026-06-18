@@ -152,6 +152,7 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimax.io/) Coding Plan Web Search (structured search results) | Optional |
 | `SEARXNG_BASE_URLS` | SearXNG self-hosted instances (quota-free fallback, enable format: json in settings.yml); when empty the app auto-discovers public instances | Optional |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `true`) | Optional |
+| BTC public RSS fallback | When all BTC intelligence search dimensions fail or return empty results, the app reads public RSS feeds from CoinDesk, Cointelegraph, Decrypt, and Bitcoin Magazine | Automatic |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638) Token | Optional |
 | `TICKFLOW_API_KEY` | [TickFlow](https://tickflow.org) API key for CN market review index enhancement; market breadth also uses TickFlow when the plan supports universe queries | Optional |
 
@@ -1016,6 +1017,11 @@ System defaults to AkShare (free), also supports other data sources:
 - Supports US/HK stock data
 - US stock historical and real-time data both use YFinance exclusively to avoid technical indicator errors from akshare's US stock adjustment issues
 
+### Binance Crypto
+- Free, no configuration needed; uses Binance public market-data endpoints
+- Currently supports Bitcoin symbols: `BTC`, `BTCUSDT`, `BTC-USD`, `BTC/USD`
+- Provides real-time quotes and daily K-line data, and routes crypto symbols separately so they are not mistaken for US tickers
+
 ### Longbridge
 - Optional fallback for US/HK stocks, mainly used to supplement fields that YFinance may miss
 - New integrations should use Longbridge OAuth 2.0: the client id is read from `LONGBRIDGE_OAUTH_CLIENT_ID`, or from `LONGBRIDGE_APP_KEY` when no Legacy Access Token is configured; run `python scripts/generate_longbridge_oauth_token.py --client-id <client_id>` once on an interactive machine to generate the SDK token cache
@@ -1379,6 +1385,7 @@ python main.py --serve-only --host 0.0.0.0 --port 8888
 | A-shares | 6-digit number | `600519`, `000001`, `300750` |
 | BSE (Beijing) | 8/4/92 prefix, 6-digit; supports `BJ` prefix or `.BJ` suffix | `920748`, `BJ920493`, `920493.BJ` |
 | HK stocks | hk + 5-digit number | `hk00700`, `hk09988` |
+| Crypto | Common BTC spot symbols | `BTC`, `BTCUSDT`, `BTC-USD`, `BTC/USD` |
 
 ### Notes
 

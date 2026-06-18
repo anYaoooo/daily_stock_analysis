@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { analysisApi } from '../api/analysis';
 import { historyApi } from '../api/history';
+import { stocksApi, type KLineData, type StockHistoryPeriod, type StockHistoryResponse, type StockQuoteResponse } from '../api/stocks';
 import { agentApi, type SkillInfo } from '../api/agent';
 import { systemConfigApi } from '../api/systemConfig';
 import { ApiErrorAlert, Button, Drawer, EmptyState, InlineAlert } from '../components/common';
@@ -41,6 +42,193 @@ type StockAnalysisNavigationState = {
   selectionSource?: string;
 };
 
+type CryptoMarketState = {
+  isLoading: boolean;
+  isHistoryLoading: boolean;
+  error: ParsedApiError | null;
+  quote: StockQuoteResponse | null;
+  history: StockHistoryResponse | null;
+  historyPeriod: StockHistoryPeriod;
+};
+
+const EMPTY_CRYPTO_MARKET_STATE: CryptoMarketState = {
+  isLoading: false,
+  isHistoryLoading: false,
+  error: null,
+  quote: null,
+  history: null,
+  historyPeriod: 'daily',
+};
+
+type BitcoinHistoryPeriodLabelKey =
+  | 'home.bitcoinPeriodHourly'
+  | 'home.bitcoinPeriodFourHour'
+  | 'home.bitcoinPeriodDaily'
+  | 'home.bitcoinPeriodWeekly'
+  | 'home.bitcoinPeriodMonthly';
+
+const BITCOIN_HISTORY_PERIOD_OPTIONS: Array<{
+  value: StockHistoryPeriod;
+  labelKey: BitcoinHistoryPeriodLabelKey;
+  days: number;
+}> = [
+  { value: 'hourly', labelKey: 'home.bitcoinPeriodHourly', days: 7 },
+  { value: 'four_hour', labelKey: 'home.bitcoinPeriodFourHour', days: 30 },
+  { value: 'daily', labelKey: 'home.bitcoinPeriodDaily', days: 30 },
+  { value: 'weekly', labelKey: 'home.bitcoinPeriodWeekly', days: 180 },
+  { value: 'monthly', labelKey: 'home.bitcoinPeriodMonthly', days: 365 },
+];
+
+const getBitcoinHistoryPeriodDays = (period: StockHistoryPeriod) => (
+  BITCOIN_HISTORY_PERIOD_OPTIONS.find((option) => option.value === period)?.days ?? 30
+);
+
+const getBitcoinHistoryPeriodLabelKey = (period: StockHistoryPeriod): BitcoinHistoryPeriodLabelKey => (
+  BITCOIN_HISTORY_PERIOD_OPTIONS.find((option) => option.value === period)?.labelKey ?? 'home.bitcoinPeriodDaily'
+);
+
+const formatMarketNumber = (
+  value: number | null | undefined,
+  language: string,
+  options: Intl.NumberFormatOptions = {},
+) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '--';
+  }
+  return new Intl.NumberFormat(language === 'en' ? 'en-US' : 'zh-CN', options).format(value);
+};
+
+const formatMarketPercent = (value: number | null | undefined, language: string) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '--';
+  }
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${formatMarketNumber(value, language, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+};
+
+const formatMarketPrice = (value: number | null | undefined, language: string) => (
+  formatMarketNumber(value, language, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+);
+
+const BitcoinCandlestickChart: React.FC<{
+  items: KLineData[];
+  language: string;
+  emptyText: string;
+}> = ({ items, language, emptyText }) => {
+  if (items.length === 0) {
+    return (
+      <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-subtle text-sm text-muted-text">
+        {emptyText}
+      </div>
+    );
+  }
+
+  const width = 760;
+  const height = 260;
+  const padding = { top: 18, right: 64, bottom: 34, left: 16 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const highs = items.map((item) => item.high);
+  const lows = items.map((item) => item.low);
+  const rawMax = Math.max(...highs);
+  const rawMin = Math.min(...lows);
+  const rangePadding = Math.max((rawMax - rawMin) * 0.08, 1);
+  const max = rawMax + rangePadding;
+  const min = rawMin - rangePadding;
+  const range = Math.max(max - min, 1);
+  const step = plotWidth / Math.max(items.length, 1);
+  const candleWidth = Math.min(Math.max(step * 0.48, 6), 18);
+  const yFor = (value: number) => padding.top + ((max - value) / range) * plotHeight;
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => max - range * ratio);
+  const labelIndexes = Array.from(new Set([0, Math.floor((items.length - 1) / 2), items.length - 1]));
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-subtle bg-surface/40">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="Bitcoin candlestick chart"
+        className="block min-w-[42rem] w-full"
+      >
+        <g className="text-muted-text">
+          {ticks.map((tick) => {
+            const y = yFor(tick);
+            return (
+              <g key={tick}>
+                <line
+                  x1={padding.left}
+                  x2={width - padding.right}
+                  y1={y}
+                  y2={y}
+                  stroke="currentColor"
+                  strokeOpacity="0.16"
+                />
+                <text
+                  x={width - padding.right + 8}
+                  y={y + 4}
+                  fill="currentColor"
+                  fontSize="11"
+                >
+                  {formatMarketNumber(tick, language, { maximumFractionDigits: 0 })}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+        {items.map((item, index) => {
+          const x = padding.left + step * index + step / 2;
+          const openY = yFor(item.open);
+          const closeY = yFor(item.close);
+          const highY = yFor(item.high);
+          const lowY = yFor(item.low);
+          const bodyY = Math.min(openY, closeY);
+          const bodyHeight = Math.max(Math.abs(closeY - openY), 2);
+          const isUp = item.close >= item.open;
+          return (
+            <g key={item.date} className={isUp ? 'text-success' : 'text-danger'}>
+              <line
+                x1={x}
+                x2={x}
+                y1={highY}
+                y2={lowY}
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <rect
+                x={x - candleWidth / 2}
+                y={bodyY}
+                width={candleWidth}
+                height={bodyHeight}
+                rx="1"
+                fill="currentColor"
+                fillOpacity={isUp ? '0.78' : '0.9'}
+              />
+            </g>
+          );
+        })}
+        <g className="text-muted-text">
+          {labelIndexes.map((index) => {
+            const item = items[index];
+            const x = padding.left + step * index + step / 2;
+            return (
+              <text
+                key={item.date}
+                x={x}
+                y={height - 12}
+                fill="currentColor"
+                fontSize="11"
+                textAnchor="middle"
+              >
+                {item.date.slice(5)}
+              </text>
+            );
+          })}
+        </g>
+      </svg>
+    </div>
+  );
+};
+
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -51,6 +239,7 @@ const HomePage: React.FC = () => {
   const [marketReviewError, setMarketReviewError] = useState<ParsedApiError | null>(null);
   const [marketReviewReport, setMarketReviewReport] = useState<string | null>(null);
   const [marketReviewPayload, setMarketReviewPayload] = useState<MarketReviewPayload | null>(null);
+  const [cryptoMarket, setCryptoMarket] = useState<CryptoMarketState>(EMPTY_CRYPTO_MARKET_STATE);
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
   const [strategyMenuOpen, setStrategyMenuOpen] = useState(false);
@@ -201,6 +390,14 @@ const HomePage: React.FC = () => {
   const liveMarketReviewLanguage = normalizeReportLanguage(marketReviewPayload?.language);
   const isMarketReviewHistoryReport = selectedReport?.meta.reportType === 'market_review';
   const isHistoryTrendUnavailable = !selectedReport || !selectedReport.meta.stockCode;
+  const bitcoinKLines = useMemo(
+    () => (cryptoMarket.history?.data ?? []).slice(-10).reverse(),
+    [cryptoMarket.history],
+  );
+  const bitcoinChartItems = useMemo(
+    () => (cryptoMarket.history?.data ?? []).slice(-30),
+    [cryptoMarket.history],
+  );
 
   useEffect(() => {
     if (!isHistoryTrendUnavailable || !isHistoryTrendOpen) {
@@ -597,6 +794,67 @@ const HomePage: React.FC = () => {
     }
   }, [notify, pollMarketReviewStatus, scrollMarketReviewFeedbackIntoView, t]);
 
+  const loadBitcoinHistory = useCallback(async (period: StockHistoryPeriod) => {
+    setCryptoMarket((current) => ({
+      ...current,
+      isHistoryLoading: true,
+      historyPeriod: period,
+      error: null,
+    }));
+    try {
+      const history = await stocksApi.getHistory('BTC', {
+        period,
+        days: getBitcoinHistoryPeriodDays(period),
+      });
+      setCryptoMarket((current) => ({
+        ...current,
+        isHistoryLoading: false,
+        error: null,
+        history,
+        historyPeriod: period,
+      }));
+    } catch (err: unknown) {
+      setCryptoMarket((current) => ({
+        ...current,
+        isHistoryLoading: false,
+        error: getParsedApiError(err),
+      }));
+    }
+  }, []);
+
+  const handleLoadBitcoinMarket = useCallback(async () => {
+    const period: StockHistoryPeriod = 'daily';
+    setCryptoMarket((current) => ({
+      ...current,
+      isLoading: true,
+      isHistoryLoading: true,
+      historyPeriod: period,
+      error: null,
+    }));
+    scrollMarketReviewFeedbackIntoView();
+    try {
+      const [quote, history] = await Promise.all([
+        stocksApi.getQuote('BTC', { includeNews: true }),
+        stocksApi.getHistory('BTC', { period, days: getBitcoinHistoryPeriodDays(period) }),
+      ]);
+      setCryptoMarket({
+        isLoading: false,
+        isHistoryLoading: false,
+        error: null,
+        quote,
+        history,
+        historyPeriod: period,
+      });
+    } catch (err: unknown) {
+      setCryptoMarket((current) => ({
+        ...current,
+        isLoading: false,
+        isHistoryLoading: false,
+        error: getParsedApiError(err),
+      }));
+    }
+  }, [scrollMarketReviewFeedbackIntoView]);
+
   const mergedStockBarItems = useMemo<StockBarItem[]>(() => {
     const latestMarketReview = marketReviewHistoryItems[0];
     const stockItems = stockBarItems.filter((item) => item.stockCode !== 'MARKET');
@@ -750,6 +1008,18 @@ const HomePage: React.FC = () => {
                 type="button"
                 variant="secondary"
                 size="md"
+                isLoading={cryptoMarket.isLoading}
+                loadingText={t('home.bitcoinLoading')}
+                onClick={() => void handleLoadBitcoinMarket()}
+                className="h-10 flex-1 whitespace-nowrap md:flex-none"
+              >
+                <BarChart3 className="h-4 w-4" aria-hidden="true" />
+                {t('home.bitcoinMarket')}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
                 isLoading={isSubmittingMarketReview}
                 loadingText={t('home.submitMarketReview')}
                 onClick={() => void handleTriggerMarketReview()}
@@ -866,6 +1136,193 @@ const HomePage: React.FC = () => {
                   className="mb-1"
                   onDismiss={() => setMarketReviewError(null)}
                 />
+              </div>
+            ) : null}
+
+            {cryptoMarket.error ? (
+              <div className="mb-3">
+                <ApiErrorAlert
+                  error={cryptoMarket.error}
+                  className="mb-1"
+                  onDismiss={() => setCryptoMarket((current) => ({ ...current, error: null }))}
+                />
+              </div>
+            ) : null}
+
+            {cryptoMarket.quote ? (
+              <div
+                className="dashboard-card mb-3 max-w-6xl p-4"
+                data-testid="bitcoin-market-panel"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="label-uppercase">{t('home.bitcoinSource')}</p>
+                    <h2 className="mt-1 text-lg font-semibold text-foreground">
+                      {cryptoMarket.quote.stockName || 'Bitcoin'} ({cryptoMarket.quote.stockCode || 'BTCUSDT'})
+                    </h2>
+                  </div>
+                  <div className="flex flex-wrap items-start justify-end gap-3">
+                    <div className="text-right">
+                      <p className="text-2xl font-semibold text-foreground">
+                        {formatMarketPrice(cryptoMarket.quote.currentPrice, uiLanguage)}
+                      </p>
+                      <p
+                        className={`mt-1 text-sm font-medium ${
+                          (cryptoMarket.quote.changePercent ?? 0) >= 0 ? 'text-success' : 'text-danger'
+                        }`}
+                      >
+                        {formatMarketNumber(cryptoMarket.quote.change, uiLanguage, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {' / '}
+                        {formatMarketPercent(cryptoMarket.quote.changePercent, uiLanguage)}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="home-action-ai"
+                      size="sm"
+                      disabled={isAnalyzing}
+                      onClick={() => handleSubmitAnalysis('BTC', 'Bitcoin', 'manual')}
+                    >
+                      <BarChart3 className="h-4 w-4" aria-hidden="true" />
+                      {t('home.bitcoinAnalyze')}
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    { key: 'open', label: t('home.bitcoinOpen'), value: cryptoMarket.quote.open },
+                    { key: 'high', label: t('home.bitcoinHigh'), value: cryptoMarket.quote.high },
+                    { key: 'low', label: t('home.bitcoinLow'), value: cryptoMarket.quote.low },
+                    { key: 'amount', label: t('home.bitcoinAmount'), value: cryptoMarket.quote.amount },
+                  ].map((item) => (
+                    <div key={item.key} className="rounded-lg border border-subtle bg-surface/50 px-3 py-2">
+                      <p className="label-uppercase">{item.label}</p>
+                      <p className="mt-1 text-sm font-semibold text-foreground">
+                        {formatMarketNumber(item.value, uiLanguage, {
+                          maximumFractionDigits: item.key === 'amount' ? 0 : 2,
+                          minimumFractionDigits: item.key === 'amount' ? 0 : 2,
+                        })}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                {cryptoMarket.quote.news && cryptoMarket.quote.news.length > 0 ? (
+                  <div className="mt-4 rounded-lg border border-subtle bg-surface/40 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="label-uppercase">{t('home.bitcoinNews')}</p>
+                      <p className="text-xs text-muted-text">{t('home.bitcoinNewsSource')}</p>
+                    </div>
+                    <div className="grid gap-2">
+                      {cryptoMarket.quote.news.slice(0, 3).map((item, index) => (
+                        <article
+                          key={`${item.url || item.title}-${index}`}
+                          className="rounded-md border border-subtle bg-background/40 px-3 py-2"
+                        >
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-text">
+                            {item.source ? <span>{item.source}</span> : null}
+                            {item.publishedDate ? <span>{item.publishedDate}</span> : null}
+                          </div>
+                          {item.url ? (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-1 block text-sm font-semibold text-foreground hover:text-primary"
+                            >
+                              {item.translatedTitle || item.title}
+                            </a>
+                          ) : (
+                            <p className="mt-1 text-sm font-semibold text-foreground">{item.translatedTitle || item.title}</p>
+                          )}
+                          {item.summaryZh || item.snippet ? (
+                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-secondary-text">
+                              {item.summaryZh || item.snippet}
+                            </p>
+                          ) : null}
+                          {item.translatedTitle && item.translatedTitle !== item.title ? (
+                            <p className="mt-1 text-[11px] leading-4 text-muted-text">{item.title}</p>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="mt-4">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="label-uppercase">{t('home.bitcoinKLineChart')}</p>
+                      <p className="mt-1 text-xs text-muted-text">
+                        {t('home.bitcoinKLineWindow', {
+                          period: t(getBitcoinHistoryPeriodLabelKey(cryptoMarket.historyPeriod)),
+                        })}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1 rounded-lg border border-subtle bg-surface/50 p-1">
+                      {BITCOIN_HISTORY_PERIOD_OPTIONS.map((option) => {
+                        const selected = cryptoMarket.historyPeriod === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            disabled={cryptoMarket.isLoading || cryptoMarket.isHistoryLoading}
+                            onClick={() => void loadBitcoinHistory(option.value)}
+                            className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                              selected
+                                ? 'bg-primary text-primary-foreground'
+                                : 'text-secondary-text hover:bg-hover hover:text-foreground'
+                            }`}
+                          >
+                            {t(option.labelKey)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {cryptoMarket.isHistoryLoading ? (
+                    <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-subtle text-sm text-muted-text">
+                      {t('home.bitcoinKLineLoading')}
+                    </div>
+                  ) : (
+                    <BitcoinCandlestickChart
+                      items={bitcoinChartItems}
+                      language={uiLanguage}
+                      emptyText={t('home.bitcoinKLineEmpty')}
+                    />
+                  )}
+                </div>
+                <div className="mt-4 overflow-x-auto rounded-lg border border-subtle">
+                  <table className="min-w-[40rem] w-full text-left text-xs">
+                    <thead className="bg-surface/70 text-muted-text">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">{t('home.bitcoinDate')}</th>
+                        <th className="px-3 py-2 font-medium">{t('home.bitcoinOpen')}</th>
+                        <th className="px-3 py-2 font-medium">{t('home.bitcoinHigh')}</th>
+                        <th className="px-3 py-2 font-medium">{t('home.bitcoinLow')}</th>
+                        <th className="px-3 py-2 font-medium">{t('home.bitcoinClose')}</th>
+                        <th className="px-3 py-2 font-medium">{t('home.bitcoinChangePercent')}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-subtle">
+                      {bitcoinKLines.map((item) => (
+                        <tr key={item.date} className="text-secondary-text">
+                          <td className="px-3 py-2 font-medium text-foreground">{item.date}</td>
+                          <td className="px-3 py-2">{formatMarketPrice(item.open, uiLanguage)}</td>
+                          <td className="px-3 py-2">{formatMarketPrice(item.high, uiLanguage)}</td>
+                          <td className="px-3 py-2">{formatMarketPrice(item.low, uiLanguage)}</td>
+                          <td className="px-3 py-2">{formatMarketPrice(item.close, uiLanguage)}</td>
+                          <td className={`px-3 py-2 font-medium ${(item.changePercent ?? 0) >= 0 ? 'text-success' : 'text-danger'}`}>
+                            {formatMarketPercent(item.changePercent, uiLanguage)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {cryptoMarket.quote.updateTime ? (
+                  <p className="mt-3 text-xs text-muted-text">
+                    {t('home.bitcoinUpdatedAt', { time: cryptoMarket.quote.updateTime })}
+                  </p>
+                ) : null}
               </div>
             ) : null}
 

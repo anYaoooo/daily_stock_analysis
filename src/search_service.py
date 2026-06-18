@@ -12,9 +12,11 @@ A股自选股智能分析系统 - 搜索服务模块
 """
 
 import logging
+import html
 import re
 import threading
 import time
+import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -2128,6 +2130,13 @@ class SearchService:
     FUTURE_TOLERANCE_DAYS = 1
     ANALYTICAL_INTEL_LOOKBACK_DAYS = 180
     ANALYTICAL_INTEL_DIMENSIONS = {"market_analysis", "earnings"}
+    CRYPTO_RSS_FEEDS = (
+        ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+        ("Cointelegraph", "https://cointelegraph.com/rss"),
+        ("Decrypt", "https://decrypt.co/feed"),
+        ("Bitcoin Magazine", "https://bitcoinmagazine.com/.rss/full/"),
+    )
+    CRYPTO_RSS_TIMEOUT_SECONDS = 8
     _CHINESE_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
     _US_STOCK_RE = re.compile(r"^[A-Za-z]{1,5}(\.[A-Za-z])?$")
     _DIRECT_NEWS_CATEGORY = "direct_company_news"
@@ -2375,10 +2384,253 @@ class SearchService:
             return True
         return False
 
+    @staticmethod
+    def _is_crypto_symbol(stock_code: str) -> bool:
+        """Return True for supported crypto symbols handled by CryptoFetcher."""
+        try:
+            from data_provider.crypto_fetcher import is_crypto_code
+
+            return is_crypto_code(stock_code)
+        except Exception:
+            return False
+
+    @classmethod
+    def _crypto_news_identity_terms(cls, stock_code: str, stock_name: str) -> List[str]:
+        if not cls._is_crypto_symbol(stock_code):
+            return []
+        terms: List[str] = []
+        for term in (
+            stock_code,
+            stock_name,
+            "Bitcoin",
+            "bitcoin",
+            "BTC",
+            "BTCUSDT",
+            "比特币",
+        ):
+            cls._append_unique(terms, term)
+        return terms
+
+    @classmethod
+    def _crypto_stock_news_query(cls, stock_code: str, stock_name: str) -> str:
+        symbol = "BTC" if cls._is_crypto_symbol(stock_code) else (stock_code or "").strip()
+        name = (stock_name or "").strip() or "Bitcoin"
+        return (
+            f"{name} {symbol} Bitcoin crypto cryptocurrency ETF Fed rates CPI PPI "
+            "jobs unemployment geopolitical conflict latest news"
+        )
+
     @classmethod
     def _contains_chinese_text(cls, value: Optional[str]) -> bool:
         """Return True when the input contains CJK characters."""
         return bool(value and cls._CHINESE_TEXT_RE.search(value))
+
+    @staticmethod
+    def _strip_markup(value: Optional[str], *, max_length: int = 300) -> str:
+        """Return a compact text snippet from RSS HTML-ish fields."""
+        if not value:
+            return ""
+        text = html.unescape(str(value))
+        text = re.sub(r"(?is)<script.*?</script>|<style.*?</style>", " ", text)
+        text = re.sub(r"(?s)<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:max_length]
+
+    @classmethod
+    def _xml_child_text(cls, node: ET.Element, names: Tuple[str, ...]) -> str:
+        """Fetch direct child text while ignoring XML namespaces."""
+        for child in list(node):
+            local_name = child.tag.rsplit("}", 1)[-1].lower()
+            if local_name in names:
+                return cls._strip_markup(child.text, max_length=800)
+        return ""
+
+    @classmethod
+    def _xml_child_attr(cls, node: ET.Element, child_name: str, attr_name: str) -> str:
+        """Fetch an attribute from a direct child while ignoring XML namespaces."""
+        for child in list(node):
+            local_name = child.tag.rsplit("}", 1)[-1].lower()
+            if local_name == child_name:
+                return (child.attrib.get(attr_name) or "").strip()
+        return ""
+
+    @classmethod
+    def _crypto_rss_item_matches(cls, item: SearchResult, stock_code: str, stock_name: str) -> bool:
+        terms = cls._crypto_news_identity_terms(stock_code, stock_name)
+        haystack = " ".join([item.title or "", item.snippet or "", item.url or ""])
+        return any(cls._contains_identity_term(haystack, term) for term in terms)
+
+    @classmethod
+    def _parse_crypto_rss_entries(
+        cls,
+        xml_text: str,
+        *,
+        source_name: str,
+        stock_code: str,
+        stock_name: str,
+        max_results: int,
+    ) -> List[SearchResult]:
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError as exc:
+            logger.debug("[CryptoRSS] %s RSS 解析失败: %s", source_name, exc)
+            return []
+
+        entries = [
+            node
+            for node in root.iter()
+            if node.tag.rsplit("}", 1)[-1].lower() in {"item", "entry"}
+        ]
+        results: List[SearchResult] = []
+        for entry in entries:
+            title = cls._xml_child_text(entry, ("title",))
+            link = cls._xml_child_text(entry, ("link",))
+            if not link:
+                link = cls._xml_child_attr(entry, "link", "href")
+            snippet = cls._xml_child_text(entry, ("description", "summary", "content", "encoded"))
+            published = cls._xml_child_text(entry, ("pubdate", "published", "updated"))
+
+            if not title or not link:
+                continue
+            result = SearchResult(
+                title=title,
+                snippet=snippet,
+                url=link,
+                source=source_name,
+                published_date=published or None,
+            )
+            if not cls._crypto_rss_item_matches(result, stock_code, stock_name):
+                continue
+            results.append(result)
+            if len(results) >= max_results:
+                break
+        return results
+
+    def _search_crypto_rss_news(
+        self,
+        *,
+        stock_code: str,
+        stock_name: str,
+        max_results: int,
+        search_days: int,
+    ) -> SearchResponse:
+        """Fallback BTC news from well-known crypto RSS feeds when search APIs fail."""
+        collected: List[SearchResult] = []
+        errors: List[str] = []
+        seen_urls = set()
+        seen_titles = set()
+        started_at = time.monotonic()
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+            ),
+            "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+        }
+        provider_name = "CryptoRSS"
+
+        for source_name, feed_url in self.CRYPTO_RSS_FEEDS:
+            if len(collected) >= max_results:
+                break
+            try:
+                response = requests.get(
+                    feed_url,
+                    headers=headers,
+                    timeout=self.CRYPTO_RSS_TIMEOUT_SECONDS,
+                )
+                if response.status_code != 200:
+                    errors.append(f"{source_name}: HTTP {response.status_code}")
+                    continue
+                parsed_items = self._parse_crypto_rss_entries(
+                    response.text,
+                    source_name=source_name,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    max_results=max_results,
+                )
+                for item in parsed_items:
+                    item_url = (item.url or "").strip().lower()
+                    item_title = (item.title or "").strip().lower()
+                    if not item_url and not item_title:
+                        continue
+                    if (item_url and item_url in seen_urls) or (
+                        item_title and item_title in seen_titles
+                    ):
+                        continue
+                    if item_url:
+                        seen_urls.add(item_url)
+                    if item_title:
+                        seen_titles.add(item_title)
+                    collected.append(item)
+                    if len(collected) >= max_results:
+                        break
+            except Exception as exc:
+                errors.append(f"{source_name}: {type(exc).__name__}")
+                logger.debug("[CryptoRSS] %s 获取失败: %s", source_name, exc)
+
+        raw_response = SearchResponse(
+            query=self._crypto_stock_news_query(stock_code, stock_name),
+            results=collected,
+            provider=provider_name,
+            success=bool(collected),
+            error_message=None if collected else ("；".join(errors[:4]) or "未获取到加密货币 RSS 资讯"),
+            search_time=round(time.monotonic() - started_at, 3),
+        )
+        filtered = self._filter_news_response(
+            raw_response,
+            search_days=search_days,
+            max_results=max_results,
+            log_scope=f"{stock_code}:{provider_name}:fallback",
+        )
+        ranked = self._rank_news_response(
+            filtered,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            prefer_chinese=False,
+            max_results=max_results,
+            log_scope=f"{stock_code}:{provider_name}:fallback:rank",
+        )
+        admitted = self._filter_ranked_news_for_context(
+            ranked,
+            log_scope=f"{stock_code}:{provider_name}:fallback:admission",
+        )
+        return self._limit_search_response(admitted, max_results=max_results)
+
+    def _maybe_search_crypto_rss_news(
+        self,
+        *,
+        stock_code: str,
+        stock_name: str,
+        max_results: int,
+        search_days: int,
+        log_scope: str,
+    ) -> Optional[SearchResponse]:
+        if not self._is_crypto_symbol(stock_code):
+            return None
+
+        fallback_response = self._search_crypto_rss_news(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            max_results=max_results,
+            search_days=search_days,
+        )
+        if fallback_response.results:
+            logger.info(
+                "%s 加密货币 RSS 兜底成功: %s(%s), 条数=%s",
+                log_scope,
+                stock_name,
+                stock_code,
+                len(fallback_response.results),
+            )
+        else:
+            logger.warning(
+                "%s 加密货币 RSS 兜底仍无结果: %s(%s), error=%s",
+                log_scope,
+                stock_name,
+                stock_code,
+                fallback_response.error_message,
+            )
+        return fallback_response
 
     @classmethod
     def _is_us_stock(cls, stock_code: str) -> bool:
@@ -2973,6 +3225,34 @@ class SearchService:
         def add_reason(reason: str) -> None:
             if reason not in reasons and len(reasons) < 5:
                 reasons.append(reason)
+
+        crypto_terms = cls._crypto_news_identity_terms(stock_code, stock_name)
+        for term in crypto_terms:
+            if cls._contains_identity_term(title, term):
+                score += 58
+                direct_signal += 58
+                has_stock_code_signal = True
+                has_unambiguous_company_signal = True
+                add_reason(f"标题命中加密货币标识 {term}")
+                break
+        else:
+            for term in crypto_terms:
+                if cls._contains_identity_term(snippet, term):
+                    score += 36
+                    direct_signal += 36
+                    has_stock_code_signal = True
+                    has_unambiguous_company_signal = True
+                    add_reason(f"摘要命中加密货币标识 {term}")
+                    break
+            else:
+                for term in crypto_terms:
+                    if cls._contains_identity_term(url, term):
+                        score += 20
+                        direct_signal += 20
+                        has_stock_code_signal = True
+                        has_unambiguous_company_signal = True
+                        add_reason(f"链接命中加密货币标识 {term}")
+                        break
 
         for term in cls._stock_code_identity_terms(stock_code):
             if cls._contains_stock_code_identity_term(title, term):
@@ -3603,10 +3883,13 @@ class SearchService:
         )
 
         # 构建搜索查询（优化搜索效果）
+        is_crypto = self._is_crypto_symbol(stock_code)
         is_foreign = self._is_foreign_stock(stock_code)
         if focus_keywords:
             # 如果提供了关键词，直接使用关键词作为查询
             query = " ".join(focus_keywords)
+        elif is_crypto:
+            query = self._crypto_stock_news_query(stock_code, stock_name)
         elif prefer_chinese:
             query = f"{stock_name} {stock_code} 股票 最新消息"
         elif is_foreign:
@@ -3850,6 +4133,16 @@ class SearchService:
                 return best_ranked_response
 
             if had_provider_success:
+                crypto_fallback = self._maybe_search_crypto_rss_news(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    max_results=max_results,
+                    search_days=search_days,
+                    log_scope="[股票新闻]",
+                )
+                if crypto_fallback and crypto_fallback.results:
+                    self._put_cache(cache_key, crypto_fallback)
+                    return crypto_fallback
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -3859,6 +4152,16 @@ class SearchService:
                 )
             
             # 所有引擎都失败
+            crypto_fallback = self._maybe_search_crypto_rss_news(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                max_results=max_results,
+                search_days=search_days,
+                log_scope="[股票新闻]",
+            )
+            if crypto_fallback and crypto_fallback.results:
+                self._put_cache(cache_key, crypto_fallback)
+                return crypto_fallback
             return SearchResponse(
                 query=query,
                 results=[],
@@ -3944,10 +4247,52 @@ class SearchService:
         results = {}
         search_count = 0
 
+        is_crypto = self._is_crypto_symbol(stock_code)
         is_foreign = self._is_foreign_stock(stock_code)
         is_index_etf = self.is_index_or_etf(stock_code, stock_name)
 
-        if is_foreign:
+        if is_crypto:
+            search_dimensions = [
+                {
+                    'name': 'latest_news',
+                    'query': self._crypto_stock_news_query(stock_code, stock_name),
+                    'desc': '最新消息',
+                    'tavily_topic': 'news',
+                    'strict_freshness': True,
+                },
+                {
+                    'name': 'market_analysis',
+                    'query': (
+                        'Bitcoin BTC macro market Fed interest rates rate cuts rate hikes '
+                        'CPI PPI jobs unemployment claims Treasury yields Nasdaq S&P 500 '
+                        'US dollar risk appetite crypto market outlook'
+                    ),
+                    'desc': '宏观与市场驱动',
+                    'tavily_topic': None,
+                    'strict_freshness': False,
+                },
+                {
+                    'name': 'risk_check',
+                    'query': (
+                        'Bitcoin BTC crypto regulation security ETF liquidation Fed hawkish '
+                        'war conflict geopolitical risk recession inflation latest news'
+                    ),
+                    'desc': '风险排查',
+                    'tavily_topic': 'news',
+                    'strict_freshness': True,
+                },
+                {
+                    'name': 'industry',
+                    'query': (
+                        'Bitcoin BTC on-chain activity mining ETF inflows stablecoin liquidity '
+                        'crypto liquidity global risk assets macro correlation'
+                    ),
+                    'desc': '行业分析',
+                    'tavily_topic': None,
+                    'strict_freshness': False,
+                },
+            ]
+        elif is_foreign:
             search_dimensions = [
                 {
                     'name': 'latest_news',
@@ -4162,7 +4507,19 @@ class SearchService:
             
             # 短暂延迟避免请求过快
             time.sleep(0.5)
-        
+
+        latest_news = results.get("latest_news")
+        if is_crypto and not (latest_news and latest_news.results):
+            fallback_response = self._maybe_search_crypto_rss_news(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                max_results=target_per_dimension,
+                search_days=search_days,
+                log_scope="[情报搜索]",
+            )
+            if fallback_response and fallback_response.results:
+                results["latest_news"] = fallback_response
+
         return results
     
     def format_intel_report(self, intel_results: Dict[str, SearchResponse], stock_name: str) -> str:

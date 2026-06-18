@@ -585,6 +585,7 @@ class DataFetcherManager:
         "LongbridgeFetcher": {"hk", "us"},
         "FinnhubFetcher": {"us"},
         "AlphaVantageFetcher": {"us"},
+        "CryptoFetcher": {"crypto"},
     }
     _daily_source_health = CircuitBreaker(failure_threshold=3, cooldown_seconds=300.0)
 
@@ -708,7 +709,7 @@ class DataFetcherManager:
         market: str,
     ) -> List[BaseFetcher]:
         """Skip built-in daily fetchers that are known not to support a market."""
-        if market not in {"cn", "hk", "us"}:
+        if market not in {"cn", "hk", "us", "crypto"}:
             return fetchers
 
         kept: List[BaseFetcher] = []
@@ -1101,6 +1102,7 @@ class DataFetcherManager:
           4. YfinanceFetcher (Priority 4)
         """
         from src.config import get_config
+        from .crypto_fetcher import CryptoFetcher
         from .efinance_fetcher import EfinanceFetcher
         from .tencent_fetcher import TencentFetcher
         from .akshare_fetcher import AkshareFetcher
@@ -1111,6 +1113,7 @@ class DataFetcherManager:
         from .longbridge_fetcher import LongbridgeFetcher
         config = get_config()
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
+        crypto = CryptoFetcher()
         efinance = EfinanceFetcher()
         tencent = TencentFetcher()
         akshare = AkshareFetcher()
@@ -1154,6 +1157,7 @@ class DataFetcherManager:
                 pytdx,
                 baostock,
                 yfinance,
+                crypto,
                 *optional_fetchers,
             ]
 
@@ -1202,8 +1206,10 @@ class DataFetcherManager:
         Raises:
             DataFetchError: 所有数据源都失败时抛出
         """
+        from .crypto_fetcher import is_crypto_code
         from .us_index_mapping import is_us_index_code, is_us_stock_code
 
+        raw_stock_code = (stock_code or "").strip()
         # Normalize code (strip SH/SZ prefix etc.)
         stock_code = normalize_stock_code(stock_code)
 
@@ -1215,17 +1221,17 @@ class DataFetcherManager:
         #   - 配置长桥凭据后: Longbridge 为首选, YFinance/AkShare 兜底
         #   - 未配置长桥:     YFinance 为首选（美股）, 通用 fetcher 循环（港股）
         #   - 美股指数:       始终 YFinance 为首选（Longbridge 不提供指数K线）
-        is_us_index = is_us_index_code(stock_code)
-        is_us = is_us_index or is_us_stock_code(stock_code)
+        is_crypto = is_crypto_code(raw_stock_code) or is_crypto_code(stock_code)
+        is_us_index = (not is_crypto) and is_us_index_code(stock_code)
+        is_us = (not is_crypto) and (is_us_index or is_us_stock_code(stock_code))
         is_hk = (not is_us) and _is_hk_market(stock_code)
-        market = "us" if is_us else "hk" if is_hk else "cn"
-        if is_hk:
-            fetchers = self._filter_daily_fetchers_for_market(fetchers, "hk")
+        market = "crypto" if is_crypto else "us" if is_us else "hk" if is_hk else "cn"
+        fetchers = self._filter_daily_fetchers_for_market(fetchers, market)
         fetchers = self._filter_fetchers_by_capability(fetchers, capability="daily_data")
         total_fetchers = len(fetchers)
 
         if total_fetchers == 0:
-            market_label = "美股指数" if is_us_index else "美股" if is_us else "港股" if is_hk else "A股"
+            market_label = "加密货币" if is_crypto else "美股指数" if is_us_index else "美股" if is_us else "港股" if is_hk else "A股"
             error_summary = f"{market_label} {stock_code} 获取失败:\n暂无可用数据源"
             logger.error(f"[数据源终止] {stock_code} 获取失败: {error_summary}")
             raise DataFetchError(error_summary)
@@ -1572,6 +1578,7 @@ class DataFetcherManager:
             "AlphaVantageFetcher": "alphavantage",
             "EfinanceFetcher": "efinance",
             "TushareFetcher": "tushare",
+            "CryptoFetcher": "binance",
         }
         return mapping.get(fetcher_name, fetcher_name.replace("Fetcher", "").lower())
 
@@ -1633,6 +1640,7 @@ class DataFetcherManager:
         stock_code = normalize_stock_code(stock_code)
 
         from .akshare_fetcher import _is_us_code
+        from .crypto_fetcher import is_crypto_code
         from .us_index_mapping import is_us_index_code
         from src.config import get_config
 
@@ -1649,6 +1657,19 @@ class DataFetcherManager:
         #   未配置长桥: YFinance/AkShare 首选, Longbridge 补充
         #   美股指数:   始终 YFinance 首选（Longbridge 不提供指数行情）
         # ----------------------------------------------------------
+        is_crypto = is_crypto_code(raw_stock_code) or is_crypto_code(stock_code)
+        if is_crypto:
+            crypto_quote = self._try_fetcher_quote(raw_stock_code or stock_code, "CryptoFetcher")
+            if crypto_quote is not None:
+                logger.info(f"[实时行情] 加密货币 {stock_code} 成功获取 (来源: CryptoFetcher)")
+                return self._enrich_realtime_quote(
+                    crypto_quote,
+                    realtime_cache_ttl=getattr(config, "realtime_cache_ttl", None),
+                )
+            if log_final_failure:
+                logger.info(f"[实时行情] 加密货币 {stock_code} 无可用数据源")
+            return None
+
         is_us_index = is_us_index_code(stock_code)
         is_us = is_us_index or _is_us_code(stock_code)
         is_hk = (not is_us) and _is_hk_market(stock_code)
@@ -1994,8 +2015,20 @@ class DataFetcherManager:
         Returns:
             ChipDistribution 对象，失败则返回 None
         """
+        raw_stock_code = (stock_code or "").strip()
+
+        from .crypto_fetcher import is_crypto_code
+
+        if is_crypto_code(raw_stock_code):
+            logger.debug(f"[筹码分布] {raw_stock_code} 是加密货币，跳过 A 股筹码分布")
+            return None
+
         # Normalize code (strip SH/SZ prefix etc.)
         stock_code = normalize_stock_code(stock_code)
+
+        if is_crypto_code(stock_code):
+            logger.debug(f"[筹码分布] {stock_code} 是加密货币，跳过 A 股筹码分布")
+            return None
 
         from .realtime_types import get_chip_circuit_breaker
         from src.config import get_config
@@ -2114,6 +2147,9 @@ class DataFetcherManager:
         raw_stock_code = (stock_code or "").strip()
         # Normalize code (strip SH/SZ prefix etc.)
         stock_code = normalize_stock_code(stock_code)
+        from .crypto_fetcher import crypto_display_name, is_crypto_code
+        if is_crypto_code(raw_stock_code) or is_crypto_code(stock_code):
+            return self._cache_stock_name(stock_code, crypto_display_name(raw_stock_code or stock_code))
         static_name = STOCK_NAME_MAP.get(stock_code)
 
         # 1. 先检查缓存

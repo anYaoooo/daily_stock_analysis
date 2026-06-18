@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 数据源新增 Binance 公共行情加密货币 fetcher，支持 `BTC` / `BTCUSDT` / `BTC-USD` / `BTC/USD` 获取比特币实时行情与日 K 数据，并在数据源管理器中独立路由加密货币标的。
+- [改进] Web 首页新增 `BTC 行情` 入口，可一键获取比特币实时价格与最近日 K 数据。
+- [修复] BTC 多维度资讯在搜索引擎不可用或结果为空时新增 CoinDesk、Cointelegraph、Decrypt、Bitcoin Magazine 公开 RSS 兜底，避免公共 SearXNG 限流时报告完全无资讯。
+- [改进] BTC 资讯检索扩展宏观驱动查询，覆盖美联储、利率、CPI/PPI、就业、美股风险偏好和地缘冲突等影响比特币价格的外部因素。
+- [改进] BTC 行情接口支持 `include_news=true` 返回最新资讯，Web 首页点击 `BTC 行情` 时同步展示价格、K 线和资讯。
+- [改进] BTC K 线改为使用 Binance 原生周期，支持小时线、4 小时线、日线、周线和月线，Web 首页默认日线并可切换周期。
 - [修复] AlphaSift 热点题材刷新在 EastMoney 瞬断且无缓存时返回友好空态，并让桌面更新保留 AlphaSift 热点缓存。
 - [修复] 问股从历史报告进入后的追问会持续携带当前标的，切回或重载已有会话时可从历史消息恢复基础当前标的，并由后端阻断未明确切换时的错误股票工具调用、交易所片段和指标缩写误路由。
 - [修复] 自选股加入和删除按等价股票代码匹配港股及大小写美股变体，避免 `00700`、`HK00700`、`00700.HK` 或 `aapl`、`AAPL` 被误判为不同标的。

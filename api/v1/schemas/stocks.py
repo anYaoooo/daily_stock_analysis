@@ -14,6 +14,21 @@ from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class StockNewsItem(BaseModel):
+    """股票/加密货币资讯条目"""
+
+    title: str = Field(..., description="资讯标题")
+    translated_title: Optional[str] = Field(None, description="中文标题")
+    snippet: Optional[str] = Field(None, description="资讯摘要")
+    summary_zh: Optional[str] = Field(None, description="中文简短摘要")
+    url: Optional[str] = Field(None, description="原文链接")
+    source: Optional[str] = Field(None, description="来源")
+    published_date: Optional[str] = Field(None, description="发布时间")
+    relevance_score: Optional[int] = Field(None, description="相关度评分")
+    relevance_category: Optional[str] = Field(None, description="相关度分类")
+    relevance_reasons: List[str] = Field(default_factory=list, description="相关度原因")
+
+
 class StockQuote(BaseModel):
     """股票实时行情"""
     
@@ -29,6 +44,7 @@ class StockQuote(BaseModel):
     volume: Optional[float] = Field(None, description="成交量（股）")
     amount: Optional[float] = Field(None, description="成交额（元）")
     update_time: Optional[str] = Field(None, description="更新时间")
+    news: Optional[List[StockNewsItem]] = Field(None, description="可选资讯列表")
     
     model_config = ConfigDict(json_schema_extra={
         "example": {

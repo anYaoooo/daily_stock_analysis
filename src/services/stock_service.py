@@ -17,6 +17,8 @@ from src.repositories.stock_repo import StockRepository
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_HISTORY_PERIODS = {"hourly", "four_hour", "daily", "weekly", "monthly"}
+
 
 class StockService:
     """
@@ -102,22 +104,29 @@ class StockService:
         Returns:
             历史行情数据字典
             
-        Raises:
-            ValueError: 当 period 不是 daily 时抛出（weekly/monthly 暂未实现）
+            Raises:
+            ValueError: 当非加密货币请求非 daily 周期时抛出
         """
-        # 验证 period 参数，只支持 daily
-        if period != "daily":
-            raise ValueError(
-                f"暂不支持 '{period}' 周期，目前仅支持 'daily'。"
-                "weekly/monthly 聚合功能将在后续版本实现。"
-            )
+        if period not in SUPPORTED_HISTORY_PERIODS:
+            supported = ", ".join(sorted(SUPPORTED_HISTORY_PERIODS))
+            raise ValueError(f"暂不支持 '{period}' 周期，支持的周期: {supported}")
         
         try:
             # 调用数据获取器获取历史数据
             from data_provider.base import DataFetcherManager
+            from data_provider.crypto_fetcher import CryptoFetcher, is_crypto_code
             
             manager = DataFetcherManager()
-            df, source = manager.get_daily_data(stock_code, days=days)
+            if is_crypto_code(stock_code):
+                crypto_fetcher = CryptoFetcher()
+                df = crypto_fetcher.get_kline_data(stock_code, period=period, days=days)
+                source = crypto_fetcher.name
+            else:
+                if period != "daily":
+                    raise ValueError(
+                        f"暂不支持普通股票 '{period}' 周期，目前仅 BTC 等加密货币支持 hourly/four_hour/weekly/monthly。"
+                    )
+                df, source = manager.get_daily_data(stock_code, days=days)
             
             if df is None or df.empty:
                 logger.warning(f"获取 {stock_code} 历史数据失败")
@@ -131,7 +140,11 @@ class StockService:
             for _, row in df.iterrows():
                 date_val = row.get("date")
                 if hasattr(date_val, "strftime"):
-                    date_str = date_val.strftime("%Y-%m-%d")
+                    date_str = (
+                        date_val.strftime("%Y-%m-%d %H:%M")
+                        if period in {"hourly", "four_hour"}
+                        else date_val.strftime("%Y-%m-%d")
+                    )
                 else:
                     date_str = str(date_val)
                 

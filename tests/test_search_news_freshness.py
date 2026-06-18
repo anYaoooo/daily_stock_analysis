@@ -422,6 +422,283 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         p1.search.assert_called_once()
         p2.search.assert_not_called()
 
+    def test_search_stock_news_uses_crypto_query_for_bitcoin(self) -> None:
+        """BTC should search crypto news terms instead of generic stock keywords."""
+        fresh = datetime.now().date().isoformat()
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+        provider = SimpleNamespace(
+            is_available=True,
+            name="CryptoProvider",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result(
+                            "Bitcoin ETF inflows lift BTC market sentiment",
+                            fresh,
+                            snippet="Crypto traders tracked Bitcoin and BTC spot ETF flows.",
+                        )
+                    ]
+                )
+            ),
+        )
+        service._providers = [provider]
+
+        resp = service.search_stock_news("BTC", "Bitcoin", max_results=1)
+
+        self.assertEqual(resp.results[0].title, "Bitcoin ETF inflows lift BTC market sentiment")
+        self.assertEqual(resp.results[0].relevance_category, "direct_company_news")
+        args, kwargs = provider.search.call_args
+        query = kwargs.get("query") if "query" in kwargs else args[0]
+        self.assertIn("Bitcoin", query)
+        self.assertIn("crypto", query)
+        self.assertNotIn("股票", query)
+
+    def test_bitcoin_news_is_direct_relevance_without_stock_company_terms(self) -> None:
+        """Bitcoin identity terms should survive the stock-news relevance gate."""
+        fresh = datetime.now().date().isoformat()
+        item = _result(
+            "Bitcoin jumps as ETF inflows accelerate",
+            fresh,
+            snippet="BTC volatility rose after crypto market liquidity improved.",
+        )
+
+        scored = SearchService._score_news_relevance(item, stock_code="BTC", stock_name="Bitcoin")
+
+        self.assertEqual(scored.relevance_category, SearchService._DIRECT_NEWS_CATEGORY)
+        self.assertGreaterEqual(scored.relevance_score or 0, 58)
+        self.assertIn("加密货币标识", "；".join(scored.relevance_reasons or []))
+
+    def test_crypto_intel_queries_include_macro_drivers_for_bitcoin(self) -> None:
+        """BTC intel should search macro drivers beyond explicit Bitcoin identity terms."""
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+        service._providers[0].search = MagicMock(
+            return_value=SearchResponse(
+                query="empty",
+                results=[],
+                provider="Mock",
+                success=True,
+            )
+        )
+
+        with patch("src.search_service.time.sleep"), patch(
+            "src.search_service.requests.get",
+            return_value=SimpleNamespace(status_code=404, text=""),
+        ):
+            service.search_comprehensive_intel(
+                stock_code="BTC",
+                stock_name="Bitcoin",
+                max_searches=4,
+            )
+
+        queries = [call.args[0] for call in service._providers[0].search.call_args_list]
+        combined = " ".join(queries)
+        for term in (
+            "Fed",
+            "interest rates",
+            "rate cuts",
+            "rate hikes",
+            "CPI",
+            "PPI",
+            "unemployment claims",
+            "Nasdaq",
+            "S&P 500",
+            "war",
+            "conflict",
+            "geopolitical",
+        ):
+            self.assertIn(term, combined)
+
+    def test_crypto_rss_fallback_fills_bitcoin_intel_when_search_empty(self) -> None:
+        """BTC intel should fall back to crypto RSS feeds when configured search returns no items."""
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+        service._providers[0].search = MagicMock(
+            return_value=SearchResponse(
+                query="empty",
+                results=[],
+                provider="Mock",
+                success=False,
+                error_message="provider unavailable",
+            )
+        )
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+        rss_xml = f"""<?xml version="1.0"?>
+        <rss><channel>
+          <item>
+            <title>Bitcoin rallies as BTC ETF flows improve</title>
+            <link>https://example.com/bitcoin-btc-etf-flows</link>
+            <description>BTC market liquidity improved during the latest crypto session.</description>
+            <pubDate>{published}</pubDate>
+          </item>
+        </channel></rss>"""
+        mock_response = SimpleNamespace(status_code=200, text=rss_xml)
+
+        with patch("src.search_service.time.sleep"), patch(
+            "src.search_service.requests.get",
+            return_value=mock_response,
+        ) as mock_get:
+            intel = service.search_comprehensive_intel(
+                stock_code="BTC",
+                stock_name="Bitcoin",
+                max_searches=1,
+            )
+
+        self.assertEqual(intel["latest_news"].provider, "CryptoRSS")
+        self.assertEqual(
+            [item.title for item in intel["latest_news"].results],
+            ["Bitcoin rallies as BTC ETF flows improve"],
+        )
+        self.assertEqual(mock_get.call_count, len(SearchService.CRYPTO_RSS_FEEDS))
+
+    def test_search_stock_news_uses_crypto_rss_fallback_when_bitcoin_search_empty(self) -> None:
+        """BTC stock-news search should use crypto RSS when providers produce no usable news."""
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+        service._providers[0].search = MagicMock(
+            return_value=SearchResponse(
+                query="empty",
+                results=[],
+                provider="Mock",
+                success=True,
+            )
+        )
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+        rss_xml = f"""<?xml version="1.0"?>
+        <rss><channel>
+          <item>
+            <title>Bitcoin BTC ETF demand lifts crypto market</title>
+            <link>https://example.com/bitcoin-btc-demand</link>
+            <description>Bitcoin liquidity improved after BTC ETF inflows.</description>
+            <pubDate>{published}</pubDate>
+          </item>
+        </channel></rss>"""
+
+        with patch(
+            "src.search_service.requests.get",
+            return_value=SimpleNamespace(status_code=200, text=rss_xml),
+        ) as mock_get:
+            resp = service.search_stock_news("BTC", "Bitcoin", max_results=1)
+
+        self.assertEqual(resp.provider, "CryptoRSS")
+        self.assertEqual(
+            [item.title for item in resp.results],
+            ["Bitcoin BTC ETF demand lifts crypto market"],
+        )
+        self.assertGreaterEqual(mock_get.call_count, 1)
+
+    def test_crypto_rss_fallback_fills_empty_latest_news_even_when_other_intel_exists(self) -> None:
+        """BTC latest_news should be filled even if another intel dimension has usable results."""
+        fresh = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+        service._providers[0].search = MagicMock(
+            side_effect=[
+                SearchResponse(
+                    query="latest",
+                    results=[],
+                    provider="Mock",
+                    success=True,
+                ),
+                SearchResponse(
+                    query="analysis",
+                    results=[
+                        _result(
+                            "Bitcoin BTC market structure analysis",
+                            fresh,
+                            snippet="BTC liquidity and crypto market flows improved.",
+                        )
+                    ],
+                    provider="Mock",
+                    success=True,
+                ),
+            ]
+        )
+        published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+        rss_xml = f"""<?xml version="1.0"?>
+        <rss><channel>
+          <item>
+            <title>Bitcoin BTC latest news from crypto desks</title>
+            <link>https://example.com/bitcoin-btc-latest</link>
+            <description>BTC ETF flows stayed active in the latest market session.</description>
+            <pubDate>{published}</pubDate>
+          </item>
+        </channel></rss>"""
+
+        with patch("src.search_service.time.sleep"), patch(
+            "src.search_service.requests.get",
+            return_value=SimpleNamespace(status_code=200, text=rss_xml),
+        ):
+            intel = service.search_comprehensive_intel(
+                stock_code="BTC",
+                stock_name="Bitcoin",
+                max_searches=2,
+            )
+
+        self.assertEqual(intel["market_analysis"].provider, "Mock")
+        self.assertEqual(intel["latest_news"].provider, "CryptoRSS")
+        self.assertEqual(
+            [item.title for item in intel["latest_news"].results],
+            ["Bitcoin BTC latest news from crypto desks"],
+        )
+
+    def test_crypto_rss_fallback_not_used_when_search_has_results(self) -> None:
+        """Search providers remain the primary path for BTC when they return usable news."""
+        fresh = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+        service._providers[0].search = MagicMock(
+            return_value=SearchResponse(
+                query="search",
+                results=[
+                    _result(
+                        "Bitcoin BTC market update",
+                        fresh,
+                        snippet="BTC price moved after crypto market liquidity improved.",
+                    )
+                ],
+                provider="Mock",
+                success=True,
+            )
+        )
+
+        with patch("src.search_service.time.sleep"), patch(
+            "src.search_service.requests.get",
+        ) as mock_get:
+            intel = service.search_comprehensive_intel(
+                stock_code="BTC",
+                stock_name="Bitcoin",
+                max_searches=1,
+            )
+
+        self.assertEqual(intel["latest_news"].provider, "Mock")
+        mock_get.assert_not_called()
+
     def test_a_share_direct_company_news_beats_sector_provider_fallback(self) -> None:
         """A-share direct company hits should beat generic sector news from earlier providers."""
         fresh = datetime.now().date().isoformat()

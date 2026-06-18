@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { analysisApi, DuplicateTaskError } from '../../api/analysis';
 import { agentApi } from '../../api/agent';
 import { historyApi } from '../../api/history';
+import { stocksApi } from '../../api/stocks';
 import { systemConfigApi } from '../../api/systemConfig';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import { useStockPoolStore } from '../../stores';
@@ -59,6 +60,13 @@ vi.mock('../../api/systemConfig', () => ({
 vi.mock('../../api/agent', () => ({
   agentApi: {
     getSkills: vi.fn(),
+  },
+}));
+
+vi.mock('../../api/stocks', () => ({
+  stocksApi: {
+    getQuote: vi.fn(),
+    getHistory: vi.fn(),
   },
 }));
 
@@ -205,6 +213,41 @@ describe('HomePage', () => {
       requiredMissingKeys: [],
       nextStepKey: null,
       checks: [],
+    });
+    vi.mocked(stocksApi.getQuote).mockResolvedValue({
+      stockCode: 'BTCUSDT',
+      stockName: 'Bitcoin',
+      currentPrice: 65000,
+      change: 1200,
+      changePercent: 1.88,
+      open: 63800,
+      high: 66000,
+      low: 63200,
+      amount: 1800000000,
+      updateTime: '2026-06-18T10:00:00Z',
+      news: [
+        {
+          title: 'Fed rate-cut odds lift Bitcoin liquidity',
+          translatedTitle: '利率预期变化影响比特币流动性',
+          snippet: 'BTC moved as markets repriced CPI and unemployment claims.',
+          summaryZh: '关注点：降息/利率预期重新定价；影响：可能改变资金对加密资产的配置意愿。',
+          url: 'https://example.com/btc-fed-rates',
+          source: 'CryptoRSS',
+          publishedDate: '2026-06-18',
+          relevanceScore: 88,
+          relevanceCategory: 'direct_company_news',
+          relevanceReasons: ['标题命中加密货币标识 Bitcoin'],
+        },
+      ],
+    });
+    vi.mocked(stocksApi.getHistory).mockResolvedValue({
+      stockCode: 'BTCUSDT',
+      stockName: 'Bitcoin',
+      period: 'daily',
+      data: [
+        { date: '2026-06-16', open: 62000, high: 64000, low: 61500, close: 63800, changePercent: 2.1 },
+        { date: '2026-06-17', open: 63800, high: 66000, low: 63200, close: 65000, changePercent: 1.88 },
+      ],
     });
   });
 
@@ -1216,5 +1259,118 @@ describe('HomePage', () => {
     expect(await screen.findByText('大盘复盘摘要')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '市场情绪与赚钱效应' })).toBeInTheDocument();
     expect(vi.mocked(historyApi.getDetail)).toHaveBeenCalledWith(2);
+  });
+
+  it('loads Bitcoin quote and daily K lines from the home action button', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'BTC 行情' }));
+
+    expect(stocksApi.getQuote).toHaveBeenCalledWith('BTC', { includeNews: true });
+    expect(stocksApi.getHistory).toHaveBeenCalledWith('BTC', { period: 'daily', days: 30 });
+    const panel = await screen.findByTestId('bitcoin-market-panel');
+    expect(panel).toBeInTheDocument();
+    expect(within(panel).getByText('Bitcoin (BTCUSDT)')).toBeInTheDocument();
+    expect(within(panel).getByText('K 线图')).toBeInTheDocument();
+    expect(within(panel).getByText('当前周期：日线')).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: '小时' })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: '月线' })).toBeInTheDocument();
+    expect(within(panel).getByRole('img', { name: 'Bitcoin candlestick chart' })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: '分析 BTC' })).toBeInTheDocument();
+    expect(within(panel).getByText('BTC 资讯')).toBeInTheDocument();
+    expect(within(panel).getByRole('link', { name: '利率预期变化影响比特币流动性' })).toHaveAttribute(
+      'href',
+      'https://example.com/btc-fed-rates',
+    );
+    expect(within(panel).getByText('关注点：降息/利率预期重新定价；影响：可能改变资金对加密资产的配置意愿。')).toBeInTheDocument();
+    expect(within(panel).getByText('Fed rate-cut odds lift Bitcoin liquidity')).toBeInTheDocument();
+    expect(within(panel).getAllByText('65,000.00').length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText('+1.88%').length).toBeGreaterThan(0);
+    expect(within(panel).getByText('2026-06-17')).toBeInTheDocument();
+    expect(within(panel).getByText('2026-06-16')).toBeInTheDocument();
+  });
+
+  it('switches the Bitcoin K-line period from daily to hourly', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+    vi.mocked(stocksApi.getHistory)
+      .mockResolvedValueOnce({
+        stockCode: 'BTCUSDT',
+        stockName: 'Bitcoin',
+        period: 'daily',
+        data: [
+          { date: '2026-06-17', open: 63800, high: 66000, low: 63200, close: 65000, changePercent: 1.88 },
+        ],
+      })
+      .mockResolvedValueOnce({
+        stockCode: 'BTCUSDT',
+        stockName: 'Bitcoin',
+        period: 'hourly',
+        data: [
+          { date: '2026-06-18 09:00', open: 65000, high: 65100, low: 64900, close: 65050, changePercent: 0.08 },
+        ],
+      });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'BTC 行情' }));
+    const panel = await screen.findByTestId('bitcoin-market-panel');
+    fireEvent.click(within(panel).getByRole('button', { name: '小时' }));
+
+    await waitFor(() => {
+      expect(stocksApi.getHistory).toHaveBeenLastCalledWith('BTC', { period: 'hourly', days: 7 });
+    });
+    expect(await within(panel).findByText('当前周期：小时')).toBeInTheDocument();
+    expect(within(panel).getByText('2026-06-18 09:00')).toBeInTheDocument();
+  });
+
+  it('starts Bitcoin analysis from the market panel', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({
+      taskId: 'task-btc',
+      status: 'pending',
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'BTC 行情' }));
+    const panel = await screen.findByTestId('bitcoin-market-panel');
+    fireEvent.click(within(panel).getByRole('button', { name: '分析 BTC' }));
+
+    await waitFor(() => {
+      expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
+        stockCode: 'BTC',
+        stockName: 'Bitcoin',
+        selectionSource: 'manual',
+      }));
+    });
   });
 });
