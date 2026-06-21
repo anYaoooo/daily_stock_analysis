@@ -16,7 +16,12 @@ if "newspaper" not in sys.modules:
     mock_np.Config = MagicMock()
     sys.modules["newspaper"] = mock_np
 
-from src.search_service import SearchResponse, SearchResult, SearchService
+from src.search_service import (
+    CryptoPanicSearchProvider,
+    SearchResponse,
+    SearchResult,
+    SearchService,
+)
 from src.services.run_diagnostics import (
     activate_run_diagnostic_context,
     current_diagnostic_snapshot,
@@ -2453,6 +2458,83 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         expected_local_date = dt_utc.astimezone().date()
         parsed = SearchService._normalize_news_publish_date(rfc_text)
         self.assertEqual(parsed, expected_local_date)
+
+    def test_cryptopanic_api_items_map_to_search_results(self) -> None:
+        """CryptoPanic API payload should preserve source, URL, and publish time."""
+        items = [
+            {
+                "title": "Bitcoin ETF sees record outflows",
+                "url": "https://cryptopanic.com/news/1/bitcoin-etf",
+                "source": {"title": "PANews"},
+                "published_at": "2026-06-21T05:23:00Z",
+                "currencies": [{"code": "BTC"}],
+            }
+        ]
+
+        results = CryptoPanicSearchProvider._map_api_items(items, max_results=5)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Bitcoin ETF sees record outflows")
+        self.assertEqual(results[0].source, "PANews")
+        self.assertEqual(results[0].url, "https://cryptopanic.com/news/1/bitcoin-etf")
+        self.assertEqual(results[0].published_date, "2026-06-21T05:23:00Z")
+        self.assertIn("BTC", results[0].snippet)
+
+    def test_cryptopanic_opencli_parser_accepts_browser_json_rows(self) -> None:
+        """OpenCLI fallback parser should consume the browser extraction JSON."""
+        output = """
+        [
+          {
+            "title": "Galaxy Research says Bitcoin miners enter capitulation",
+            "url": "https://cryptopanic.com/news/32895309/example",
+            "source": "zh.rss.odaily.news",
+            "published": "Sun Jun 21 2026 13:32:30 GMT+0800 (中国标准时间)"
+          }
+        ]
+        """
+
+        results = CryptoPanicSearchProvider._parse_opencli_output(output, max_results=5)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].source, "zh.rss.odaily.news")
+        self.assertIn("2026", results[0].published_date or "")
+
+    def test_crypto_stock_news_uses_cryptopanic_before_generic_providers(self) -> None:
+        """Crypto latest-news path should prefer CryptoPanic when configured."""
+        fresh = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            cryptopanic_api_token="crypto_token",
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+        self.assertIsNotNone(service._cryptopanic_provider)
+        service._cryptopanic_provider.search_crypto_news = MagicMock(
+            return_value=SearchResponse(
+                query="btc",
+                results=[
+                    _result(
+                        "Bitcoin BTC ETF inflow update",
+                        fresh,
+                        snippet="Bitcoin BTC ETF inflow update",
+                        url="https://cryptopanic.com/news/1",
+                        source="CryptoPanic",
+                    )
+                ],
+                provider="CryptoPanic",
+                success=True,
+            )
+        )
+        service._providers[0].search = MagicMock(
+            return_value=_response([_result("generic", fresh)])
+        )
+
+        resp = service.search_stock_news("BTC", "Bitcoin", max_results=3)
+
+        self.assertEqual(resp.provider, "CryptoPanic")
+        self.assertEqual([r.title for r in resp.results], ["Bitcoin BTC ETF inflow update"])
+        service._providers[0].search.assert_not_called()
 
 
 if __name__ == "__main__":

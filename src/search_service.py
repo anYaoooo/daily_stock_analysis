@@ -12,8 +12,11 @@ A股自选股智能分析系统 - 搜索服务模块
 """
 
 import logging
+import json
 import html
 import re
+import shutil
+import subprocess
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -284,6 +287,388 @@ class BaseSearchProvider(ABC):
             SearchResponse 对象
         """
         return self._execute_search(query, max_results=max_results, days=days)
+
+
+class CryptoPanicSearchProvider(BaseSearchProvider):
+    """CryptoPanic latest-news provider for crypto symbols."""
+
+    API_URL = "https://cryptopanic.com/api/v1/posts/"
+    OPENCLI_BROWSER_NAME = "cryptopanic"
+    OPENCLI_URL = "https://cryptopanic.com/news/bitcoin/"
+    OPENCLI_TIMEOUT_SECONDS = 35
+
+    _OPENCLI_EXTRACT_SCRIPT = r"""
+(() => {
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const rows = Array.from(document.querySelectorAll('article, .news-row, .post, [class*="news"]'));
+  const items = [];
+  for (const row of rows) {
+    const titleNode = row.querySelector('h1,h2,h3,a[href*="/news/"],a[href^="http"]');
+    const linkNode = row.querySelector('a[href*="/news/"],a[href^="http"]');
+    const timeNode = row.querySelector('time,[datetime],[title*="GMT"],[data-time]');
+    const title = clean(titleNode && titleNode.textContent);
+    let url = linkNode && linkNode.href ? linkNode.href : '';
+    if (url && url.startsWith('/')) url = new URL(url, location.origin).href;
+    const source = clean(
+      row.querySelector('[class*="source"],[class*="domain"],[class*="media"]')?.textContent
+    );
+    const published = (
+      timeNode?.getAttribute('datetime') ||
+      timeNode?.getAttribute('title') ||
+      timeNode?.getAttribute('data-time') ||
+      clean(timeNode && timeNode.textContent)
+    );
+    if (title && url && published) {
+      items.push({ title, url, source, published });
+    }
+    if (items.length >= 12) break;
+  }
+  return JSON.stringify(items);
+})()
+"""
+
+    def __init__(self, api_token: Optional[str] = None, *, opencli_enabled: bool = False):
+        api_keys = [api_token.strip()] if api_token and api_token.strip() else []
+        super().__init__(api_keys, "CryptoPanic")
+        self._opencli_enabled = bool(opencli_enabled)
+
+    @property
+    def is_available(self) -> bool:
+        return bool(self._api_keys) or bool(self._opencli_enabled and shutil.which("opencli"))
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        return self._search_api(
+            query=query,
+            api_key=api_key,
+            max_results=max_results,
+            days=days,
+            currency_code=None,
+        )
+
+    def search_crypto_news(
+        self,
+        *,
+        stock_code: str,
+        stock_name: str,
+        max_results: int,
+        days: int,
+    ) -> SearchResponse:
+        query = self._build_query(stock_code, stock_name)
+        api_key = self._get_next_key()
+        if api_key:
+            response = self._execute_search(
+                query,
+                api_key=api_key,
+                max_results=max_results,
+                days=days,
+                currency_code=self._currency_code(stock_code),
+            )
+            if response.success and response.results:
+                return response
+            if not self._opencli_enabled:
+                return response
+            logger.warning(
+                "[CryptoPanic] API 未返回可用新闻，尝试 OpenCLI 兜底: %s",
+                response.error_message or "empty results",
+            )
+
+        if self._opencli_enabled:
+            return self._search_opencli(query=query, max_results=max_results)
+
+        return SearchResponse(
+            query=query,
+            results=[],
+            provider=self.name,
+            success=False,
+            error_message="CryptoPanic 未配置 API Token",
+        )
+
+    def _execute_search(
+        self,
+        query: str,
+        *,
+        max_results: int = 5,
+        days: int = 7,
+        api_key: Optional[str] = None,
+        currency_code: Optional[str] = None,
+        **search_kwargs: Any,
+    ) -> SearchResponse:
+        api_key = api_key or self._get_next_key()
+        if not api_key:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message="CryptoPanic 未配置 API Token",
+            )
+
+        start_time = time.time()
+        try:
+            response = self._search_api(
+                query=query,
+                api_key=api_key,
+                max_results=max_results,
+                days=days,
+                currency_code=currency_code,
+            )
+            response.search_time = time.time() - start_time
+            if response.success:
+                self._record_success(api_key)
+            else:
+                self._record_error(api_key)
+            return response
+        except Exception as exc:
+            self._record_error(api_key)
+            logger.error("[CryptoPanic] 搜索失败: %s", exc)
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=str(exc),
+                search_time=time.time() - start_time,
+            )
+
+    def _search_api(
+        self,
+        *,
+        query: str,
+        api_key: str,
+        max_results: int,
+        days: int,
+        currency_code: Optional[str],
+    ) -> SearchResponse:
+        params: Dict[str, Any] = {
+            "auth_token": api_key,
+            "public": "true",
+            "kind": "news",
+        }
+        if currency_code:
+            params["currencies"] = currency_code
+
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "daily-stock-analysis/cryptopanic-news",
+        }
+        response = _get_with_retry(
+            self.API_URL,
+            headers=headers,
+            params=params,
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=f"HTTP {response.status_code}: {response.text[:200]}",
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=f"响应 JSON 解析失败: {exc}",
+            )
+
+        raw_items = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(raw_items, list):
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message="CryptoPanic 响应缺少 results",
+            )
+
+        results = self._map_api_items(raw_items, max_results=max_results)
+        return SearchResponse(
+            query=query,
+            results=results,
+            provider=self.name,
+            success=True,
+            error_message=None if results else "CryptoPanic 未返回匹配新闻",
+        )
+
+    @classmethod
+    def _map_api_items(cls, items: List[Dict[str, Any]], *, max_results: int) -> List[SearchResult]:
+        results: List[SearchResult] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            url = str(item.get("url") or "").strip()
+            if not title or not url:
+                continue
+
+            source_data = item.get("source") if isinstance(item.get("source"), dict) else {}
+            source = (
+                str(source_data.get("title") or "").strip()
+                or str(item.get("domain") or "").strip()
+                or cls._extract_domain(url)
+                or "CryptoPanic"
+            )
+            currencies = item.get("currencies") if isinstance(item.get("currencies"), list) else []
+            currency_codes = [
+                str(c.get("code") or "").strip()
+                for c in currencies
+                if isinstance(c, dict) and c.get("code")
+            ]
+            snippet_parts = [title]
+            if currency_codes:
+                snippet_parts.append(f"相关币种: {', '.join(currency_codes[:4])}")
+
+            results.append(
+                SearchResult(
+                    title=title,
+                    snippet="；".join(snippet_parts),
+                    url=url,
+                    source=source,
+                    published_date=item.get("published_at") or item.get("created_at"),
+                )
+            )
+            if len(results) >= max_results:
+                break
+        return results
+
+    def _search_opencli(self, *, query: str, max_results: int) -> SearchResponse:
+        opencli_path = shutil.which("opencli")
+        if not opencli_path:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message="OpenCLI 不可用",
+            )
+
+        start_time = time.time()
+        try:
+            subprocess.run(
+                [opencli_path, "browser", self.OPENCLI_BROWSER_NAME, "open", self.OPENCLI_URL],
+                capture_output=True,
+                text=True,
+                timeout=self.OPENCLI_TIMEOUT_SECONDS,
+                check=False,
+            )
+            completed = subprocess.run(
+                [
+                    opencli_path,
+                    "browser",
+                    self.OPENCLI_BROWSER_NAME,
+                    "eval",
+                    self._OPENCLI_EXTRACT_SCRIPT,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self.OPENCLI_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (subprocess.SubprocessError, OSError) as exc:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=f"OpenCLI 执行失败: {exc}",
+                search_time=time.time() - start_time,
+            )
+
+        if completed.returncode != 0:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=(completed.stderr or completed.stdout or "OpenCLI eval 失败")[:300],
+                search_time=time.time() - start_time,
+            )
+
+        results = self._parse_opencli_output(completed.stdout, max_results=max_results)
+        return SearchResponse(
+            query=query,
+            results=results,
+            provider=self.name,
+            success=bool(results),
+            error_message=None if results else "OpenCLI 未提取到 CryptoPanic 新闻",
+            search_time=time.time() - start_time,
+        )
+
+    @classmethod
+    def _parse_opencli_output(cls, output: str, *, max_results: int) -> List[SearchResult]:
+        raw = (output or "").strip()
+        start = raw.find("[")
+        end = raw.rfind("]")
+        if start < 0 or end <= start:
+            return []
+        try:
+            rows = json.loads(raw[start : end + 1])
+        except ValueError:
+            return []
+
+        results: List[SearchResult] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "").strip()
+            url = str(row.get("url") or "").strip()
+            published = cls._normalize_opencli_time(row.get("published"))
+            if not title or not url or not published:
+                continue
+            results.append(
+                SearchResult(
+                    title=title,
+                    snippet=title,
+                    url=url,
+                    source=str(row.get("source") or "").strip() or cls._extract_domain(url) or "CryptoPanic",
+                    published_date=published,
+                )
+            )
+            if len(results) >= max_results:
+                break
+        return results
+
+    @staticmethod
+    def _normalize_opencli_time(value: Any) -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        raw = re.sub(r"\s*\([^)]*\)\s*$", "", raw)
+        raw = raw.replace("GMT+0800", "+0800").replace("GMT-0800", "-0800")
+        try:
+            parsed = parsedate_to_datetime(raw)
+            return parsed.isoformat()
+        except Exception:
+            return raw
+
+    @staticmethod
+    def _currency_code(stock_code: str) -> Optional[str]:
+        code = (stock_code or "").strip().upper()
+        code = code.removeprefix("CRYPTO:")
+        code = code.replace("-", "").replace("/", "").replace("_", "")
+        for quote in ("USDT", "USD", "USDC", "FDUSD", "BUSD"):
+            if code.endswith(quote) and len(code) > len(quote):
+                return code[: -len(quote)]
+        return code or None
+
+    @classmethod
+    def _build_query(cls, stock_code: str, stock_name: str) -> str:
+        currency = cls._currency_code(stock_code) or "BTC"
+        name = (stock_name or "").strip() or currency
+        return f"{name} {currency} CryptoPanic latest news"
+
+    @staticmethod
+    def _extract_domain(url: str) -> str:
+        try:
+            return urlparse(url).netloc.replace("www.", "")
+        except Exception:
+            return ""
 
 
 class TavilySearchProvider(BaseSearchProvider):
@@ -2273,6 +2658,8 @@ class SearchService:
         minimax_keys: Optional[List[str]] = None,
         searxng_base_urls: Optional[List[str]] = None,
         searxng_public_instances_enabled: bool = True,
+        cryptopanic_api_token: Optional[str] = None,
+        cryptopanic_opencli_enabled: bool = False,
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
     ):
@@ -2288,10 +2675,13 @@ class SearchService:
             minimax_keys: MiniMax API Key 列表
             searxng_base_urls: SearXNG 实例地址列表（自建无配额兜底）
             searxng_public_instances_enabled: 未配置自建实例时，是否自动使用公共 SearXNG 实例
+            cryptopanic_api_token: CryptoPanic API Token（加密货币新闻优先来源）
+            cryptopanic_opencli_enabled: 是否允许使用本地 OpenCLI 浏览器登录态兜底读取 CryptoPanic
             news_max_age_days: 新闻最大时效（天）
             news_strategy_profile: 新闻窗口策略档位（ultra_short/short/medium/long）
         """
         self._providers: List[BaseSearchProvider] = []
+        self._cryptopanic_provider: Optional[CryptoPanicSearchProvider] = None
         self.news_max_age_days = max(1, news_max_age_days)
         raw_profile = (news_strategy_profile or "short").strip().lower()
         self.news_strategy_profile = normalize_news_strategy_profile(news_strategy_profile)
@@ -2351,8 +2741,28 @@ class SearchService:
         if anspire_keys:
             self._providers.insert(0, AnspireSearchProvider(anspire_keys))
             logger.info(f"已配置 Anspire Search 搜索，共 {len(anspire_keys)} 个 API Key")
+
+        if cryptopanic_api_token or cryptopanic_opencli_enabled:
+            self._cryptopanic_provider = CryptoPanicSearchProvider(
+                cryptopanic_api_token,
+                opencli_enabled=cryptopanic_opencli_enabled,
+            )
+            if self._cryptopanic_provider.is_available:
+                logger.info(
+                    "已启用 CryptoPanic 加密货币新闻来源（api_token=%s, opencli=%s）",
+                    bool(cryptopanic_api_token),
+                    bool(cryptopanic_opencli_enabled),
+                )
+            else:
+                logger.warning(
+                    "CryptoPanic 已配置但不可用（api_token=%s, opencli=%s）",
+                    bool(cryptopanic_api_token),
+                    bool(cryptopanic_opencli_enabled),
+                )
             
-        if not self._providers:
+        if not self._providers and not (
+            self._cryptopanic_provider and self._cryptopanic_provider.is_available
+        ):
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")
 
         # In-memory search result cache: {cache_key: (timestamp, SearchResponse)}
@@ -2632,6 +3042,94 @@ class SearchService:
             )
         return fallback_response
 
+    def _maybe_search_cryptopanic_news(
+        self,
+        *,
+        stock_code: str,
+        stock_name: str,
+        max_results: int,
+        search_days: int,
+        log_scope: str,
+    ) -> Optional[SearchResponse]:
+        provider = self._cryptopanic_provider
+        if not provider or not provider.is_available or not self._is_crypto_symbol(stock_code):
+            return None
+
+        started_at = time.monotonic()
+        try:
+            record_provider_run_started(
+                data_type="news_search",
+                provider=provider.name,
+                operation="search_crypto_news",
+            )
+            response = provider.search_crypto_news(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                max_results=self._provider_request_size(max_results),
+                days=search_days,
+            )
+        except Exception as exc:
+            self._record_news_search_run(
+                provider=provider.name,
+                operation="search_crypto_news",
+                success=False,
+                latency_ms=self._elapsed_ms(started_at),
+                error_type=type(exc).__name__,
+                error_message=exc,
+            )
+            logger.warning("%s CryptoPanic 新闻检索失败: %s", log_scope, exc)
+            return None
+
+        filtered = self._filter_news_response(
+            response,
+            search_days=search_days,
+            max_results=self._provider_request_size(max_results),
+            log_scope=f"{stock_code}:{provider.name}:crypto_news",
+        )
+        ranked = self._rank_news_response(
+            filtered,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            prefer_chinese=False,
+            max_results=self._provider_request_size(max_results),
+            log_scope=f"{stock_code}:{provider.name}:crypto_news:rank",
+        )
+        admitted = self._filter_ranked_news_for_context(
+            ranked,
+            log_scope=f"{stock_code}:{provider.name}:crypto_news:admission",
+        )
+        limited = self._limit_search_response(admitted, max_results=max_results)
+        record_count = len(limited.results or [])
+        self._record_news_search_run(
+            provider=provider.name,
+            operation="search_crypto_news",
+            success=bool(limited.success and record_count),
+            latency_ms=self._elapsed_ms(started_at),
+            record_count=record_count,
+            error_type=None if record_count else "NoUsableNews",
+            error_message=None if record_count else (
+                response.error_message or "过滤后无有效 CryptoPanic 新闻"
+            ),
+        )
+        if record_count:
+            logger.info(
+                "%s CryptoPanic 加密货币新闻成功: %s(%s), 条数=%s",
+                log_scope,
+                stock_name,
+                stock_code,
+                record_count,
+            )
+            return limited
+
+        logger.info(
+            "%s CryptoPanic 未返回可用新闻: %s(%s), error=%s",
+            log_scope,
+            stock_name,
+            stock_code,
+            response.error_message,
+        )
+        return None
+
     @classmethod
     def _is_us_stock(cls, stock_code: str) -> bool:
         """判断是否为美股/美股指数代码。"""
@@ -2754,7 +3252,9 @@ class SearchService:
     @property
     def is_available(self) -> bool:
         """检查是否有可用的搜索引擎"""
-        return any(p.is_available for p in self._providers)
+        return any(p.is_available for p in self._providers) or bool(
+            self._cryptopanic_provider and self._cryptopanic_provider.is_available
+        )
 
     def _cache_key(self, query: str, max_results: int, days: int) -> str:
         """Build a cache key from query parameters."""
@@ -3966,6 +4466,17 @@ class SearchService:
                 return cached
 
         try:
+            crypto_direct = self._maybe_search_cryptopanic_news(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                max_results=max_results,
+                search_days=search_days,
+                log_scope="[股票新闻]",
+            )
+            if crypto_direct and crypto_direct.results:
+                self._put_cache(cache_key, crypto_direct)
+                return crypto_direct
+
             # 依次尝试各个搜索引擎（若过滤后为空，继续尝试下一引擎）
             had_provider_success = False
             best_ranked_response: Optional[SearchResponse] = None
@@ -4414,6 +4925,18 @@ class SearchService:
             target_per_dimension,
             provider_max_results,
         )
+
+        if is_crypto and max_searches > 0:
+            crypto_direct = self._maybe_search_cryptopanic_news(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                max_results=target_per_dimension,
+                search_days=search_days,
+                log_scope="[情报搜索]",
+            )
+            if crypto_direct and crypto_direct.results:
+                results["latest_news"] = crypto_direct
+                search_count += 1
         
         # 轮流使用不同的搜索引擎
         provider_index = 0
@@ -4421,6 +4944,8 @@ class SearchService:
         for dim in search_dimensions:
             if search_count >= max_searches:
                 break
+            if dim['name'] in results:
+                continue
             
             # 选择搜索引擎（轮流使用）
             available_providers = [p for p in self._providers if p.is_available]
@@ -4811,6 +5336,8 @@ def get_search_service() -> SearchService:
                     minimax_keys=config.minimax_api_keys,
                     searxng_base_urls=config.searxng_base_urls,
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
+                    cryptopanic_api_token=config.cryptopanic_api_token,
+                    cryptopanic_opencli_enabled=config.cryptopanic_opencli_enabled,
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
                 )

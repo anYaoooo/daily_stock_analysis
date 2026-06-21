@@ -707,6 +707,8 @@ class Config:
     serpapi_keys: List[str] = field(default_factory=list)  # SerpAPI Keys
     searxng_base_urls: List[str] = field(default_factory=list)  # SearXNG instance URLs (self-hosted, no quota)
     searxng_public_instances_enabled: bool = True  # Auto-discover public SearXNG instances when base URLs are absent
+    cryptopanic_api_token: Optional[str] = None  # CryptoPanic API token for crypto news
+    cryptopanic_opencli_enabled: bool = False  # Optional local OpenCLI browser fallback for CryptoPanic
 
     # === Social Sentiment (US stocks only, api.adanos.org) ===
     social_sentiment_api_key: Optional[str] = None
@@ -1365,6 +1367,11 @@ class Config:
             os.getenv('SEARXNG_PUBLIC_INSTANCES_ENABLED'),
             default=True,
         )
+        cryptopanic_api_token = os.getenv('CRYPTOPANIC_API_TOKEN') or None
+        cryptopanic_opencli_enabled = parse_env_bool(
+            os.getenv('CRYPTOPANIC_OPENCLI_ENABLED'),
+            default=False,
+        )
 
         # 企微消息类型与最大字节数逻辑
         wechat_msg_type = os.getenv('WECHAT_MSG_TYPE', 'markdown')
@@ -1493,6 +1500,8 @@ class Config:
             serpapi_keys=serpapi_keys,
             searxng_base_urls=searxng_base_urls,
             searxng_public_instances_enabled=searxng_public_instances_enabled,
+            cryptopanic_api_token=cryptopanic_api_token,
+            cryptopanic_opencli_enabled=cryptopanic_opencli_enabled,
             social_sentiment_api_key=os.getenv('SOCIAL_SENTIMENT_API_KEY') or None,
             social_sentiment_api_url=os.getenv('SOCIAL_SENTIMENT_API_URL', 'https://api.adanos.org').rstrip('/'),
             news_max_age_days=parse_env_int(os.getenv('NEWS_MAX_AGE_DAYS'), 3, field_name='NEWS_MAX_AGE_DAYS', minimum=1),

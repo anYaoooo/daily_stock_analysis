@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] BTC/加密货币资讯检索支持 CryptoPanic 优先来源，可配置官方 API Token，并可在本地桌面显式启用 OpenCLI 浏览器兜底。
 - [新功能] 数据源新增 Binance 公共行情加密货币 fetcher，支持 `BTC` / `BTCUSDT` / `BTC-USD` / `BTC/USD` 获取比特币实时行情与日 K 数据，并在数据源管理器中独立路由加密货币标的。
 - [改进] Web 首页新增 `BTC 行情` 入口，可一键获取比特币实时价格与最近日 K 数据。
 - [修复] BTC 多维度资讯在搜索引擎不可用或结果为空时新增 CoinDesk、Cointelegraph、Decrypt、Bitcoin Magazine 公开 RSS 兜底，避免公共 SearXNG 限流时报告完全无资讯。
