@@ -15,18 +15,17 @@ type SettingsHelpMap = Record<string, SettingsHelpContent>;
 const settingsHelpZhCN: SettingsHelpMap = {
   'settings.base.STOCK_LIST': {
     title: '自选股列表',
-    summary: '配置需要分析的股票代码列表，是手动分析、定时任务和通知报告的基础输入。',
-    usage: '多个股票代码使用英文逗号分隔。A 股可直接填写 6 位代码，港股可使用 hk 前缀，美股可填写 ticker。',
+    summary: 'BTC-only 模式下固定分析 BTC，是手动分析、定时任务和通知报告的基础输入。',
+    usage: '填写 BTC 即可；BTCUSDT、BTC-USD、BTC/USD 等别名会统一规范为 BTC。',
     valueNotes: [
       '定时模式每次触发前会重新读取当前保存的 STOCK_LIST。',
-      '如果命令行临时传入 --stocks，只影响本次手动运行，不会锁定后续计划任务。',
-      '邮件分组里的 STOCK_GROUP_N 应写成 STOCK_LIST 的子集，只影响邮件收件人，不改变分析范围。',
+      'BTC-only 模式会拒绝非 BTC 标的，避免误触发标的市场分析。',
     ],
     impact: [
-      '影响主分析任务、市场报告中的个股范围、通知推送内容和历史报告记录。',
+      '影响主分析任务、通知推送内容和历史报告记录。',
     ],
     notes: [
-      '股票代码之间不要使用中文逗号。',
+      '保持 STOCK_LIST=BTC 是最干净的配置。',
       '修改后保存配置即可供后续任务读取。',
     ],
   },
@@ -40,7 +39,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
       'Agent 可通过 AGENT_LITELLM_MODEL 单独指定模型；留空时继承主模型。',
     ],
     impact: [
-      '影响普通个股分析、大盘复盘、报告生成，以及未单独覆盖模型的 Agent 调用。',
+      '影响BTC 分析、报告生成，以及未单独覆盖模型的 Agent 调用。',
     ],
     notes: [
       '无 provider 前缀时，LiteLLM 可能无法判断应该使用哪组 API Key。',
@@ -50,7 +49,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
   'settings.ai_model.LLM_CHANNELS': {
     title: 'LLM 渠道列表',
     summary: '声明多个模型渠道，用于多 provider、多 Key、备用模型和可视化渠道管理。',
-    usage: '填写逗号分隔的渠道名，例如 deepseek,aihubmix；每个渠道再配置 LLM_<NAME>_BASE_URL、LLM_<NAME>_API_KEY(S)、LLM_<NAME>_MODELS 等字段。',
+    usage: '填写逗号分隔的渠道名，例如 deepseek,gemini；每个渠道再配置 LLM_<NAME>_BASE_URL、LLM_<NAME>_API_KEY(S)、LLM_<NAME>_MODELS 等字段。',
     valueNotes: [
       '启用渠道模式后，同层运行时优先读取渠道配置。',
       '在 Docker 或 GitHub Actions 中显式注入的环境变量会覆盖 Web 设置页写入的 .env。',
@@ -138,17 +137,6 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响对应 provider 的模型调用、连接测试和可用模型发现。'],
     notes: ['不要在 issue、日志或截图里暴露真实 Key。'],
   },
-  'settings.ai_model.anspire_llm': {
-    title: 'Anspire LLM 网关',
-    summary: '使用 Anspire API Key 作为 OpenAI-compatible 模型网关的兼容入口。',
-    usage: 'ANSPIRE_LLM_ENABLED 控制是否启用该兼容路径；ANSPIRE_LLM_BASE_URL 指定网关地址；ANSPIRE_LLM_MODEL 指定未显式选择主模型时的默认模型。',
-    valueNotes: [
-      '该路径主要用于兼容未配置 LLM_CHANNELS 或 LITELLM_MODEL 的简化场景。',
-      '如果已配置 LITELLM_CONFIG、LLM_CHANNELS 或明确的 LITELLM_MODEL，运行时会按既有优先级选择模型来源。',
-    ],
-    impact: ['影响 Anspire API Key 参与 LLM 调用时的默认模型和网关地址。'],
-    notes: ['不要把 Base URL 改成其他 provider 的地址后继续复用 Anspire Key。'],
-  },
   'settings.ai_model.legacy_provider_params': {
     title: 'Legacy Provider 参数',
     summary: '为旧版 provider 专用配置路径设置模型名、温度或 token 上限。',
@@ -171,45 +159,13 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响 OpenAI-compatible legacy 配置路径下的模型请求。'],
     notes: ['渠道模式下优先维护各渠道自己的 LLM_<NAME>_BASE_URL。'],
   },
-  'settings.data_source.TUSHARE_TOKEN': {
-    title: 'Tushare Token',
-    summary: '用于访问 Tushare Pro 数据接口。',
-    usage: '在 Tushare 账户中获取 token 后填入。',
-    valueNotes: ['不同 Tushare 权限会影响可用接口和数据完整度。'],
-    impact: ['影响部分 A 股基础数据、股票列表和相关增强数据获取。'],
-    notes: ['不要把 token 提交到仓库或公开日志。'],
-  },
-  'settings.data_source.TICKFLOW_API_KEY': {
-    title: 'TickFlow API Key',
-    summary: '用于增强大盘复盘中的指数、市场统计等数据。',
-    usage: '在 TickFlow 获取 API Key 后填入；未配置时系统会继续使用其他可用数据源和降级路径。',
-    valueNotes: ['该 Key 是可选增强项，不是运行主分析流程的必填项。'],
-    impact: ['影响大盘复盘和市场统计增强数据的覆盖度。'],
-    notes: ['不要在 issue、日志或截图中暴露真实 Key。'],
-  },
   'settings.data_source.stock_index_remote': {
-    title: '股票索引远程更新',
-    summary: '从 GitHub main 分支获取最新股票自动补全索引，并缓存到本地。',
+    title: '标的索引远程更新',
+    summary: '从 GitHub main 分支获取最新标的自动补全索引，并缓存到本地。',
     usage: '默认开启；如运行环境无法访问 GitHub raw，可关闭开关。远程 URL、检查频率和超时时间均为系统内置值。',
     valueNotes: ['系统默认 48 小时检查一次更新，避免频繁访问 GitHub。', '远程检查失败不会阻断 WebUI 或分析流程。'],
-    impact: ['影响 Web 自动补全和后端股票名称解析使用的股票简称新鲜度。'],
+    impact: ['影响 Web 自动补全和后端标的名称解析使用的标的简称新鲜度。'],
     notes: ['远程下载失败时会继续使用已有缓存或随应用打包的内置索引。'],
-  },
-  'settings.data_source.ALPHASIFT_ENABLED': {
-    title: 'AlphaSift 选股',
-    summary: '控制是否启用内置 AlphaSift 选股页。',
-    usage: '默认关闭。设为 true 后，Web 会检查随后端依赖安装的 alphasift.dsa_adapter；若缺失，请先执行 pip install -r requirements.txt 或重建后端产物。',
-    valueNotes: ['AlphaSift 作为 DSA 后端依赖安装，/install 仅作为显式修复入口保留。', '选股结果仅用于研究辅助，不构成投资建议。'],
-    impact: ['影响 Web 选股入口、AlphaSift 策略读取和选股 API。'],
-    notes: ['AlphaSift 初筛候选，DSA 补充行情、基本面和新闻上下文；关闭时不影响原有分析、报告和通知流程。'],
-  },
-  'settings.data_source.ALPHASIFT_INSTALL_SPEC': {
-    title: 'AlphaSift 安装来源',
-    summary: '配置显式修复安装使用的受信任 AlphaSift pip 来源。',
-    usage: '默认固定到已验证的 ZhuLinsen/alphasift commit；正常部署通过 requirements 安装，只有手动调用修复安装入口时才使用该来源。',
-    valueNotes: ['自定义本地路径或 wheel 不会走修复安装；请先手动安装到当前后端 Python 环境。', '该字段按敏感值处理，设置页不会直接展示完整内容。'],
-    impact: ['影响 AlphaSift 适配层来源校验和显式修复安装。'],
-    notes: ['请确认来源可信；AlphaSift 是实验性质选股能力，启用前应理解相关风险。'],
   },
   'settings.data_source.REALTIME_SOURCE_PRIORITY': {
     title: '实时行情源优先级',
@@ -258,17 +214,9 @@ const settingsHelpZhCN: SettingsHelpMap = {
     title: '乖离率阈值',
     summary: '设置股价偏离 MA5 的风险提示阈值。',
     usage: '填写百分比数值；当价格偏离 MA5 超过阈值时，报告会提示避免追高或注意回归风险。',
-    valueNotes: ['强趋势股票可能按运行时规则适当放宽阈值。'],
+    valueNotes: ['强趋势标的可能按运行时规则适当放宽阈值。'],
     impact: ['影响技术分析中追高风险、均线偏离和操作建议的提示强度。'],
     notes: ['阈值过低会增加风险提示噪声，过高可能弱化追高提醒。'],
-  },
-  'settings.data_source.pytdx': {
-    title: 'Pytdx 通达信服务器',
-    summary: '配置通达信行情服务器地址，覆盖内置默认服务器。',
-    usage: '可分别填写 PYTDX_HOST/PYTDX_PORT，也可使用 PYTDX_SERVERS 填写多个 ip:port；PYTDX_SERVERS 优先级更高。',
-    valueNotes: ['多个服务器使用英文逗号分隔，系统会按既有数据源逻辑尝试连接。'],
-    impact: ['影响使用 Pytdx 数据源时的行情连接目标和可用性。'],
-    notes: ['服务器不可达时应依赖数据源 fallback，不建议只配置单个不稳定地址。'],
   },
   'settings.data_source.news_window': {
     title: '新闻时间窗口',
@@ -415,7 +363,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
       'EMAIL_PASSWORD 通常是邮箱授权码，不是网页登录密码。',
       '可用 STOCK_GROUP_N / EMAIL_GROUP_N 配置分组收件人。',
     ],
-    impact: ['影响邮件报告发送、分组收件和大盘复盘邮件送达。'],
+    impact: ['影响邮件报告发送、分组收件和市场复盘邮件送达。'],
     notes: ['不同邮箱服务商需要先开启 SMTP 服务。'],
   },
   'settings.notification.chat_bots': {
@@ -469,7 +417,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
     usage: '填写运行用户或容器可写的目录路径；本地默认 ./logs，容器内常见路径为 /app/logs。',
     valueNotes: [
       '相对路径按运行进程的工作目录解析。',
-      'Longbridge SDK 等组件也可能在该目录下写入日志文件。',
+      '桌面端和后台服务也可能在该目录下写入日志文件。',
     ],
     impact: [
       '影响应用日志、部分 SDK 日志和排障文件的落盘位置。',
@@ -558,7 +506,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
     summary: '控制非交易日是否跳过分析。',
     usage: '默认 true；需要强制运行可设为 false 或使用 --force-run。',
     valueNotes: ['会结合市场日历判断 A 股、港股、美股等市场是否开市。'],
-    impact: ['影响定时任务、CLI 和 GitHub Actions 手动运行是否在休市日执行；Web/API 大盘复盘按钮会直接提交任务。'],
+    impact: ['影响定时任务、CLI 和 GitHub Actions 手动运行是否在休市日执行；Web/API 市场复盘按钮会直接提交任务。'],
     notes: ['关闭后休市日可能生成缺少实时行情的报告。'],
   },
   'settings.system.HTTP_PROXY': {
@@ -630,7 +578,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
     summary: '普通分析流程默认使用的运行时模型。',
     usage: '从已启用渠道的模型列表中选择；自动模式使用第一个可用模型。',
     valueNotes: ['保存后写入 LITELLM_MODEL。'],
-    impact: ['影响个股分析、大盘复盘和默认报告生成。'],
+    impact: ['影响个股分析、市场复盘和默认报告生成。'],
     notes: ['如果模型不在已启用渠道列表中，保存时可能被清理或要求重新选择。'],
   },
   'settings.llm_channel.agent_primary_model': {
@@ -662,7 +610,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
   // ------------------------------------------------------------------
   'settings.agent.AGENT_MODE': {
     title: 'Agent 模式',
-    summary: '启用 ReAct Agent 进行股票分析，替代普通分析流程。',
+    summary: '启用 ReAct Agent 进行标的分析，替代普通分析流程。',
     usage: '开启后，系统使用多步推理 Agent 替代单轮 LLM 分析，可调用工具、检索新闻和执行复杂推理链路。',
     valueNotes: [
       '关闭时使用普通单轮 LLM 分析模式。',
@@ -703,8 +651,8 @@ const settingsHelpZhCN: SettingsHelpMap = {
   },
   'settings.agent.AGENT_NL_ROUTING': {
     title: '自然语言路由',
-    summary: '允许 bot dispatcher 通过自然语言识别将股票查询路由到 Agent。',
-    usage: '开启后，私聊中高置信度的股票相关消息（或群聊 @机器人）会自动路由到 Agent，无需显式命令。',
+    summary: '允许 bot dispatcher 通过自然语言识别将标的查询路由到 Agent。',
+    usage: '开启后，私聊中高置信度的标的相关消息（或群聊 @机器人）会自动路由到 Agent，无需显式命令。',
     valueNotes: ['仅影响 bot 接入场景（飞书、Telegram 等），不影响 Web API。'],
     impact: ['影响 bot 交互体验和 Agent 触发方式。'],
     notes: ['需要同时启用 Agent 模式和对应 bot 渠道。'],
@@ -737,10 +685,10 @@ const settingsHelpZhCN: SettingsHelpMap = {
     usage: 'single 模式下作为整体 ReAct 循环超时；multi 模式下作为协作 pipeline 总超时。设为 0 禁用超时。',
     valueNotes: [
       '超时后 Agent 会返回已完成的部分结果。',
-      '分析多只股票或 specialist 模式建议适当调高。',
+      '分析多只标的或 specialist 模式建议适当调高。',
     ],
     impact: ['影响 Agent 分析的最大等待时间。'],
-    notes: ['超时不影响其他股票的分析流程。'],
+    notes: ['超时不影响其他标的的分析流程。'],
   },
   'settings.agent.AGENT_RISK_OVERRIDE': {
     title: '风险 Agent 否决权',
@@ -860,9 +808,9 @@ const settingsHelpZhCN: SettingsHelpMap = {
   // ------------------------------------------------------------------
   'settings.report.REPORT_SUMMARY_ONLY': {
     title: '仅推送摘要',
-    summary: '只推送分析摘要，不推送个股详情。适合跟踪大量股票时快速概览。',
-    usage: '开启后，通知只包含整体摘要信息；关闭后包含每只股票的详细分析。',
-    valueNotes: ['跟踪股票较多时开启可减少通知篇幅。'],
+    summary: '只推送分析摘要，不推送个股详情。适合跟踪大量标的时快速概览。',
+    usage: '开启后，通知只包含整体摘要信息；关闭后包含每只标的的详细分析。',
+    valueNotes: ['跟踪标的较多时开启可减少通知篇幅。'],
     impact: ['影响通知推送的内容详细程度。'],
     notes: ['不影响 Web 端报告查看。'],
   },
@@ -903,7 +851,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
   },
   'settings.report.REPORT_HISTORY_COMPARE_N': {
     title: '历史信号对比',
-    summary: '展示每只股票最近 N 次分析的信号对比。设为 0 关闭。',
+    summary: '展示每只标的最近 N 次分析的信号对比。设为 0 关闭。',
     usage: '开启后，报告中会展示最近 N 次分析信号的对比表格。',
     valueNotes: ['N 越大对比范围越广，但表格越长。'],
     impact: ['影响报告中历史信号对比部分的展示。'],
@@ -911,19 +859,19 @@ const settingsHelpZhCN: SettingsHelpMap = {
   },
   'settings.report.SINGLE_STOCK_NOTIFY': {
     title: '逐股即时推送',
-    summary: '每完成一只股票分析后立即推送，而不是等全部完成后批量推送。',
-    usage: '开启后，每只股票分析完成后独立发送通知；关闭后汇总发送。',
+    summary: '每完成一只标的分析后立即推送，而不是等全部完成后批量推送。',
+    usage: '开启后，每只标的分析完成后独立发送通知；关闭后汇总发送。',
     valueNotes: ['开启后通知更及时，但推送频率更高。'],
     impact: ['影响通知推送时机和频率。'],
-    notes: ['跟踪大量股票时可能产生较多通知消息。'],
+    notes: ['跟踪大量标的时可能产生较多通知消息。'],
   },
   'settings.report.MERGE_EMAIL_NOTIFICATION': {
     title: '合并邮件通知',
-    summary: '将个股分析与大盘复盘合并为一封邮件发送。',
-    usage: '开启后，个股分析和大盘复盘会合并在同一封邮件中发送。',
-    valueNotes: ['仅在同时启用了个股分析和大盘复盘时有效。'],
+    summary: '将个股分析与市场复盘合并为一封邮件发送。',
+    usage: '开启后，个股分析和市场复盘会合并在同一封邮件中发送。',
+    valueNotes: ['仅在同时启用了个股分析和市场复盘时有效。'],
     impact: ['影响邮件通知的封数和内容组织。'],
-    notes: ['关闭后个股分析和大盘复盘会分别发送邮件。'],
+    notes: ['关闭后个股分析和市场复盘会分别发送邮件。'],
   },
   // ------------------------------------------------------------------
   // Notification routing
@@ -1003,7 +951,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
   },
   'settings.system.MAX_WORKERS': {
     title: '最大并发线程数',
-    summary: '控制同时执行的股票分析线程数量。',
+    summary: '控制同时执行的标的分析线程数量。',
     usage: '设置并发分析的工作线程数；数值越高并发越高，但 API 限流风险也越大。',
     valueNotes: [
       '建议保持较低值以避免触发数据源或 LLM API 的频率限制。',
@@ -1014,11 +962,11 @@ const settingsHelpZhCN: SettingsHelpMap = {
   },
   'settings.system.ANALYSIS_DELAY': {
     title: '分析间隔',
-    summary: '控制每只股票分析之间的间隔秒数，用于限速。',
-    usage: '设为 0 无间隔；设为正值时每完成一只股票后等待指定秒数再分析下一只。',
+    summary: '控制每只标的分析之间的间隔秒数，用于限速。',
+    usage: '设为 0 无间隔；设为正值时每完成一只标的后等待指定秒数再分析下一只。',
     valueNotes: ['适合在 API 有严格频率限制时使用。'],
     impact: ['影响分析总耗时。'],
-    notes: ['总耗时 ≈ 股票数 × 单股耗时 + (股票数-1) × ANALYSIS_DELAY。'],
+    notes: ['总耗时 ≈ 标的数 × 单股耗时 + (标的数-1) × ANALYSIS_DELAY。'],
   },
   'settings.system.SAVE_CONTEXT_SNAPSHOT': {
     title: '保存分析上下文快照',
@@ -1038,7 +986,7 @@ const settingsHelpZhCN: SettingsHelpMap = {
     usage: 'MARKET_REVIEW_ENABLED 开启大盘分析；DAILY_MARKET_CONTEXT_ENABLED 默认开启，会把当日大盘摘要用于个股分析 Prompt 与保守护栏；MARKET_REVIEW_REGION 选择市场（cn/hk/us/both）；MARKET_REVIEW_COLOR_SCHEME 选择配色。',
     valueNotes: [
       'cn 覆盖 A 股，hk 覆盖港股，us 覆盖美股，both 覆盖全部。',
-      '默认开启 DAILY_MARKET_CONTEXT_ENABLED；设为 false 后仍可生成大盘复盘报告，但个股分析不会读取大盘摘要或软化买入/加仓建议。',
+      '默认开启 DAILY_MARKET_CONTEXT_ENABLED；设为 false 后仍可生成市场复盘报告，但个股分析不会读取大盘摘要或软化买入/加仓建议。',
       '配色方案影响大盘报告中指数涨跌的颜色显示：green_up 为绿涨红跌，red_up 为红涨绿跌。',
     ],
     impact: ['影响分析报告中大盘概览部分的内容和视觉呈现。'],
@@ -1077,7 +1025,7 @@ const settingsHelpEnUS: SettingsHelpMap = {
   'settings.ai_model.LLM_CHANNELS': {
     title: 'LLM Channels',
     summary: 'Declares model channels for multiple providers, keys, fallbacks, and visual channel management.',
-    usage: 'Use comma-separated names such as deepseek,aihubmix; then configure LLM_<NAME>_BASE_URL, LLM_<NAME>_API_KEY(S), and LLM_<NAME>_MODELS for each channel.',
+    usage: 'Use comma-separated names such as deepseek,gemini; then configure LLM_<NAME>_BASE_URL, LLM_<NAME>_API_KEY(S), and LLM_<NAME>_MODELS for each channel.',
     valueNotes: [
       'Once channel mode is active, runtime selection reads channel configuration first.',
       'Environment variables injected by Docker or GitHub Actions can override values saved from the Web settings page.',
@@ -1148,17 +1096,6 @@ const settingsHelpEnUS: SettingsHelpMap = {
     impact: ['Affects model calls, connection tests, and model discovery for the provider.'],
     notes: ['Do not expose real keys in issues, logs, or screenshots.'],
   },
-  'settings.ai_model.anspire_llm': {
-    title: 'Anspire LLM Gateway',
-    summary: 'Uses Anspire API keys as a compatible OpenAI-style LLM gateway.',
-    usage: 'ANSPIRE_LLM_ENABLED controls this compatibility path; ANSPIRE_LLM_BASE_URL sets the gateway endpoint; ANSPIRE_LLM_MODEL sets the default model when no primary model is explicitly selected.',
-    valueNotes: [
-      'This path is mainly for simplified setups without LLM_CHANNELS or LITELLM_MODEL.',
-      'When LITELLM_CONFIG, LLM_CHANNELS, or an explicit LITELLM_MODEL is configured, runtime selection follows the existing priority order.',
-    ],
-    impact: ['Affects the default gateway and model used when Anspire keys participate in LLM calls.'],
-    notes: ['Do not point the Base URL at another provider while reusing an Anspire key.'],
-  },
   'settings.ai_model.legacy_provider_params': {
     title: 'Legacy Provider Parameters',
     summary: 'Configures model names, temperature, or token limits for legacy provider-specific paths.',
@@ -1177,46 +1114,6 @@ const settingsHelpEnUS: SettingsHelpMap = {
     valueNotes: ['The Base URL must match the API key provider.', 'Gemini or Anthropic official paths usually do not use OPENAI_BASE_URL.'],
     impact: ['Affects legacy OpenAI-compatible model calls.'],
     notes: ['In channel mode, prefer each channel-specific LLM_<NAME>_BASE_URL.'],
-  },
-  'settings.data_source.TUSHARE_TOKEN': {
-    title: 'Tushare Token',
-    summary: 'Token used for Tushare Pro data access.',
-    usage: 'Paste the token from your Tushare account.',
-    valueNotes: ['Available APIs depend on your Tushare permission level.'],
-    impact: ['Affects some A-share base data, stock lists, and enrichment data.'],
-    notes: ['Do not commit the token or print it in public logs.'],
-  },
-  'settings.data_source.TICKFLOW_API_KEY': {
-    title: 'TickFlow API Key',
-    summary: 'Enhances market review with index and market-statistics data.',
-    usage: 'Paste a TickFlow API key here. When empty, the system continues with other data sources and fallback paths.',
-    valueNotes: ['This key is an optional enhancement, not required for the main analysis flow.'],
-    impact: ['Affects market-review and market-statistics coverage.'],
-    notes: ['Do not expose real keys in issues, logs, or screenshots.'],
-  },
-  'settings.data_source.stock_index_remote': {
-    title: 'Remote Stock Index',
-    summary: 'Fetches the latest stock autocomplete index from GitHub main and caches it locally.',
-    usage: 'Enabled by default. If GitHub raw is unreachable, disable it. The URL, check frequency, and timeout are built-in system values.',
-    valueNotes: ['The system checks for updates every 48 hours to avoid frequent GitHub access.', 'Remote check failures do not block WebUI or analysis.'],
-    impact: ['Affects stock-name freshness for Web autocomplete and backend stock-name resolution.'],
-    notes: ['When remote download fails, the app keeps using an existing cache or the bundled index.'],
-  },
-  'settings.data_source.ALPHASIFT_ENABLED': {
-    title: 'AlphaSift Screening',
-    summary: 'Controls the built-in AlphaSift stock screening page.',
-    usage: 'Disabled by default. When true, the Web app checks alphasift.dsa_adapter installed with backend dependencies; if it is missing, run pip install -r requirements.txt or rebuild the backend artifact.',
-    valueNotes: ['AlphaSift is installed as a DSA backend dependency; /install is retained only as an explicit repair action.', 'Screening output is for research support only and is not investment advice.'],
-    impact: ['Affects the Web screening entry, AlphaSift strategy loading, and screening API.'],
-    notes: ['AlphaSift generates candidates, while DSA enriches them with quote, fundamental, and news context; disabling it does not affect existing analysis, reports, or notifications.'],
-  },
-  'settings.data_source.ALPHASIFT_INSTALL_SPEC': {
-    title: 'AlphaSift Install Source',
-    summary: 'Configures the trusted AlphaSift pip source used by explicit repair installs.',
-    usage: 'Defaults to a verified ZhuLinsen/alphasift commit. Normal deployments install AlphaSift through requirements; this source is used only when the repair install endpoint is called manually.',
-    valueNotes: ['Custom local paths or wheels are not handled by the repair endpoint; install them into the backend Python environment first.', 'This field is treated as sensitive, so the settings page does not show the full value.'],
-    impact: ['Affects AlphaSift adapter source validation and explicit repair installs.'],
-    notes: ['Use a trusted source only. AlphaSift is an experimental screening capability, so understand the risk before enabling it.'],
   },
   'settings.data_source.REALTIME_SOURCE_PRIORITY': {
     title: 'Realtime Source Priority',
@@ -1265,14 +1162,6 @@ const settingsHelpEnUS: SettingsHelpMap = {
     valueNotes: ['Strong-trend stocks may widen the threshold according to runtime rules.'],
     impact: ['Affects technical-analysis warnings about chasing, MA deviation, and trading advice.'],
     notes: ['Too low can add noisy warnings; too high can weaken chase-risk alerts.'],
-  },
-  'settings.data_source.pytdx': {
-    title: 'Pytdx Servers',
-    summary: 'Configures Tongdaxin quote servers and overrides built-in defaults.',
-    usage: 'Use PYTDX_HOST/PYTDX_PORT for a single server, or PYTDX_SERVERS for multiple ip:port entries. PYTDX_SERVERS takes priority.',
-    valueNotes: ['Separate multiple servers with English commas; runtime data-source logic tries them as configured.'],
-    impact: ['Affects quote connectivity and availability when the Pytdx data source is used.'],
-    notes: ['If a server is unreachable, rely on data-source fallback and avoid a single unstable endpoint.'],
   },
   'settings.data_source.news_window': {
     title: 'News Window',
@@ -1460,7 +1349,7 @@ const settingsHelpEnUS: SettingsHelpMap = {
     usage: 'Use a directory writable by the runtime user or container. The local default is ./logs; container deployments often use /app/logs.',
     valueNotes: [
       'Relative paths are resolved from the process working directory.',
-      'Components such as the Longbridge SDK can also write log files under this directory.',
+      'The desktop runtime and backend services can also write log files under this directory.',
     ],
     impact: ['Affects application logs, some SDK logs, and troubleshooting files.'],
     notes: [

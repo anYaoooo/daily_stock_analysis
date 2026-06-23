@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from data_provider.realtime_types import UnifiedRealtimeQuote, RealtimeSource
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult, TrendStatus
 from src.core.pipeline import StockAnalysisPipeline
+from src.analyzer import GeminiAnalyzer
 
 
 def _make_realtime_quote(
@@ -172,6 +173,73 @@ class TestComputeMaStatus(unittest.TestCase):
     def test_consolidation(self) -> None:
         status = StockAnalysisPipeline._compute_ma_status(10, 10, 10, 10)
         self.assertIn("震荡", status)
+
+
+class TestCryptoTechnicalPrompt(unittest.TestCase):
+    """BTC 专项交易框架 prompt 注入测试。"""
+
+    def test_prompt_includes_crypto_framework_when_context_present(self) -> None:
+        analyzer = GeminiAnalyzer()
+        analyzer._get_skill_prompt_sections = lambda: ("", "", False)
+        context = {
+            "code": "BTC",
+            "stock_name": "Bitcoin",
+            "date": "2026-06-22",
+            "today": {"close": 100000, "volume": 1200},
+            "crypto_technical": {
+                "price_action": {
+                    "state": "breakout",
+                    "recent_high": 101000,
+                    "recent_low": 95000,
+                    "close_change_pct": 2.5,
+                },
+                "fibonacci": {
+                    "swing_high": 101000,
+                    "swing_low": 90000,
+                    "retracement_levels": {
+                        "38.2%": 96798,
+                        "50.0%": 95500,
+                        "61.8%": 94202,
+                    },
+                },
+                "volume": {
+                    "latest": 1200,
+                    "average": 1000,
+                    "ratio": 1.2,
+                    "confirmation": "normal",
+                },
+                "vwap": {"rolling_20": 98000, "price_position": "above"},
+                "ema": {"ema20": 97000, "ema50": 94000, "structure": "bullish"},
+            },
+        }
+
+        prompt = analyzer._format_prompt(context, "Bitcoin", report_language="zh")
+
+        self.assertIn("BTC 交易框架补充", prompt)
+        self.assertIn("Price Action", prompt)
+        self.assertIn("Fibonacci", prompt)
+        self.assertIn("VWAP", prompt)
+        self.assertIn("EMA20=97000", prompt)
+        self.assertIn("BTC 专项", prompt)
+        self.assertIn("多单", prompt)
+        self.assertIn("空单", prompt)
+        self.assertIn("做空开仓", prompt)
+        self.assertIn("不得只给多单买入视角", prompt)
+        self.assertIn("`sell` 表示空单开仓", prompt)
+        self.assertIn("long_plan", prompt)
+        self.assertIn("short_plan", prompt)
+        self.assertIn("必须同时输出", prompt)
+        self.assertNotIn("是否满足 MA5>MA10>MA20 多头排列", prompt)
+
+    def test_btc_system_prompt_uses_two_way_default_policy(self) -> None:
+        analyzer = GeminiAnalyzer(use_legacy_default_prompt=True)
+
+        prompt = analyzer._get_analysis_system_prompt("zh", stock_code="BTC")
+
+        self.assertIn("BTC 默认技能基线", prompt)
+        self.assertIn("必须同时评估多单与空单", prompt)
+        self.assertNotIn("多头排列必须条件", prompt)
+        self.assertNotIn("只做多头排列的股票", prompt)
 
 
 class TestEnhanceContextRealtimeOverride(unittest.TestCase):

@@ -58,6 +58,26 @@ CORE_TRADING_SKILL_POLICY_ZH = """## 默认技能基线（必须严格遵守）
 - 强势趋势股可适当放宽乖离率要求，轻仓追踪但需设止损
 """
 
+CRYPTO_TWO_WAY_SKILL_POLICY_ZH = """## BTC 默认技能基线（必须严格遵守）
+
+BTC 属于 7x24 双向交易标的，默认策略不得只选择多头。当前激活的 skills 可以补充细化分析视角，但交易计划必须同时覆盖多单与空单。
+
+### 1. 双向策略选择
+- 必须同时评估多单与空单，不得默认多头。
+- 多单只在突破确认、回踩支撑确认、VWAP 上方强势或 EMA 结构偏多时作为主方案。
+- 空单只在跌破关键支撑、反抽不过、VWAP 下方压制或 EMA 结构偏空时作为主方案。
+- 多空条件都不充分时，输出等待/区间观察，不做多也不做空。
+
+### 2. 策略点位要求
+- 必须分别给出 `long_plan` 与 `short_plan`。
+- 每套计划必须包含入场价、止损价、目标价、触发条件、失效条件和依据。
+- 最终主方案可以写入 `sniper_points` 兼容字段，但 `sniper_points` 不能替代双向计划。
+
+### 3. 风控优先
+- 禁止在指标冲突时激进追多或盲目开空。
+- 任何方向都必须先定义失效条件，再给入场建议。
+"""
+
 TECHNICAL_SKILL_RULES_EN = """## Default Skill Baseline
 
 Treat the currently activated skills as the primary analysis lens, but keep the
@@ -80,6 +100,13 @@ def get_default_trading_skill_policy(*, explicit_skill_selection: bool) -> str:
     if explicit_skill_selection:
         return ""
     return CORE_TRADING_SKILL_POLICY_ZH
+
+
+def get_crypto_two_way_trading_skill_policy(*, explicit_skill_selection: bool) -> str:
+    """Return the BTC two-way baseline only for implicit/default runs."""
+    if explicit_skill_selection:
+        return ""
+    return CRYPTO_TWO_WAY_SKILL_POLICY_ZH
 
 
 def get_default_technical_skill_policy(*, explicit_skill_selection: bool) -> str:

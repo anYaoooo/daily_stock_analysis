@@ -32,6 +32,7 @@ vi.mock('../../api/history', () => ({
     getDiagnostics: vi.fn(),
     getRecordFlow: vi.fn(),
     getStockBarList: vi.fn().mockResolvedValue({ total: 0, items: [] }),
+    deleteRecords: vi.fn(),
     deleteByCode: vi.fn(),
   },
 }));
@@ -336,6 +337,98 @@ describe('HomePage', () => {
     expect(screen.getByText('暂无个股记录')).toBeInTheDocument();
   });
 
+  it('keeps multiple Bitcoin stock-bar records and allows closing the bar', async () => {
+    const firstBtcReport = {
+      ...historyReport,
+      meta: {
+        ...historyReport.meta,
+        id: 101,
+        queryId: 'btc-q-101',
+        stockCode: 'BTC',
+        stockName: 'Bitcoin',
+        createdAt: '2026-06-22T08:00:00Z',
+      },
+      summary: {
+        ...historyReport.summary,
+        analysisSummary: 'BTC 第一条分析',
+      },
+    };
+    const secondBtcReport = {
+      ...firstBtcReport,
+      meta: {
+        ...firstBtcReport.meta,
+        id: 102,
+        queryId: 'btc-q-102',
+        createdAt: '2026-06-22T09:00:00Z',
+      },
+      summary: {
+        ...firstBtcReport.summary,
+        analysisSummary: 'BTC 第二条分析',
+      },
+    };
+
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+    vi.mocked(historyApi.getStockBarList).mockResolvedValue({
+      total: 2,
+      items: [
+        {
+          id: 102,
+          stockCode: 'BTC',
+          stockName: 'Bitcoin',
+          reportType: 'detailed',
+          sentimentScore: 48,
+          operationAdvice: '观望',
+          analysisCount: 1,
+          lastAnalysisTime: '2026-06-22T09:00:00Z',
+        },
+        {
+          id: 101,
+          stockCode: 'BTC',
+          stockName: 'Bitcoin',
+          reportType: 'detailed',
+          sentimentScore: 72,
+          operationAdvice: '买入',
+          analysisCount: 1,
+          lastAnalysisTime: '2026-06-22T08:00:00Z',
+        },
+      ],
+    });
+    vi.mocked(historyApi.getDetail).mockImplementation((recordId: number) => (
+      Promise.resolve(recordId === 102 ? secondBtcReport : firstBtcReport)
+    ));
+
+    const { container } = render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    const btcButtons = await screen.findAllByRole('button', { name: /^Bitcoin BTC 历史记录$/ });
+    expect(btcButtons).toHaveLength(2);
+
+    fireEvent.click(btcButtons[1]);
+
+    await waitFor(() => {
+      expect(screen.getByText('BTC 第一条分析')).toBeInTheDocument();
+      expect(container.querySelectorAll('.home-history-item-selected')).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭个股栏' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /^Bitcoin BTC 历史记录$/ })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: '显示个股栏' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '显示个股栏' }));
+    expect(await screen.findAllByRole('button', { name: /^Bitcoin BTC 历史记录$/ })).toHaveLength(2);
+  });
+
   it('opens the run-flow drawer from an active task in TaskPanel', async () => {
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 0,
@@ -479,7 +572,7 @@ describe('HomePage', () => {
         items: [],
       });
     });
-    vi.mocked(historyApi.deleteByCode).mockImplementation(async () => {
+    vi.mocked(historyApi.deleteRecords).mockImplementation(async () => {
       isMarketReviewDeleted = true;
       return { deleted: 1 };
     });
@@ -497,7 +590,7 @@ describe('HomePage', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /MARKET/ })).not.toBeInTheDocument();
     });
-    expect(historyApi.deleteByCode).toHaveBeenCalledWith('MARKET');
+    expect(historyApi.deleteRecords).toHaveBeenCalledWith([2]);
   });
 
   it('surfaces duplicate task warnings from dashboard submission', async () => {

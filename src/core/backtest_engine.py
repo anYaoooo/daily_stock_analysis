@@ -49,7 +49,7 @@ class EvaluationConfig:
 
 
 class BacktestEngine:
-    """Long-only daily-bar backtesting engine."""
+    """Daily-bar backtesting engine for long, short, and cash recommendations."""
 
     # Operation advice keywords (Chinese + English)
     _BULLISH_KEYWORDS = (
@@ -70,6 +70,18 @@ class BacktestEngine:
         "strong sell",
         "sell",
         "reduce",
+    )
+    _SHORT_KEYWORDS = (
+        "做空",
+        "开空",
+        "空单",
+        "空头开仓",
+        "空头入场",
+        "加空",
+        "short",
+        "short entry",
+        "open short",
+        "short sell",
     )
     _HOLD_KEYWORDS = (
         "持有",
@@ -112,6 +124,8 @@ class BacktestEngine:
     def infer_direction_expected(cls, operation_advice: Optional[str]) -> str:
         """Infer expected direction: up/down/not_down/flat."""
         text = cls._normalize_text(operation_advice)
+        if cls._matches_intent(text, cls._SHORT_KEYWORDS):
+            return "down"
         if cls._matches_intent(text, cls._BEARISH_KEYWORDS):
             return "down"
         if cls._first_intent_position(text, cls._WAIT_KEYWORDS) is not None:
@@ -132,11 +146,15 @@ class BacktestEngine:
 
     @classmethod
     def infer_position_recommendation(cls, operation_advice: Optional[str]) -> str:
-        """Infer recommended position: long/cash (long-only system).
+        """Infer recommended position: long/short/cash.
 
-        Priority: bearish/wait -> cash, bullish/hold -> long, unrecognized -> cash.
+        Priority: explicit short -> short, bearish/wait -> cash, bullish/hold -> long,
+        unrecognized -> cash. Plain sell/reduce remains cash for long-only stock
+        semantics; only explicit short wording opens a short position.
         """
         text = cls._normalize_text(operation_advice)
+        if cls._matches_intent(text, cls._SHORT_KEYWORDS):
+            return "short"
         if cls._matches_intent(text, cls._BEARISH_KEYWORDS):
             return "cash"
         wait_pos = cls._first_intent_position(text, cls._WAIT_KEYWORDS)
@@ -234,12 +252,14 @@ class BacktestEngine:
             end_close=end_close,
         )
 
-        simulated_entry_price = start_price if position == "long" else None
+        simulated_entry_price = start_price if position in {"long", "short"} else None
         simulated_return_pct: Optional[float]
-        if position != "long":
+        if position == "cash":
             simulated_return_pct = 0.0
         elif simulated_exit_price is None:
             simulated_return_pct = None
+        elif position == "short":
+            simulated_return_pct = (start_price - simulated_exit_price) / start_price * 100
         else:
             simulated_return_pct = (simulated_exit_price - start_price) / start_price * 100
 
@@ -289,6 +309,7 @@ class BacktestEngine:
         insufficient_count = sum(1 for r in results_list if (r.eval_status or "") == "insufficient_data")
 
         long_count = sum(1 for r in completed if (r.position_recommendation or "") == "long")
+        short_count = sum(1 for r in completed if (r.position_recommendation or "") == "short")
         cash_count = sum(1 for r in completed if (r.position_recommendation or "") == "cash")
 
         win_count = sum(1 for r in completed if (r.outcome or "") == "win")
@@ -311,7 +332,7 @@ class BacktestEngine:
         stop_applicable = [
             r
             for r in completed
-            if (r.position_recommendation or "") == "long" and r.hit_stop_loss is not None
+            if (r.position_recommendation or "") in {"long", "short"} and r.hit_stop_loss is not None
         ]
         stop_loss_trigger_rate = (
             round(sum(1 for r in stop_applicable if r.hit_stop_loss is True) / len(stop_applicable) * 100, 2)
@@ -322,7 +343,7 @@ class BacktestEngine:
         take_profit_applicable = [
             r
             for r in completed
-            if (r.position_recommendation or "") == "long" and r.hit_take_profit is not None
+            if (r.position_recommendation or "") in {"long", "short"} and r.hit_take_profit is not None
         ]
         take_profit_trigger_rate = (
             round(
@@ -336,7 +357,7 @@ class BacktestEngine:
         any_target_applicable = [
             r
             for r in completed
-            if (r.position_recommendation or "") == "long"
+            if (r.position_recommendation or "") in {"long", "short"}
             and (r.hit_stop_loss is not None or r.hit_take_profit is not None)
         ]
         ambiguous_rate = (
@@ -369,6 +390,7 @@ class BacktestEngine:
             "completed_count": len(completed),
             "insufficient_count": insufficient_count,
             "long_count": long_count,
+            "short_count": short_count,
             "cash_count": cash_count,
             "win_count": win_count,
             "loss_count": loss_count,
@@ -565,7 +587,7 @@ class BacktestEngine:
         Optional[float],
         str,
     ]:
-        if position != "long":
+        if position == "cash":
             return (
                 None,
                 None,
@@ -599,8 +621,12 @@ class BacktestEngine:
         for idx, bar in enumerate(window_bars, start=1):
             low = bar.low
             high = bar.high
-            stop_hit = stop_loss is not None and low is not None and low <= stop_loss
-            tp_hit = take_profit is not None and high is not None and high >= take_profit
+            if position == "short":
+                stop_hit = stop_loss is not None and high is not None and high >= stop_loss
+                tp_hit = take_profit is not None and low is not None and low <= take_profit
+            else:
+                stop_hit = stop_loss is not None and low is not None and low <= stop_loss
+                tp_hit = take_profit is not None and high is not None and high >= take_profit
 
             if stop_hit:
                 hit_sl = True

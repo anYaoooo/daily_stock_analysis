@@ -60,7 +60,6 @@ def build_market_review_runtime(
         search_service = SearchService(
             bocha_keys=getattr(config, "bocha_api_keys", None),
             tavily_keys=getattr(config, "tavily_api_keys", None),
-            anspire_keys=getattr(config, "anspire_api_keys", None),
             brave_keys=getattr(config, "brave_api_keys", None),
             serpapi_keys=getattr(config, "serpapi_keys", None),
             minimax_keys=getattr(config, "minimax_api_keys", None),
@@ -72,6 +71,19 @@ def build_market_review_runtime(
             ),
             news_max_age_days=getattr(config, "news_max_age_days", 3),
             news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+            cryptopanic_chroma_path=getattr(config, "cryptopanic_chroma_path", "") or None,
+            cryptopanic_chroma_collection=getattr(
+                config,
+                "cryptopanic_chroma_collection",
+                "cryptopanic_news",
+            ),
+            cryptopanic_opencli_path=getattr(config, "cryptopanic_opencli_path", "") or None,
+            cryptopanic_refresh_interval_seconds=getattr(
+                config,
+                "cryptopanic_refresh_interval_seconds",
+                900,
+            ),
+            cryptopanic_max_age_hours=getattr(config, "cryptopanic_max_age_hours", 24),
         )
 
     analyzer = None

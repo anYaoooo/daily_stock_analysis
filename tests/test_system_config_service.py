@@ -15,7 +15,7 @@ from tests.litellm_stub import ensure_litellm_stub
 
 ensure_litellm_stub()
 
-from src.config import ANSPIRE_LLM_MODEL_DEFAULT, Config
+from src.config import Config
 from src.core.config_manager import ConfigManager
 from src.services.system_config_service import ConfigConflictError, ConfigImportError, SystemConfigService
 
@@ -67,7 +67,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertFalse(items["GEMINI_API_KEY"]["is_masked"])
         self.assertTrue(items["GEMINI_API_KEY"]["raw_value_exists"])
 
-    def test_get_config_masks_alphasift_install_spec(self) -> None:
+    def test_get_config_hides_removed_alphasift_install_spec(self) -> None:
         self._rewrite_env(
             "STOCK_LIST=600519,000001",
             "ALPHASIFT_INSTALL_SPEC=git+https://user:token@example.com/internal/alphasift.git",
@@ -76,9 +76,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         payload = self.service.get_config(include_schema=True)
         items = {item["key"]: item for item in payload["items"]}
 
-        self.assertEqual(items["ALPHASIFT_INSTALL_SPEC"]["value"], payload["mask_token"])
-        self.assertTrue(items["ALPHASIFT_INSTALL_SPEC"]["is_masked"])
-        self.assertTrue(items["ALPHASIFT_INSTALL_SPEC"]["schema"]["is_sensitive"])
+        self.assertNotIn("ALPHASIFT_INSTALL_SPEC", items)
 
     def test_get_config_masks_llm_usage_hmac_secret(self) -> None:
         self._rewrite_env(
@@ -415,25 +413,9 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(checks["stock_list"]["status"], "configured")
         self.assertEqual(checks["notification"]["status"], "optional")
 
-    def test_get_setup_status_accepts_anspire_one_key_llm(self) -> None:
-        self._rewrite_env(
-            "ANSPIRE_API_KEYS=sk-anspire-test-value",
-            "STOCK_LIST=600519",
-        )
-
-        with patch.dict(os.environ, {}, clear=True):
-            status = self.service.get_setup_status()
-
-        checks = {check["key"]: check for check in status["checks"]}
-        self.assertTrue(status["is_complete"])
-        self.assertEqual(checks["llm_primary"]["status"], "configured")
-        self.assertIn("openai/Doubao-Seed-2.0-lite", checks["llm_primary"]["message"])
-
-    def test_get_setup_status_treats_blank_anspire_channel_enabled_as_shared_disable(self) -> None:
+    def test_get_setup_status_ignores_removed_anspire_channel(self) -> None:
         self._rewrite_env(
             "LLM_CHANNELS=anspire",
-            "LLM_ANSPIRE_ENABLED=",
-            "ANSPIRE_LLM_ENABLED=false",
             "ANSPIRE_API_KEYS=sk-anspire-test-value",
             "STOCK_LIST=600519",
         )
@@ -446,11 +428,11 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(checks["llm_primary"]["status"], "needs_action")
         self.assertIn("llm_primary", status["required_missing_keys"])
 
-    def test_get_setup_status_respects_disabled_anspire_channel_without_legacy_fallback(self) -> None:
+    def test_get_setup_status_ignores_removed_aihubmix_channel(self) -> None:
         self._rewrite_env(
-            "LLM_CHANNELS=anspire",
-            "LLM_ANSPIRE_ENABLED=false",
-            "ANSPIRE_API_KEYS=sk-anspire-test-value",
+            "LLM_CHANNELS=aihubmix",
+            "LLM_AIHUBMIX_API_KEY=sk-aihubmix-test-value",
+            "LLM_AIHUBMIX_MODELS=gpt-4o-mini",
             "STOCK_LIST=600519",
         )
 
@@ -735,7 +717,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(current_map["STOCK_LIST"], "600519,300750")
         self.assertEqual(current_map["GEMINI_API_KEY"], "secret-key-value")
 
-    def test_update_alphasift_enable_does_not_rewrite_llm_fields(self) -> None:
+    def test_update_masked_secret_does_not_rewrite_llm_fields(self) -> None:
         self._rewrite_env(
             "STOCK_LIST=600519,000001",
             "LITELLM_MODEL=openai/gpt-4o-mini",
@@ -747,8 +729,6 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             "LLM_OPENAI_API_KEYS=legacy-openai-secret",
             "LLM_OPENAI_MODELS=openai/gpt-4o-mini,openai/gpt-4o",
             "LITELLM_FALLBACK_MODELS=openai/gpt-4o-mini,openai/gpt-4o",
-            "ALPHASIFT_ENABLED=false",
-            "ALPHASIFT_INSTALL_SPEC=git+https://github.com/ZhuLinsen/alphasift.git@14e74fc0819267f7c04c3117a0dd0fe3f9b19404",
             "LLM_USAGE_HMAC_SECRET=telemetry-secret",
             "LLM_USAGE_HMAC_KEY_VERSION=test-v1",
             "GEMINI_API_KEY=legacy-secret",
@@ -757,8 +737,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         response = self.service.update(
             config_version=self.manager.get_config_version(),
             items=[
-                {"key": "ALPHASIFT_ENABLED", "value": "true"},
-                {"key": "ALPHASIFT_INSTALL_SPEC", "value": "******"},
+                {"key": "REPORT_SHOW_LLM_MODEL", "value": "false"},
                 {"key": "LLM_USAGE_HMAC_SECRET", "value": "******"},
                 {"key": "GEMINI_API_KEY", "value": "******"},
             ],
@@ -768,15 +747,11 @@ class SystemConfigServiceTestCase(unittest.TestCase):
 
         self.assertTrue(response["success"])
         self.assertEqual(response["applied_count"], 1)
-        self.assertIn("ALPHASIFT_ENABLED", response["updated_keys"])
-        self.assertEqual(response["skipped_masked_count"], 3)
+        self.assertIn("REPORT_SHOW_LLM_MODEL", response["updated_keys"])
+        self.assertEqual(response["skipped_masked_count"], 2)
 
         current_map = self.manager.read_config_map()
-        self.assertEqual(current_map["ALPHASIFT_ENABLED"], "true")
-        self.assertEqual(
-            current_map["ALPHASIFT_INSTALL_SPEC"],
-            "git+https://github.com/ZhuLinsen/alphasift.git@14e74fc0819267f7c04c3117a0dd0fe3f9b19404",
-        )
+        self.assertEqual(current_map["REPORT_SHOW_LLM_MODEL"], "false")
         self.assertEqual(current_map["LLM_USAGE_HMAC_SECRET"], "telemetry-secret")
         self.assertEqual(current_map["LLM_USAGE_HMAC_KEY_VERSION"], "test-v1")
         self.assertEqual(current_map["GEMINI_API_KEY"], "legacy-secret")
@@ -1447,50 +1422,25 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertTrue(validation["valid"])
         self.assertEqual(validation["issues"], [])
 
-    def test_validate_allows_anspire_channel_with_shared_key_defaults(self) -> None:
+    def test_validate_excludes_removed_anspire_channel_from_runtime_models(self) -> None:
         validation = self.service.validate(
             items=[
                 {"key": "LLM_CHANNELS", "value": "anspire"},
                 {"key": "ANSPIRE_API_KEYS", "value": "sk-anspire-test-value"},
-            ]
-        )
-
-        self.assertTrue(validation["valid"])
-        self.assertEqual(validation["issues"], [])
-
-    def test_validate_treats_blank_anspire_channel_enabled_as_shared_disable(self) -> None:
-        validation = self.service.validate(
-            items=[
-                {"key": "LLM_CHANNELS", "value": "anspire"},
-                {"key": "LLM_ANSPIRE_ENABLED", "value": "   "},
-                {"key": "ANSPIRE_LLM_ENABLED", "value": "false"},
-            ]
-        )
-
-        self.assertTrue(validation["valid"], validation["issues"])
-        self.assertEqual(validation["issues"], [])
-
-    def test_validate_excludes_blank_disabled_anspire_channel_from_runtime_models(self) -> None:
-        validation = self.service.validate(
-            items=[
-                {"key": "LLM_CHANNELS", "value": "anspire"},
-                {"key": "LLM_ANSPIRE_ENABLED", "value": "   "},
-                {"key": "ANSPIRE_LLM_ENABLED", "value": "false"},
-                {"key": "ANSPIRE_API_KEYS", "value": "sk-anspire-test-value"},
-                {"key": "LITELLM_MODEL", "value": f"openai/{ANSPIRE_LLM_MODEL_DEFAULT}"},
+                {"key": "LITELLM_MODEL", "value": "openai/gpt-4o-mini"},
             ]
         )
 
         self.assertFalse(validation["valid"])
         self.assertTrue(any(issue["key"] == "LITELLM_MODEL" and issue["code"] == "missing_runtime_source" for issue in validation["issues"]))
 
-    def test_validate_excludes_disabled_anspire_channel_from_legacy_runtime_source(self) -> None:
+    def test_validate_excludes_removed_aihubmix_channel_from_runtime_models(self) -> None:
         validation = self.service.validate(
             items=[
-                {"key": "LLM_CHANNELS", "value": "anspire"},
-                {"key": "LLM_ANSPIRE_ENABLED", "value": "false"},
-                {"key": "ANSPIRE_API_KEYS", "value": "sk-anspire-test-value"},
-                {"key": "LITELLM_MODEL", "value": f"openai/{ANSPIRE_LLM_MODEL_DEFAULT}"},
+                {"key": "LLM_CHANNELS", "value": "aihubmix"},
+                {"key": "LLM_AIHUBMIX_API_KEY", "value": "sk-aihubmix-test-value"},
+                {"key": "LLM_AIHUBMIX_MODELS", "value": "gpt-4o-mini"},
+                {"key": "LITELLM_MODEL", "value": "openai/gpt-4o-mini"},
             ]
         )
 

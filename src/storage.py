@@ -1799,7 +1799,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         offset: int = 0,
-        limit: int = 20
+        limit: int = 20,
+        exclude_market_review: bool = False,
     ) -> Tuple[List[AnalysisHistory], int]:
         """
         分页查询分析历史记录（带总数）
@@ -1811,6 +1812,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             end_date: 结束日期（含）
             offset: 偏移量（跳过前 N 条）
             limit: 每页数量
+            exclude_market_review: 是否排除大盘复盘记录
             
         Returns:
             Tuple[List[AnalysisHistory], int]: (记录列表, 总数)
@@ -1829,6 +1831,16 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     conditions.append(AnalysisHistory.code == code)
             if report_type:
                 conditions.append(AnalysisHistory.report_type == report_type)
+            if exclude_market_review:
+                conditions.append(
+                    and_(
+                        AnalysisHistory.code != "MARKET",
+                        or_(
+                            AnalysisHistory.report_type.is_(None),
+                            AnalysisHistory.report_type != "market_review",
+                        ),
+                    )
+                )
             if start_date:
                 # created_at >= start_date 00:00:00
                 conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))
@@ -1847,7 +1859,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             data_query = (
                 select(AnalysisHistory)
                 .where(where_clause)
-                .order_by(desc(AnalysisHistory.created_at))
+                .order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
                 .offset(offset)
                 .limit(limit)
             )

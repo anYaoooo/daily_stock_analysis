@@ -14,6 +14,7 @@ _PHASE_LABELS_ZH = {
     "postmarket": "盘后",
     "non_trading": "非交易日",
     "unknown": "未知阶段",
+    "crypto_24x7": "7x24 交易中",
 }
 
 _PHASE_LABELS_EN = {
@@ -24,6 +25,7 @@ _PHASE_LABELS_EN = {
     "postmarket": "post-market",
     "non_trading": "non-trading day",
     "unknown": "unknown phase",
+    "crypto_24x7": "24/7 trading",
 }
 
 _KNOWN_PHASES = set(_PHASE_LABELS_ZH)
@@ -66,6 +68,8 @@ def format_market_phase_prompt_section(
 
 
 def _format_zh(ctx: Dict[str, Any], phase: str) -> str:
+    if ctx.get("market") == "crypto" and phase == "intraday":
+        phase = "crypto_24x7"
     label = _PHASE_LABELS_ZH[phase]
     lines = ["", "## 市场阶段上下文", f"- 当前市场阶段：{label}"]
     lines.extend(_metadata_lines_zh(ctx))
@@ -79,6 +83,8 @@ def _format_zh(ctx: Dict[str, Any], phase: str) -> str:
 
 
 def _format_en(ctx: Dict[str, Any], phase: str) -> str:
+    if ctx.get("market") == "crypto" and phase == "intraday":
+        phase = "crypto_24x7"
     label = _PHASE_LABELS_EN[phase]
     lines = ["", "## Market Phase Context", f"- Current market phase: {label}"]
     lines.extend(_metadata_lines_en(ctx))
@@ -142,6 +148,12 @@ def _phase_rule_zh(ctx: Dict[str, Any], phase: str) -> str:
             f"当前尚未开盘，不得描述“今日走势已经发生”；只能基于上一完整交易日{date_hint}"
             "和盘前信息生成开盘计划、观察价位与风险预案。"
         )
+    if phase == "crypto_24x7":
+        return (
+            "BTC/加密货币为 7x24 连续交易市场，不适用美股/A股/港股的盘前、开盘、收盘约束；"
+            "可以基于最新可用 K 线、实时价格、成交量、VWAP/EMA/Price Action 等生成当前交易计划，"
+            "但若当前日线尚未完成，应明确说明最后一根 K 线可能仍在变化。"
+        )
     if phase in {"intraday", "lunch_break", "closing_auction"}:
         base = "当前不是盘后复盘，应聚焦当前盘中状态、观察条件与下一次检查点。"
         if ctx.get("is_partial_bar") is True:
@@ -166,6 +178,12 @@ def _phase_rule_en(ctx: Dict[str, Any], phase: str) -> str:
         return (
             f"The regular session has not opened. Do not describe today's price action as already happened; "
             f"use only the latest complete daily bar{date_hint} and pre-market information for the opening plan."
+        )
+    if phase == "crypto_24x7":
+        return (
+            "BTC/crypto trades 24/7, so equity-style pre-market/open/close constraints do not apply. "
+            "Use the latest available candles, realtime price, volume, VWAP/EMA, and price action for the current plan; "
+            "if the latest daily candle is unfinished, state that it can still change."
         )
     if phase in {"intraday", "lunch_break", "closing_auction"}:
         base = "This is not a post-market recap. Focus on the current intraday state, watch conditions, and next check point."

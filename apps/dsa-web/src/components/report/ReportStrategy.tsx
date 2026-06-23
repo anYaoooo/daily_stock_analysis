@@ -1,5 +1,9 @@
 import type React from 'react';
-import type { ReportLanguage, ReportStrategy as ReportStrategyType } from '../../types/analysis';
+import type {
+  DirectionalStrategyPlan,
+  ReportLanguage,
+  ReportStrategy as ReportStrategyType,
+} from '../../types/analysis';
 import { Card } from '../common';
 import { DashboardPanelHeader } from '../dashboard';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
@@ -13,6 +17,13 @@ interface StrategyItemProps {
   label: string;
   value?: string;
   tone: string;
+}
+
+interface DirectionalPlanCardProps {
+  title: string;
+  plan: DirectionalStrategyPlan;
+  tone: string;
+  text: ReturnType<typeof getReportText>;
 }
 
 const StrategyItem: React.FC<StrategyItemProps> = ({
@@ -34,6 +45,45 @@ const StrategyItem: React.FC<StrategyItemProps> = ({
   </div>
 );
 
+const hasPlanValue = (plan?: DirectionalStrategyPlan | null): plan is DirectionalStrategyPlan =>
+  Boolean(plan && Object.values(plan).some((value) => typeof value === 'string' && value.trim()));
+
+const DirectionalPlanCard: React.FC<DirectionalPlanCardProps> = ({
+  title,
+  plan,
+  tone,
+  text,
+}) => {
+  const rows = [
+    { label: text.entryPrice, value: plan.entryPrice },
+    { label: text.stopLoss, value: plan.stopLoss },
+    { label: text.takeProfit, value: plan.takeProfit },
+    { label: text.triggerCondition, value: plan.triggerCondition },
+    { label: text.invalidation, value: plan.invalidation },
+    { label: text.reason, value: plan.reason },
+  ].filter((row) => row.value && row.value.trim());
+
+  return (
+    <div className="home-subpanel home-strategy-card p-3" style={{ ['--home-strategy-tone' as string]: `var(${tone})` }}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="home-strategy-label text-xs">{title}</span>
+      </div>
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.label} className="grid grid-cols-[72px_1fr] gap-2 text-sm">
+            <span className="text-muted-text">{row.label}</span>
+            <span className="font-medium text-primary-text">{row.value}</span>
+          </div>
+        ))}
+      </div>
+      <div
+        className="absolute bottom-0 left-0 right-0 h-0.5"
+        style={{ background: `linear-gradient(90deg, transparent, var(${tone}), transparent)` }}
+      />
+    </div>
+  );
+};
+
 /**
  * 策略点位区组件 - 终端风格
  */
@@ -44,6 +94,7 @@ export const ReportStrategy: React.FC<ReportStrategyProps> = ({ strategy, langua
 
   const reportLanguage = normalizeReportLanguage(language);
   const text = getReportText(reportLanguage);
+  const hasDirectionalPlans = hasPlanValue(strategy.longPlan) || hasPlanValue(strategy.shortPlan);
 
   const strategyItems = [
     {
@@ -72,14 +123,35 @@ export const ReportStrategy: React.FC<ReportStrategyProps> = ({ strategy, langua
     <Card variant="bordered" padding="md" className="home-panel-card">
       <DashboardPanelHeader
         eyebrow={text.strategyPoints}
-        title={text.sniperLevels}
+        title={hasDirectionalPlans ? text.directionalPlans : text.sniperLevels}
         className="mb-3"
       />
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {strategyItems.map((item) => (
-          <StrategyItem key={item.label} {...item} />
-        ))}
-      </div>
+      {hasDirectionalPlans ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {hasPlanValue(strategy.longPlan) && (
+            <DirectionalPlanCard
+              title={text.longPlan}
+              plan={strategy.longPlan}
+              tone="--home-strategy-buy"
+              text={text}
+            />
+          )}
+          {hasPlanValue(strategy.shortPlan) && (
+            <DirectionalPlanCard
+              title={text.shortPlan}
+              plan={strategy.shortPlan}
+              tone="--home-strategy-stop"
+              text={text}
+            />
+          )}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {strategyItems.map((item) => (
+            <StrategyItem key={item.label} {...item} />
+          ))}
+        </div>
+      )}
     </Card>
   );
 };

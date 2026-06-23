@@ -11,7 +11,6 @@ import {
 describe('llmProviderTemplates', () => {
   it('keeps provider template order aligned with the existing preset dropdown order', () => {
     expect(LLM_PROVIDER_TEMPLATES.map((template) => template.channelId)).toEqual([
-      'aihubmix',
       'deepseek',
       'dashscope',
       'zhipu',

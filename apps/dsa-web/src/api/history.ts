@@ -122,7 +122,7 @@ export const historyApi = {
   },
 
   /**
-   * 获取个股栏列表（不重复个股，不包含大盘复盘）
+   * 获取个股栏历史记录列表（保留同一标的多条记录，不包含大盘复盘）
    */
   getStockBarList: async (params: {
     startDate?: string;

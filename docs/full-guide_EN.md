@@ -152,7 +152,7 @@ Go to your forked repo → `Settings` → `Secrets and variables` → `Actions` 
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimax.io/) Coding Plan Web Search (structured search results) | Optional |
 | `SEARXNG_BASE_URLS` | SearXNG self-hosted instances (quota-free fallback, enable format: json in settings.yml); when empty the app auto-discovers public instances | Optional |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `true`) | Optional |
-| BTC public RSS fallback | When all BTC intelligence search dimensions fail or return empty results, the app reads public RSS feeds from CoinDesk, Cointelegraph, Decrypt, and Bitcoin Magazine | Automatic |
+| BTC CryptoPanic + ChromaDB | BTC latest news is fetched from CryptoPanic into ChromaDB; when fetching fails, the app reads ChromaDB cache only and no longer uses the old search/RSS latest-news source | Automatic |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638) Token | Optional |
 | `TICKFLOW_API_KEY` | [TickFlow](https://tickflow.org) API key for CN market review index enhancement; market breadth also uses TickFlow when the plan supports universe queries | Optional |
 
@@ -299,6 +299,13 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | `SOCIAL_SENTIMENT_API_URL` | Stock Sentiment API endpoint (default `https://api.adanos.org`) | Optional |
 | `SEARXNG_BASE_URLS` | SearXNG self-hosted instances (quota-free fallback, enable format: json in settings.yml); when empty the app auto-discovers public instances | Optional |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | Auto-discover public SearXNG instances from `searx.space` when `SEARXNG_BASE_URLS` is empty (default `true`) | Optional |
+| `NEWS_STRATEGY_PROFILE` | News window profile: `ultra_short`(1 day) / `short`(3 days) / `medium`(7 days) / `long`(30 days); effective window is capped by `NEWS_MAX_AGE_DAYS` | Default `short` |
+| `NEWS_MAX_AGE_DAYS` | Maximum news age in days for strict latest-news filtering | Default `3` |
+| `CRYPTOPANIC_CHROMA_PATH` | ChromaDB directory used to write/read BTC CryptoPanic news; empty uses the local Hermes historical directory by default | Optional |
+| `CRYPTOPANIC_CHROMA_COLLECTION` | ChromaDB collection name for BTC news | Default `cryptopanic_news` |
+| `CRYPTOPANIC_OPENCLI_PATH` | opencli executable path; empty auto-tries `%APPDATA%\npm\opencli.cmd` and PATH | Optional |
+| `CRYPTOPANIC_REFRESH_INTERVAL_SECONDS` | CryptoPanic fetch throttle interval; within the interval the app reads ChromaDB cache directly | Default `900` |
+| `CRYPTOPANIC_MAX_AGE_HOURS` | Maximum usable age for cached ChromaDB news | Default `24` |
 
 > Behavior note: Search and social sentiment are optional enhancement services. If either service fails to initialize, the system logs a warning and degrades gracefully by skipping that stage without blocking the core analysis flow.
 
@@ -347,7 +354,7 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 |--------|------|--------|
 | `STOCK_LIST` | Watchlist codes (comma-separated) | - |
 | `MAX_WORKERS` | Concurrent threads | `3` |
-| `MARKET_REVIEW_ENABLED` | Enable market review | `true` |
+| `MARKET_REVIEW_ENABLED` | Enable market review; disabled by default to avoid generating a market review on project startup, set to `true` when automatic reviews are needed | `false` |
 | `DAILY_MARKET_CONTEXT_ENABLED` | Inject the daily market context into stock-analysis prompts and soften aggressive buy advice in high-risk/risk-off markets; enabled by default, and market review can still run when this is set to `false` | `true` |
 | `MARKET_REVIEW_REGION` | Market review region: cn (A-shares), hk (HK stocks), us (US stocks), both (all three markets) | `cn` |
 | `MARKET_REVIEW_COLOR_SCHEME` | Index change color style in market reviews: `green_up` = green gains/red losses (default), `red_up` = red gains/green losses | `green_up` |

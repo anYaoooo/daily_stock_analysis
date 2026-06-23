@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - 配置管理模块
+BTC 智能分析系统 - 配置管理模块
 ===================================
 
 职责：
@@ -35,13 +35,10 @@ from src.notification_contracts import (
     is_feishu_app_bot_configured,
     is_feishu_static_configured,
 )
+from src.core.btc_only import BTC_CANONICAL_CODE, is_supported_btc_code, normalize_btc_code_list
 from src.llm import generation_params as llm_generation_params
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_ALPHASIFT_INSTALL_SPEC = (
-    "git+https://github.com/ZhuLinsen/alphasift.git@14e74fc0819267f7c04c3117a0dd0fe3f9b19404"
-)
 
 
 @dataclass
@@ -66,10 +63,6 @@ class ConfigIssue:
 _MANAGED_LITELLM_KEY_PROVIDERS = {"gemini", "vertex_ai", "anthropic", "openai", "deepseek"}
 SUPPORTED_LLM_CHANNEL_PROTOCOLS = ("openai", "anthropic", "gemini", "vertex_ai", "deepseek", "ollama")
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off"}
-# Fallback defaults used when ANSPIRE_API_KEYS is reused as legacy OpenAI-compatible source.
-# These are compatibility examples; actual availability should be validated by Anspire console/model entitlement.
-ANSPIRE_LLM_BASE_URL_DEFAULT = "https://open-gateway.anspire.cn/v6"
-ANSPIRE_LLM_MODEL_DEFAULT = "Doubao-Seed-2.0-lite"
 
 
 def _has_ntfy_topic_endpoint(value: Optional[str]) -> bool:
@@ -617,7 +610,7 @@ class Config:
     - 类方法 get_instance() 实现单例访问
     """
     
-    # === 自选股配置 ===
+    # === BTC 标的配置 ===
     stock_list: List[str] = field(default_factory=list)
 
     # === 飞书云文档配置 ===
@@ -625,7 +618,7 @@ class Config:
     feishu_app_secret: Optional[str] = None
     feishu_folder_token: Optional[str] = None  # 目标文件夹 Token
 
-    # === 数据源 API Token ===
+    # === 兼容旧股票数据源配置（BTC-only 运行时忽略） ===
     tushare_token: Optional[str] = None
     tickflow_api_key: Optional[str] = None
     finnhub_api_key: Optional[str] = None
@@ -635,10 +628,6 @@ class Config:
     longbridge_access_token: Optional[str] = None
     longbridge_oauth_client_id: Optional[str] = None
     stock_index_remote_update_enabled: bool = True
-
-    # === AlphaSift optional stock screening integration ===
-    alphasift_enabled: bool = False
-    alphasift_install_spec: str = DEFAULT_ALPHASIFT_INSTALL_SPEC
 
     # === AI 分析配置 ===
     # LiteLLM unified model config (provider/model format, e.g. gemini/gemini-3.1-pro-preview)
@@ -699,7 +688,7 @@ class Config:
     vision_provider_priority: str = "gemini,anthropic,openai"
 
     # === 搜索引擎配置（支持多 Key 负载均衡）===
-    anspire_api_keys: List[str] = field(default_factory=list)  # Anspire Search API Keys
+    anspire_api_keys: List[str] = field(default_factory=list)  # Deprecated; ignored in BTC-only mode.
     bocha_api_keys: List[str] = field(default_factory=list)  # Bocha API Keys
     minimax_api_keys: List[str] = field(default_factory=list)  # MiniMax API Keys
     tavily_api_keys: List[str] = field(default_factory=list)  # Tavily API Keys
@@ -715,6 +704,11 @@ class Config:
     # === 新闻与分析筛选配置 ===
     news_max_age_days: int = 3   # 新闻最大时效（天）
     news_strategy_profile: str = "short"  # 新闻窗口策略档位：ultra_short/short/medium/long
+    cryptopanic_chroma_path: str = ""
+    cryptopanic_chroma_collection: str = "cryptopanic_news"
+    cryptopanic_opencli_path: str = ""
+    cryptopanic_refresh_interval_seconds: int = 900
+    cryptopanic_max_age_hours: int = 24
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
 
     # === Agent 模式配置 ===
@@ -896,9 +890,9 @@ class Config:
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
     schedule_run_immediately: bool = True     # 启动时是否立即执行一次
     run_immediately: bool = True              # 启动时是否立即执行一次（非定时模式）
-    market_review_enabled: bool = True        # 是否启用大盘复盘
-    daily_market_context_enabled: bool = True   # 是否将大盘环境摘要用于个股分析 Prompt 与保守护栏
-    # 大盘复盘市场区域：cn(A股)、hk(港股)、us(美股)、both(三市场)，us 适合仅关注美股的用户
+    market_review_enabled: bool = False       # 是否启用大盘复盘
+    daily_market_context_enabled: bool = False   # BTC-only 模式不注入股票大盘环境摘要
+    # 兼容旧配置：BTC-only 模式忽略股票大盘复盘市场区域
     market_review_region: str = "cn"
     market_review_color_scheme: str = "green_up"
     # 交易日检查：默认启用，非交易日跳过执行；设为 false 或 --force-run 可强制执行（Issue #373）
@@ -913,13 +907,8 @@ class Config:
     enable_chip_distribution: bool = True
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
-    # 实时行情数据源优先级（逗号分隔）
-    # 推荐顺序：tencent > akshare_sina > efinance > akshare_em > tushare
-    # - tencent: 腾讯财经，有量比/换手率/市盈率等，单股查询稳定（推荐）
-    # - akshare_sina: 新浪财经，基本行情稳定，但无量比
-    # - efinance/akshare_em: 东财全量接口，数据最全但容易被封
-    # - tushare: Tushare Pro，需要2000积分，数据全面（付费用户可优先使用）
-    realtime_source_priority: str = "tencent,akshare_sina,efinance,akshare_em"
+    # BTC-only 模式固定使用 CryptoFetcher/Binance。
+    realtime_source_priority: str = "crypto"
     # 实时行情缓存时间（秒）
     realtime_cache_ttl: int = 600
     # 熔断器冷却时间（秒）
@@ -948,14 +937,14 @@ class Config:
     portfolio_fx_update_enabled: bool = True
 
     # Discord 机器人状态
-    discord_bot_status: str = "A股智能分析 | /help"
+    discord_bot_status: str = "BTC 分析 | /help"
 
     # === 流控配置（防封禁关键参数）===
     # Akshare 请求间隔范围（秒）
     akshare_sleep_min: float = 2.0
     akshare_sleep_max: float = 5.0
     
-    # Tushare 每分钟最大请求数（免费配额）
+    # 兼容旧配置：BTC-only 模式不使用 Tushare。
     tushare_rate_limit_per_minute: int = 80
     
     # 重试配置
@@ -1129,11 +1118,15 @@ class Config:
             default='',
             prefer_env_file=True,
         )
-        stock_list = [
-            (c or "").strip().upper()
+        stock_list_raw = [
+            (c or "").strip()
             for c in stock_list_str.split(',')
             if (c or "").strip()
         ]
+        try:
+            stock_list = normalize_btc_code_list(stock_list_raw) or [BTC_CANONICAL_CODE]
+        except ValueError:
+            stock_list = [BTC_CANONICAL_CODE]
         
         # === LiteLLM multi-key parsing ===
         # GEMINI_API_KEYS (comma-separated) > GEMINI_API_KEY (single)
@@ -1150,18 +1143,14 @@ class Config:
         if not anthropic_api_keys and _single_anthropic:
             anthropic_api_keys = [_single_anthropic]
 
-        # OPENAI_API_KEYS > AIHUBMIX_KEY > OPENAI_API_KEY
-        _aihubmix = os.getenv('AIHUBMIX_KEY', '').strip()
+        # OPENAI_API_KEYS > OPENAI_API_KEY
         _openai_keys_raw = os.getenv('OPENAI_API_KEYS', '')
         openai_api_keys = [k.strip() for k in _openai_keys_raw.split(',') if k.strip()]
         if not openai_api_keys:
             _single_openai = os.getenv('OPENAI_API_KEY', '').strip()
-            _fallback_key = _aihubmix or _single_openai
-            if _fallback_key:
-                openai_api_keys = [_fallback_key]
-        openai_base_url = os.getenv('OPENAI_BASE_URL') or (
-            'https://aihubmix.com/v1' if _aihubmix else None
-        )
+            if _single_openai:
+                openai_api_keys = [_single_openai]
+        openai_base_url = os.getenv('OPENAI_BASE_URL') or None
 
         # DEEPSEEK_API_KEYS > DEEPSEEK_API_KEY (independent from OpenAI-compatible layer)
         _deepseek_keys_raw = os.getenv('DEEPSEEK_API_KEYS', '')
@@ -1171,45 +1160,13 @@ class Config:
             if _single_deepseek:
                 deepseek_api_keys = [_single_deepseek]
 
-        # Anspire Open shares the same key as Anspire Search and exposes an
-        # OpenAI-compatible LLM gateway.  When no other OpenAI-compatible key is
-        # configured, use ANSPIRE_API_KEYS as the legacy openai-compatible
-        # provider so "one key" setups work without LLM_CHANNELS.
-        anspire_keys_str = os.getenv('ANSPIRE_API_KEYS', '')
-        anspire_api_keys = [k.strip() for k in anspire_keys_str.split(',') if k.strip()]
-        anspire_llm_enabled = parse_env_bool(os.getenv('ANSPIRE_LLM_ENABLED'), default=True)
-        anspire_llm_base_url = (
-            os.getenv('ANSPIRE_LLM_BASE_URL') or ANSPIRE_LLM_BASE_URL_DEFAULT
-        ).strip()
-        _anspire_llm_model_env = os.getenv('ANSPIRE_LLM_MODEL', '').strip()
-        anspire_channel_disabled = False
-        for _raw_channel in os.getenv('LLM_CHANNELS', '').split(','):
-            if _raw_channel.strip().lower() != "anspire":
-                continue
-            _channel_enabled_raw = os.getenv('LLM_ANSPIRE_ENABLED')
-            if _channel_enabled_raw is not None and _channel_enabled_raw.strip():
-                anspire_channel_disabled = not parse_env_bool(_channel_enabled_raw, default=True)
-            else:
-                anspire_channel_disabled = not anspire_llm_enabled
-            break
-        using_anspire_llm_legacy = bool(
-            anspire_llm_enabled
-            and not anspire_channel_disabled
-            and anspire_api_keys
-            and not openai_api_keys
-        )
-        if using_anspire_llm_legacy:
-            openai_api_keys = list(anspire_api_keys)
-            openai_base_url = anspire_llm_base_url
+        anspire_api_keys: List[str] = []
 
         # LITELLM_MODEL: explicit config takes precedence; else infer from available keys
         litellm_model = os.getenv('LITELLM_MODEL', '').strip()
         inferred_legacy_deepseek_model = False
         _openai_model_env = os.getenv('OPENAI_MODEL', '').strip()
-        if using_anspire_llm_legacy:
-            _openai_model_name = _anspire_llm_model_env or _openai_model_env or ANSPIRE_LLM_MODEL_DEFAULT
-        else:
-            _openai_model_name = _openai_model_env or 'gpt-5.5'
+        _openai_model_name = _openai_model_env or 'gpt-5.5'
         if not litellm_model:
             _gemini_model_name = os.getenv('GEMINI_MODEL', 'gemini-3.1-pro-preview').strip()
             _anthropic_model_name = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-6').strip()
@@ -1432,18 +1389,15 @@ class Config:
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
-            tushare_token=os.getenv('TUSHARE_TOKEN'),
-            tickflow_api_key=os.getenv('TICKFLOW_API_KEY'),
+            tushare_token=None,
+            tickflow_api_key=None,
             finnhub_api_key=os.getenv('FINNHUB_API_KEY') or None,
             alphavantage_api_key=os.getenv('ALPHAVANTAGE_API_KEY') or None,
-            longbridge_app_key=os.getenv('LONGBRIDGE_APP_KEY') or None,
-            longbridge_app_secret=os.getenv('LONGBRIDGE_APP_SECRET') or None,
-            longbridge_access_token=os.getenv('LONGBRIDGE_ACCESS_TOKEN') or None,
-            longbridge_oauth_client_id=os.getenv('LONGBRIDGE_OAUTH_CLIENT_ID') or None,
-            stock_index_remote_update_enabled=parse_env_bool(
-                os.getenv('STOCK_INDEX_REMOTE_UPDATE_ENABLED'),
-                default=True,
-            ),
+            longbridge_app_key=None,
+            longbridge_app_secret=None,
+            longbridge_access_token=None,
+            longbridge_oauth_client_id=None,
+            stock_index_remote_update_enabled=False,
             litellm_model=litellm_model,
             litellm_fallback_models=litellm_fallback_models,
             llm_temperature=resolve_unified_llm_temperature(litellm_model),
@@ -1467,12 +1421,6 @@ class Config:
             anthropic_model=os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-6'),
             anthropic_temperature=parse_env_float(os.getenv('ANTHROPIC_TEMPERATURE'), 0.7, field_name='ANTHROPIC_TEMPERATURE'),
             anthropic_max_tokens=parse_env_int(os.getenv('ANTHROPIC_MAX_TOKENS'), 8192, field_name='ANTHROPIC_MAX_TOKENS', minimum=1),
-            # AIHubmix is the preferred OpenAI-compatible provider (one key, all models, no VPN required).
-            # Within the OpenAI-compatible layer: AIHUBMIX_KEY takes priority over OPENAI_API_KEY.
-            # Overall provider fallback order: Gemini > Anthropic > OpenAI-compatible (incl. AIHubmix).
-            # base_url is auto-set to aihubmix.com/v1 when AIHUBMIX_KEY is used and no explicit
-            # OPENAI_BASE_URL override is provided.
-            # Model names match upstream (e.g. gemini-3.1-pro-preview, gpt-5.5, deepseek-v4-flash).
             openai_api_key=openai_api_keys[0] if openai_api_keys else None,
             openai_base_url=openai_base_url,
             openai_model=_openai_model_name,
@@ -1498,6 +1446,24 @@ class Config:
             news_max_age_days=parse_env_int(os.getenv('NEWS_MAX_AGE_DAYS'), 3, field_name='NEWS_MAX_AGE_DAYS', minimum=1),
             news_strategy_profile=cls._parse_news_strategy_profile(
                 os.getenv('NEWS_STRATEGY_PROFILE', 'short')
+            ),
+            cryptopanic_chroma_path=os.getenv('CRYPTOPANIC_CHROMA_PATH', '').strip(),
+            cryptopanic_chroma_collection=(
+                os.getenv('CRYPTOPANIC_CHROMA_COLLECTION', 'cryptopanic_news').strip()
+                or 'cryptopanic_news'
+            ),
+            cryptopanic_opencli_path=os.getenv('CRYPTOPANIC_OPENCLI_PATH', '').strip(),
+            cryptopanic_refresh_interval_seconds=parse_env_int(
+                os.getenv('CRYPTOPANIC_REFRESH_INTERVAL_SECONDS'),
+                900,
+                field_name='CRYPTOPANIC_REFRESH_INTERVAL_SECONDS',
+                minimum=0,
+            ),
+            cryptopanic_max_age_hours=parse_env_int(
+                os.getenv('CRYPTOPANIC_MAX_AGE_HOURS'),
+                24,
+                field_name='CRYPTOPANIC_MAX_AGE_HOURS',
+                minimum=1,
             ),
             bias_threshold=parse_env_float(os.getenv('BIAS_THRESHOLD'), 5.0, field_name='BIAS_THRESHOLD', minimum=1.0),
             agent_litellm_model=agent_litellm_model,
@@ -1701,8 +1667,8 @@ class Config:
             schedule_time=(schedule_time_value or '18:00').strip() or '18:00',
             schedule_run_immediately=schedule_run_immediately,
             run_immediately=legacy_run_immediately,
-            market_review_enabled=os.getenv('MARKET_REVIEW_ENABLED', 'true').lower() == 'true',
-            daily_market_context_enabled=os.getenv('DAILY_MARKET_CONTEXT_ENABLED', 'true').lower() == 'true',
+            market_review_enabled=False,
+            daily_market_context_enabled=False,
             market_review_region=cls._parse_market_review_region(
                 os.getenv('MARKET_REVIEW_REGION', 'cn')
             ),
@@ -1735,7 +1701,7 @@ class Config:
             # Telegram
             telegram_webhook_secret=os.getenv('TELEGRAM_WEBHOOK_SECRET'),
             # Discord 机器人扩展配置
-            discord_bot_status=os.getenv('DISCORD_BOT_STATUS', 'A股智能分析 | /help'),
+            discord_bot_status=os.getenv('DISCORD_BOT_STATUS', 'BTC 分析 | /help'),
             # 实时行情增强数据配置
             enable_realtime_quote=os.getenv('ENABLE_REALTIME_QUOTE', 'true').lower() == 'true',
             enable_realtime_technical_indicators=os.getenv(
@@ -1744,11 +1710,6 @@ class Config:
             enable_chip_distribution=os.getenv('ENABLE_CHIP_DISTRIBUTION', 'true').lower() == 'true',
             # 东财接口补丁开关
             enable_eastmoney_patch=os.getenv('ENABLE_EASTMONEY_PATCH', 'false').lower() == 'true',
-            # 实时行情数据源优先级：
-            # - tencent: 腾讯财经，有量比/换手率/PE/PB等，单股查询稳定（推荐）
-            # - akshare_sina: 新浪财经，基本行情稳定，但无量比
-            # - efinance/akshare_em: 东财全量接口，数据最全但容易被封
-            # - tushare: Tushare Pro，需要2000积分，数据全面
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=parse_env_int(os.getenv('REALTIME_CACHE_TTL'), 600, field_name='REALTIME_CACHE_TTL', minimum=0),
             circuit_breaker_cooldown=parse_env_int(os.getenv('CIRCUIT_BREAKER_COOLDOWN'), 300, field_name='CIRCUIT_BREAKER_COOLDOWN', minimum=0),
@@ -1809,12 +1770,6 @@ class Config:
                 minimum=1,
             ),
             portfolio_fx_update_enabled=os.getenv('PORTFOLIO_FX_UPDATE_ENABLED', 'true').lower() == 'true',
-            alphasift_enabled=parse_env_bool(os.getenv('ALPHASIFT_ENABLED'), default=False),
-            alphasift_install_spec=(
-                DEFAULT_ALPHASIFT_INSTALL_SPEC
-                if os.getenv('ALPHASIFT_INSTALL_SPEC') is None
-                else os.getenv('ALPHASIFT_INSTALL_SPEC', '').strip()
-            ),
         )
     
     @classmethod
@@ -1868,12 +1823,12 @@ class Config:
         """Parse LLM_CHANNELS env var and per-channel env vars.
 
         Format:
-            LLM_CHANNELS=aihubmix,deepseek,gemini
-            LLM_AIHUBMIX_PROTOCOL=openai
-            LLM_AIHUBMIX_BASE_URL=https://aihubmix.com/v1
-            LLM_AIHUBMIX_API_KEY=sk-xxx           (or LLM_AIHUBMIX_API_KEYS=k1,k2)
-            LLM_AIHUBMIX_MODELS=gpt-5.5,claude-sonnet-4-6
-            LLM_AIHUBMIX_ENABLED=true
+            LLM_CHANNELS=openai,deepseek,gemini
+            LLM_OPENAI_PROTOCOL=openai
+            LLM_OPENAI_BASE_URL=https://api.openai.com/v1
+            LLM_OPENAI_API_KEY=sk-xxx           (or LLM_OPENAI_API_KEYS=k1,k2)
+            LLM_OPENAI_MODELS=gpt-5.5
+            LLM_OPENAI_ENABLED=true
         """
         import logging
         _logger = logging.getLogger(__name__)
@@ -1884,19 +1839,14 @@ class Config:
             if not ch_name:
                 continue
             ch_lower = ch_name.lower()
+            if ch_lower in {"anspire", "aihubmix"}:
+                _logger.info("LLM channel '%s': BTC-only cleanup skips branded gateway aliases", ch_name)
+                continue
             ch_upper = ch_name.upper()
 
             base_url = os.getenv(f'LLM_{ch_upper}_BASE_URL', '').strip() or None
-            if ch_lower == "anspire" and not base_url:
-                base_url = (
-                    os.getenv('ANSPIRE_LLM_BASE_URL') or ANSPIRE_LLM_BASE_URL_DEFAULT
-                ).strip() or None
             protocol_raw = os.getenv(f'LLM_{ch_upper}_PROTOCOL', '').strip()
-            if ch_lower == "anspire" and not protocol_raw:
-                protocol_raw = "openai"
             enabled_raw = os.getenv(f'LLM_{ch_upper}_ENABLED')
-            if ch_lower == "anspire" and (enabled_raw is None or not enabled_raw.strip()):
-                enabled_raw = os.getenv('ANSPIRE_LLM_ENABLED')
             enabled = parse_env_bool(enabled_raw, default=True)
 
             # API keys: LLM_{NAME}_API_KEYS (multi) > LLM_{NAME}_API_KEY (single)
@@ -1906,19 +1856,10 @@ class Config:
                 single_key = os.getenv(f'LLM_{ch_upper}_API_KEY', '').strip()
                 if single_key:
                     api_keys = [single_key]
-            if not api_keys and ch_lower == "anspire":
-                anspire_keys_raw = os.getenv('ANSPIRE_API_KEYS', '')
-                api_keys = [k.strip() for k in anspire_keys_raw.split(',') if k.strip()]
 
             # Models
             models_raw = os.getenv(f'LLM_{ch_upper}_MODELS', '')
             raw_models = [m.strip() for m in models_raw.split(',') if m.strip()]
-            if not raw_models and ch_lower == "anspire":
-                anspire_model = (
-                    os.getenv('ANSPIRE_LLM_MODEL') or ANSPIRE_LLM_MODEL_DEFAULT
-                ).strip()
-                if anspire_model:
-                    raw_models = [anspire_model]
             protocol = resolve_llm_channel_protocol(protocol_raw, base_url=base_url, models=raw_models, channel_name=ch_name)
             models = [normalize_llm_channel_model(m, protocol, base_url) for m in raw_models]
 
@@ -1985,10 +1926,7 @@ class Config:
                         litellm_params['api_key'] = api_key
                     if ch['base_url']:
                         litellm_params['api_base'] = ch['base_url']
-                    # Auto-inject aihubmix sponsored header
                     headers = dict(ch.get('extra_headers') or {})
-                    if ch['base_url'] and 'aihubmix.com' in ch['base_url']:
-                        headers.setdefault('APP-Code', 'GPIJ3886')
                     if headers:
                         litellm_params['extra_headers'] = headers
 
@@ -2043,8 +1981,6 @@ class Config:
                 params: Dict[str, Any] = {'model': '__legacy_openai__', 'api_key': k}
                 if openai_base_url:
                     params['api_base'] = openai_base_url
-                if openai_base_url and 'aihubmix.com' in openai_base_url:
-                    params['extra_headers'] = {'APP-Code': 'GPIJ3886'}
                 model_list.append({
                     'model_name': '__legacy_openai__',
                     'litellm_params': params,
@@ -2302,33 +2238,9 @@ class Config:
 
     @classmethod
     def _resolve_realtime_source_priority(cls) -> str:
-        """
-        Resolve realtime source priority with automatic tushare injection.
-
-        When TUSHARE_TOKEN is configured but REALTIME_SOURCE_PRIORITY is not
-        explicitly set, automatically prepend 'tushare' to the default priority
-        so that the paid data source is utilized for realtime quotes as well.
-        """
+        """Resolve realtime source priority for BTC-only runtime."""
         explicit = os.getenv('REALTIME_SOURCE_PRIORITY')
-        default_priority = 'tencent,akshare_sina,efinance,akshare_em'
-
-        if explicit:
-            # User explicitly set priority, respect it
-            return explicit
-
-        tushare_token = os.getenv('TUSHARE_TOKEN', '').strip()
-        if tushare_token:
-            # Token configured but no explicit priority override
-            # Prepend tushare so the paid source is tried first
-            import logging
-            logger = logging.getLogger(__name__)
-            resolved = f'tushare,{default_priority}'
-            logger.info(
-                f"TUSHARE_TOKEN detected, auto-injecting tushare into realtime priority: {resolved}"
-            )
-            return resolved
-
-        return default_priority
+        return explicit.strip() if explicit and explicit.strip() else 'crypto'
 
     @classmethod
     def reset_instance(cls) -> None:
@@ -2345,8 +2257,7 @@ class Config:
     def has_search_capability_enabled(self) -> bool:
         """Whether any search provider is configured or SearXNG fallback is enabled."""
         return bool(
-            self.anspire_api_keys
-            or self.bocha_api_keys
+            self.bocha_api_keys
             or self.minimax_api_keys
             or self.tavily_api_keys
             or self.brave_api_keys
@@ -2401,11 +2312,16 @@ class Config:
         if not stock_list_str:
             stock_list_str = os.getenv('STOCK_LIST', '')
 
-        stock_list = [
-            (c or "").strip().upper()
+        stock_list_raw = [
+            (c or "").strip()
             for c in stock_list_str.split(',')
             if (c or "").strip()
         ]
+        try:
+            stock_list = normalize_btc_code_list(stock_list_raw) or [BTC_CANONICAL_CODE]
+        except ValueError as exc:
+            logging.getLogger(__name__).warning("%s；已回退为 BTC。", exc)
+            stock_list = [BTC_CANONICAL_CODE]
 
         self.stock_list = stock_list
     
@@ -2428,7 +2344,13 @@ class Config:
         if not self.stock_list:
             issues.append(ConfigIssue(
                 severity="error",
-                message="未配置 STOCK_LIST。请设置至少一个股票代码，例如：600519,hk00700,AAPL。",
+                message="未配置 STOCK_LIST。BTC-only 模式请设置为 BTC。",
+                field="STOCK_LIST",
+            ))
+        elif any(not is_supported_btc_code(code) for code in self.stock_list):
+            issues.append(ConfigIssue(
+                severity="error",
+                message="当前项目已切换为 BTC-only 模式，STOCK_LIST 仅支持 BTC/BTCUSDT/BTC-USD/BTC/USD。",
                 field="STOCK_LIST",
             ))
         elif self.stock_email_groups:
@@ -2463,14 +2385,6 @@ class Config:
                     field="STOCK_GROUP_N",
                 ))
 
-        # --- Data sources (informational only) ---
-        if not self.tushare_token:
-            issues.append(ConfigIssue(
-                severity="info",
-                message="未配置 Tushare Token，将使用其他数据源",
-                field="TUSHARE_TOKEN",
-            ))
-
         # --- LLM availability ---
         # llm_model_list is populated for YAML / channels / managed legacy keys.
         # Other LiteLLM-native providers (for example cohere/*) run through the
@@ -2500,8 +2414,7 @@ class Config:
                 issues.append(ConfigIssue(
                     severity="error",
                     message=(
-                        "未配置任何可用的 AI 模型接入。请至少配置 ANSPIRE_API_KEYS、"
-                        "AIHUBMIX_KEY、GEMINI_API_KEY、ANTHROPIC_API_KEY、"
+                        "未配置任何可用的 AI 模型接入。请至少配置 GEMINI_API_KEY、ANTHROPIC_API_KEY、"
                         "OPENAI_API_KEY 或 DEEPSEEK_API_KEY 中的一个，或配置 "
                         "LITELLM_CONFIG / LLM_CHANNELS 可用模型渠道。"
                     ),
@@ -2918,8 +2831,6 @@ def extra_litellm_params(model: str, config: Config) -> Dict[str, Any]:
     if model.startswith("openai/") or "/" not in model:
         if config.openai_base_url:
             params["api_base"] = config.openai_base_url
-        if config.openai_base_url and "aihubmix.com" in config.openai_base_url:
-            params["extra_headers"] = {"APP-Code": "GPIJ3886"}
     return params
 
 

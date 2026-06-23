@@ -108,11 +108,22 @@ export interface ReportSummary {
 }
 
 /** Strategy section */
+export interface DirectionalStrategyPlan {
+  entryPrice?: string;
+  stopLoss?: string;
+  takeProfit?: string;
+  triggerCondition?: string;
+  invalidation?: string;
+  reason?: string;
+}
+
 export interface ReportStrategy {
   idealBuy?: string;
   secondaryBuy?: string;
   stopLoss?: string;
   takeProfit?: string;
+  longPlan?: DirectionalStrategyPlan | null;
+  shortPlan?: DirectionalStrategyPlan | null;
 }
 
 export interface RelatedBoard {

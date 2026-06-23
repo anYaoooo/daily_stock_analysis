@@ -5,12 +5,12 @@
 ===================================
 
 职责：
-1. 按市场（A股/港股/美股）判断当日是否为交易日
+1. BTC 7x24 交易阶段上下文
 2. 按市场时区取“今日”日期，避免服务器 UTC 导致日期错误
 3. 支持 per-stock 过滤：只分析当日开市市场的股票
 4. 提供 regular-session 市场阶段推断基线，不改变现有分析入口行为
 
-依赖：exchange-calendars（可选，交易日判断不可用时 fail-open，阶段推断不可用时 unknown）
+依赖：exchange-calendars（保留兼容导入；BTC 路径不依赖股票交易日历）
 """
 
 import logging
@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from src.core.btc_only import is_supported_btc_code
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ MARKET_TIMEZONE = {
     "cn": "Asia/Shanghai",
     "hk": "Asia/Hong_Kong",
     "us": "America/New_York",
+    "crypto": "UTC",
 }
 
 # P0 market phase baseline (Issue #1386). This is an intentionally small
@@ -55,6 +57,8 @@ _SUPPORTED_ANALYSIS_PHASES = {
     "intraday",
     "postmarket",
 }
+def _is_supported_crypto_code(code: str) -> bool:
+    return is_supported_btc_code(code)
 
 
 class MarketPhase(str, Enum):
@@ -108,24 +112,17 @@ class MarketPhaseContext:
 
 def get_market_for_stock(code: str) -> Optional[str]:
     """
-    Infer market region for a stock code.
+    Infer market region for a runtime symbol.
 
     Returns:
-        'cn' | 'hk' | 'us' | None (None = unrecognized, fail-open: treat as open)
+        'crypto' for BTC aliases, otherwise None.
     """
     if not code or not isinstance(code, str):
         return None
     code = (code or "").strip().upper()
 
-    from data_provider import is_us_stock_code, is_us_index_code, is_hk_stock_code
-
-    if is_us_stock_code(code) or is_us_index_code(code):
-        return "us"
-    if is_hk_stock_code(code):
-        return "hk"
-    # A-share: 6-digit numeric
-    if code.isdigit() and len(code) == 6:
-        return "cn"
+    if _is_supported_crypto_code(code):
+        return "crypto"
     return None
 
 
@@ -279,6 +276,8 @@ def infer_market_phase(
     ``closing_auction`` uses a small per-market near-close heuristic window and
     does not model full exchange auction microstructure.
     """
+    if market == "crypto":
+        return MarketPhase.INTRADAY
     if market not in MARKET_EXCHANGE or market not in MARKET_TIMEZONE:
         return MarketPhase.UNKNOWN
     if not _XCALS_AVAILABLE:
@@ -460,7 +459,9 @@ def build_market_phase_context(
     market_now = get_market_now(market, current_time=current_time)
     warnings: List[str] = []
 
-    if market not in MARKET_EXCHANGE or market not in MARKET_TIMEZONE:
+    if market == "crypto":
+        phase = MarketPhase.INTRADAY
+    elif market not in MARKET_EXCHANGE or market not in MARKET_TIMEZONE:
         phase = MarketPhase.UNKNOWN
         _add_warning_code(warnings, "unknown_market")
     else:
@@ -476,10 +477,13 @@ def build_market_phase_context(
     if requested_phase != "auto" and phase == MarketPhase.UNKNOWN:
         phase = MarketPhase(requested_phase)
 
-    effective_daily_bar_date = get_effective_trading_date(
-        market,
-        current_time=current_time,
-    )
+    if market == "crypto":
+        effective_daily_bar_date = market_now.date()
+    else:
+        effective_daily_bar_date = get_effective_trading_date(
+            market,
+            current_time=current_time,
+        )
     is_trading_day, is_market_open_now, is_partial_bar = _phase_booleans(phase)
     minutes_to_open, minutes_to_close, minutes_calendar_error = _phase_minutes(
         market,

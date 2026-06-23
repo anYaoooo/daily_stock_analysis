@@ -149,14 +149,6 @@ class TestAstrBotFieldsRegistered(unittest.TestCase):
             self.assertIn(key, field_keys, f"{key} missing from schema response")
 
 
-class TestAlphaSiftFieldsRegistered(unittest.TestCase):
-    def test_install_spec_is_sensitive(self):
-        field = get_field_definition("ALPHASIFT_INSTALL_SPEC")
-
-        self.assertTrue(field["is_sensitive"])
-        self.assertEqual(field["ui_control"], "password")
-
-
 class TestLLMUsageHMACFieldsRegistered(unittest.TestCase):
     def test_secret_is_sensitive_password_field(self):
         field = get_field_definition("LLM_USAGE_HMAC_SECRET")
@@ -649,7 +641,7 @@ class TestReportDisplayFieldsRegistered(unittest.TestCase):
 
 
 class TestMarketReviewFieldsRegistered(unittest.TestCase):
-    """Market review behavior toggles should be visible in settings schema."""
+    """Legacy stock market review toggles stay registered but hidden from the BTC-only UI."""
 
     def test_market_review_color_scheme_field_definition_exists(self):
         field = get_field_definition("MARKET_REVIEW_COLOR_SCHEME")
@@ -668,13 +660,13 @@ class TestMarketReviewFieldsRegistered(unittest.TestCase):
         self.assertEqual(field["default_value"], "true")
         self.assertFalse(field["is_sensitive"])
 
-    def test_schema_response_includes_market_review_color_scheme(self):
+    def test_schema_response_hides_market_review_fields(self):
         schema = build_schema_response()
         system_cat = next((c for c in schema["categories"] if c["category"] == "system"), None)
         self.assertIsNotNone(system_cat, "system category missing")
         field_keys = {f["key"] for f in system_cat["fields"]}
-        self.assertIn("MARKET_REVIEW_COLOR_SCHEME", field_keys)
-        self.assertIn("DAILY_MARKET_CONTEXT_ENABLED", field_keys)
+        self.assertNotIn("MARKET_REVIEW_COLOR_SCHEME", field_keys)
+        self.assertNotIn("DAILY_MARKET_CONTEXT_ENABLED", field_keys)
 
 
 if __name__ == "__main__":

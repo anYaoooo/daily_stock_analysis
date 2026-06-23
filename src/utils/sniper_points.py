@@ -9,6 +9,14 @@ from typing import Any, Dict, Optional
 
 
 SNIPER_KEYS = ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")
+STRATEGY_PLAN_KEYS = (
+    "entry_price",
+    "stop_loss",
+    "take_profit",
+    "trigger_condition",
+    "invalidation",
+    "reason",
+)
 
 
 def parse_sniper_value(value: Any) -> Optional[float]:
@@ -91,6 +99,65 @@ def extract_sniper_points(result: Any) -> Dict[str, Optional[float]]:
             raw_points = find_sniper_points(raw_response) or raw_points
 
     return {key: parse_sniper_value(raw_points.get(key)) for key in SNIPER_KEYS}
+
+
+def extract_directional_strategy_plans(source: Any) -> Dict[str, Optional[Dict[str, str]]]:
+    """Extract optional long/short plan blocks from a report dashboard."""
+
+    dashboard: Mapping[str, Any] = {}
+    if hasattr(source, "dashboard"):
+        candidate = getattr(source, "dashboard", None)
+        if isinstance(candidate, Mapping):
+            dashboard = candidate
+    elif isinstance(source, Mapping):
+        if "long_plan" in source or "short_plan" in source or "longPlan" in source or "shortPlan" in source:
+            return {
+                "long_plan": _normalize_strategy_plan(
+                    source.get("long_plan") or source.get("longPlan")
+                ),
+                "short_plan": _normalize_strategy_plan(
+                    source.get("short_plan") or source.get("shortPlan")
+                ),
+            }
+        candidate = source.get("dashboard")
+        if isinstance(candidate, Mapping):
+            dashboard = candidate
+        else:
+            dashboard = source
+
+    battle_plan = dashboard.get("battle_plan") if isinstance(dashboard, Mapping) else None
+    if not isinstance(battle_plan, Mapping):
+        return {"long_plan": None, "short_plan": None}
+
+    return {
+        "long_plan": _normalize_strategy_plan(
+            battle_plan.get("long_plan") or battle_plan.get("longPlan")
+        ),
+        "short_plan": _normalize_strategy_plan(
+            battle_plan.get("short_plan") or battle_plan.get("shortPlan")
+        ),
+    }
+
+
+def _normalize_strategy_plan(value: Any) -> Optional[Dict[str, str]]:
+    if not isinstance(value, Mapping):
+        return None
+
+    normalized: Dict[str, str] = {}
+    for key in STRATEGY_PLAN_KEYS:
+        raw_value = value.get(key)
+        if raw_value is None and "_" in key:
+            camel_key = key.split("_", 1)[0] + "".join(
+                part.capitalize() for part in key.split("_")[1:]
+            )
+            raw_value = value.get(camel_key)
+        if raw_value is None:
+            continue
+        text = str(raw_value).strip()
+        if text:
+            normalized[key] = text
+
+    return normalized or None
 
 
 def _has_any_sniper_value(points: Mapping[str, Any]) -> bool:

@@ -719,6 +719,30 @@ class MarketPhaseContextTestCase(unittest.TestCase):
         self.assertEqual(ctx.phase, trading_calendar.MarketPhase.UNKNOWN)
         self.assertIn("calendar_error", ctx.warnings)
 
+    def test_crypto_market_phase_is_24x7_intraday(self):
+        current_time = datetime(2026, 6, 22, 4, 10, tzinfo=ZoneInfo("America/New_York"))
+
+        ctx = trading_calendar.build_market_phase_context(
+            market="crypto",
+            current_time=current_time,
+        )
+        payload = ctx.to_dict()
+
+        self.assertEqual(payload["market"], "crypto")
+        self.assertEqual(payload["phase"], "intraday")
+        self.assertEqual(payload["market_local_time"], "2026-06-22T08:10:00+00:00")
+        self.assertEqual(payload["effective_daily_bar_date"], "2026-06-22")
+        self.assertTrue(payload["is_trading_day"])
+        self.assertTrue(payload["is_market_open_now"])
+        self.assertTrue(payload["is_partial_bar"])
+        self.assertIsNone(payload["minutes_to_open"])
+        self.assertIsNone(payload["minutes_to_close"])
+        self.assertEqual(payload["warnings"], [])
+
+    def test_get_market_for_stock_recognizes_btc_as_crypto(self):
+        self.assertEqual(trading_calendar.get_market_for_stock("BTC"), "crypto")
+        self.assertEqual(trading_calendar.get_market_for_stock("BTC-USD"), "crypto")
+
 
 class ComputeEffectiveRegionTestCase(unittest.TestCase):
     """Regression tests for compute_effective_region subset logic."""

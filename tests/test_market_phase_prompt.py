@@ -51,6 +51,23 @@ class MarketPhasePromptTestCase(unittest.TestCase):
         self.assertIn("不得当作完整日线复盘", section)
         self.assertIn("距常规收盘约 300 分钟", section)
 
+    def test_crypto_intraday_uses_24x7_constraints(self):
+        section = format_market_phase_prompt_section(
+            _ctx(
+                market="crypto",
+                market_local_time="2026-06-22T08:10:00+00:00",
+                effective_daily_bar_date="2026-06-22",
+                minutes_to_close=None,
+            )
+        )
+
+        self.assertIn("7x24", section)
+        self.assertIn("连续交易市场", section)
+        self.assertIn("VWAP/EMA/Price Action", section)
+        self.assertNotIn("盘前", section)
+        self.assertNotIn("开盘计划", section)
+        self.assertNotIn("距常规收盘", section)
+
     def test_lunch_break_and_closing_auction_add_phase_specific_guidance(self):
         lunch = format_market_phase_prompt_section(_ctx(phase="lunch_break"))
         closing = format_market_phase_prompt_section(_ctx(phase="closing_auction"))

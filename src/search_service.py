@@ -16,7 +16,6 @@ import html
 import re
 import threading
 import time
-import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -39,6 +38,10 @@ from src.config import (
     NEWS_STRATEGY_WINDOWS,
     normalize_news_strategy_profile,
     resolve_news_window_days,
+)
+from src.services.cryptopanic_news_service import (
+    CryptoPanicNewsItem,
+    CryptoPanicNewsService,
 )
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
 
@@ -1072,194 +1075,6 @@ class BochaSearchProvider(BaseSearchProvider):
             return '未知来源'
 
 
-class AnspireSearchProvider(BaseSearchProvider):
-    """
-    Anspire Search 搜索引擎
-    
-    特点：
-    - 面向AI生态的下一代实时智能搜索引擎
-    - 结果精准、响应快速
-    - 适用于股票新闻和市场情报搜索
-    
-    文档: https://open.anspire.cn/document/docs/searchApi/
-    """
-    
-    def __init__(self, api_keys: List[str]):
-        super().__init__(api_keys, "Anspire")
-    
-    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
-        """执行 Anspire 搜索"""
-        try:
-            import requests
-        except ImportError:
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self.name,
-                success=False,
-                error_message="requests 未安装，请运行：pip install requests"
-            )
-        
-        try:
-            # API 端点
-            url = "https://plugin.anspire.cn/api/ntsearch/search"
-            
-            # 请求头
-            headers = {
-                'Authorization': f'Bearer {api_key}'
-            }
-
-            # 请求参数
-            payload = {
-                "query": query,
-                "top_k": min(max_results,50), 
-                "FromTime": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S"),
-                "ToTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            # 执行搜索
-            response = _get_with_retry(url, headers=headers, params=payload, timeout=10)
-            
-            # 检查 HTTP 状态码
-            if response.status_code != 200:
-                # 尝试解析错误信息
-                try:
-                    if response.headers.get('content-type', '').startswith('application/json'):
-                        error_data = response.json()
-                        error_message = error_data.get('message', response.text)
-                    else:
-                        error_message = response.text
-                except Exception:
-                    error_message = response.text
-                
-                # 根据错误码处理
-                if response.status_code == 403:
-                    error_msg = f"余额不足或权限不足：{error_message}"
-                elif response.status_code == 401:
-                    error_msg = f"API KEY 无效：{error_message}"
-                elif response.status_code == 400:
-                    error_msg = f"请求参数错误：{error_message}"
-                else:
-                    error_msg = f"HTTP {response.status_code}: {error_message}"
-                
-                logger.warning(f"[Anspire] 搜索失败：{error_msg}")
-                
-                return SearchResponse(
-                    query=query,
-                    results=[],
-                    provider=self.name,
-                    success=False,
-                    error_message=error_msg
-                )
-            
-            # 解析响应
-            try:
-                data = response.json()
-            except ValueError as e:
-                error_msg = f"响应 JSON 解析失败：{str(e)}"
-                logger.error(f"[Anspire] {error_msg}")
-                return SearchResponse(
-                    query=query,
-                    results=[],
-                    provider=self.name,
-                    success=False,
-                    error_message=error_msg
-                )
-            
-            if 'code' in data and data.get('code') != 200:
-                error_msg = data.get('msg') or f"API 返回错误码：{data.get('code')}"
-                logger.warning(f"[Anspire] 搜索失败：{error_msg}")
-                return SearchResponse(
-                    query=query,
-                    results=[],
-                    provider=self.name,
-                    success=False,
-                    error_message=error_msg
-                )
-            
-            if 'results' not in data:
-                error_msg = "响应中缺少 results 字段"
-                logger.error(f"[Anspire] {error_msg}，原始响应：{data}")
-                return SearchResponse(
-                    query=query,
-                    results=[],
-                    provider=self.name,
-                    success=False,
-                    error_message=error_msg
-                )
-            
-            # 记录原始响应到日志
-            logger.info(f"[Anspire] 搜索完成，query='{query}'")
-            logger.debug(f"[Anspire] 原始响应：{data}")
-            
-            results = []
-            value_list = data.get('results', [])
-            
-            for item in value_list[:max_results]:
-                snippet = item.get('content')
-                if snippet and isinstance(snippet, str) and len(snippet) > 500:
-                    snippet = snippet[:500] + "..."
-                
-                results.append(SearchResult(
-                    title=item.get('title', ''),
-                    snippet=snippet,
-                    url=item.get('url', ''),
-                    source=self._extract_domain(item.get('url', '')),
-                    published_date=item.get('date', '')
-                ))
-            
-            logger.info(f"[Anspire] 成功解析 {len(results)} 条结果")
-            
-            return SearchResponse(
-                query=query,
-                results=results,
-                provider=self.name,
-                success=True,
-            )
-            
-        except requests.exceptions.Timeout:
-            error_msg = "请求超时"
-            logger.error(f"[Anspire] {error_msg}")
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self.name,
-                success=False,
-                error_message=error_msg
-            )
-        except requests.exceptions.RequestException as e:
-            error_msg = f"网络请求失败：{str(e)}"
-            logger.error(f"[Anspire] {error_msg}")
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self.name,
-                success=False,
-                error_message=error_msg
-            )
-        except Exception as e:
-            error_msg = f"未知错误：{str(e)}"
-            logger.error(f"[Anspire] {error_msg}")
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self.name,
-                success=False,
-                error_message=error_msg
-            )
-    
-    @staticmethod
-    def _extract_domain(url: str) -> str:
-        """从 URL 提取域名作为来源"""
-        try:
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            domain = parsed.netloc.replace('www.', '')
-            return domain or '未知来源'
-        except Exception:
-            return '未知来源'
-
-
 class MiniMaxSearchProvider(BaseSearchProvider):
     """
     MiniMax Web Search (Coding Plan API)
@@ -2130,13 +1945,6 @@ class SearchService:
     FUTURE_TOLERANCE_DAYS = 1
     ANALYTICAL_INTEL_LOOKBACK_DAYS = 180
     ANALYTICAL_INTEL_DIMENSIONS = {"market_analysis", "earnings"}
-    CRYPTO_RSS_FEEDS = (
-        ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
-        ("Cointelegraph", "https://cointelegraph.com/rss"),
-        ("Decrypt", "https://decrypt.co/feed"),
-        ("Bitcoin Magazine", "https://bitcoinmagazine.com/.rss/full/"),
-    )
-    CRYPTO_RSS_TIMEOUT_SECONDS = 8
     _CHINESE_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
     _US_STOCK_RE = re.compile(r"^[A-Za-z]{1,5}(\.[A-Za-z])?$")
     _DIRECT_NEWS_CATEGORY = "direct_company_news"
@@ -2267,7 +2075,6 @@ class SearchService:
         self,
         bocha_keys: Optional[List[str]] = None,
         tavily_keys: Optional[List[str]] = None,
-        anspire_keys: Optional[List[str]] = None,
         brave_keys: Optional[List[str]] = None,
         serpapi_keys: Optional[List[str]] = None,
         minimax_keys: Optional[List[str]] = None,
@@ -2275,6 +2082,12 @@ class SearchService:
         searxng_public_instances_enabled: bool = True,
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
+        cryptopanic_chroma_path: Optional[str] = None,
+        cryptopanic_chroma_collection: str = "cryptopanic_news",
+        cryptopanic_opencli_path: Optional[str] = None,
+        cryptopanic_refresh_interval_seconds: int = 900,
+        cryptopanic_max_age_hours: int = 24,
+        cryptopanic_news_service: Optional[CryptoPanicNewsService] = None,
     ):
         """
         初始化搜索服务
@@ -2282,7 +2095,6 @@ class SearchService:
         Args:
             bocha_keys: 博查搜索 API Key 列表
             tavily_keys: Tavily API Key 列表
-            anspire_keys: Anspire Search API Key 列表
             brave_keys: Brave Search API Key 列表
             serpapi_keys: SerpAPI Key 列表
             minimax_keys: MiniMax API Key 列表
@@ -2292,6 +2104,13 @@ class SearchService:
             news_strategy_profile: 新闻窗口策略档位（ultra_short/short/medium/long）
         """
         self._providers: List[BaseSearchProvider] = []
+        self._cryptopanic_news_service = cryptopanic_news_service or CryptoPanicNewsService(
+            chroma_path=cryptopanic_chroma_path or None,
+            collection_name=cryptopanic_chroma_collection,
+            opencli_path=cryptopanic_opencli_path or None,
+            max_age_hours=cryptopanic_max_age_hours,
+            refresh_interval_seconds=cryptopanic_refresh_interval_seconds,
+        )
         self.news_max_age_days = max(1, news_max_age_days)
         raw_profile = (news_strategy_profile or "short").strip().lower()
         self.news_strategy_profile = normalize_news_strategy_profile(news_strategy_profile)
@@ -2347,11 +2166,6 @@ class SearchService:
             else:
                 logger.info("已启用 SearXNG 公共实例自动发现模式")
 
-        # 7. Anspire Search（实时智能搜索优化）
-        if anspire_keys:
-            self._providers.insert(0, AnspireSearchProvider(anspire_keys))
-            logger.info(f"已配置 Anspire Search 搜索，共 {len(anspire_keys)} 个 API Key")
-            
         if not self._providers:
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")
 
@@ -2436,201 +2250,82 @@ class SearchService:
         text = re.sub(r"\s+", " ", text).strip()
         return text[:max_length]
 
-    @classmethod
-    def _xml_child_text(cls, node: ET.Element, names: Tuple[str, ...]) -> str:
-        """Fetch direct child text while ignoring XML namespaces."""
-        for child in list(node):
-            local_name = child.tag.rsplit("}", 1)[-1].lower()
-            if local_name in names:
-                return cls._strip_markup(child.text, max_length=800)
-        return ""
+    @staticmethod
+    def _cryptopanic_item_to_search_result(item: CryptoPanicNewsItem) -> SearchResult:
+        coins = ",".join(item.coins)
+        snippet_parts = []
+        if item.time_ago:
+            snippet_parts.append(f"CryptoPanic: {item.time_ago}")
+        if coins:
+            snippet_parts.append(f"Coins: {coins}")
+        snippet = "；".join(snippet_parts) or item.title
+        return SearchResult(
+            title=item.title,
+            snippet=snippet,
+            url="https://cryptopanic.com/",
+            source=item.source or "CryptoPanic",
+            published_date=item.fetch_time or item.time_ago or None,
+        )
 
-    @classmethod
-    def _xml_child_attr(cls, node: ET.Element, child_name: str, attr_name: str) -> str:
-        """Fetch an attribute from a direct child while ignoring XML namespaces."""
-        for child in list(node):
-            local_name = child.tag.rsplit("}", 1)[-1].lower()
-            if local_name == child_name:
-                return (child.attrib.get(attr_name) or "").strip()
-        return ""
-
-    @classmethod
-    def _crypto_rss_item_matches(cls, item: SearchResult, stock_code: str, stock_name: str) -> bool:
-        terms = cls._crypto_news_identity_terms(stock_code, stock_name)
-        haystack = " ".join([item.title or "", item.snippet or "", item.url or ""])
-        return any(cls._contains_identity_term(haystack, term) for term in terms)
-
-    @classmethod
-    def _parse_crypto_rss_entries(
-        cls,
-        xml_text: str,
-        *,
-        source_name: str,
-        stock_code: str,
-        stock_name: str,
-        max_results: int,
-    ) -> List[SearchResult]:
-        try:
-            root = ET.fromstring(xml_text)
-        except ET.ParseError as exc:
-            logger.debug("[CryptoRSS] %s RSS 解析失败: %s", source_name, exc)
-            return []
-
-        entries = [
-            node
-            for node in root.iter()
-            if node.tag.rsplit("}", 1)[-1].lower() in {"item", "entry"}
-        ]
-        results: List[SearchResult] = []
-        for entry in entries:
-            title = cls._xml_child_text(entry, ("title",))
-            link = cls._xml_child_text(entry, ("link",))
-            if not link:
-                link = cls._xml_child_attr(entry, "link", "href")
-            snippet = cls._xml_child_text(entry, ("description", "summary", "content", "encoded"))
-            published = cls._xml_child_text(entry, ("pubdate", "published", "updated"))
-
-            if not title or not link:
-                continue
-            result = SearchResult(
-                title=title,
-                snippet=snippet,
-                url=link,
-                source=source_name,
-                published_date=published or None,
-            )
-            if not cls._crypto_rss_item_matches(result, stock_code, stock_name):
-                continue
-            results.append(result)
-            if len(results) >= max_results:
-                break
-        return results
-
-    def _search_crypto_rss_news(
+    def _search_cryptopanic_news(
         self,
         *,
         stock_code: str,
         stock_name: str,
         max_results: int,
-        search_days: int,
     ) -> SearchResponse:
-        """Fallback BTC news from well-known crypto RSS feeds when search APIs fail."""
-        collected: List[SearchResult] = []
-        errors: List[str] = []
-        seen_urls = set()
-        seen_titles = set()
         started_at = time.monotonic()
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
-            ),
-            "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
-        }
-        provider_name = "CryptoRSS"
+        query = self._crypto_stock_news_query(stock_code, stock_name)
+        try:
+            result = self._cryptopanic_news_service.get_latest_news(
+                coin="BTC",
+                limit=max_results,
+            )
+        except Exception as exc:
+            result = None
+            error_message = str(exc)
+        else:
+            error_message = result.error_message
 
-        for source_name, feed_url in self.CRYPTO_RSS_FEEDS:
-            if len(collected) >= max_results:
-                break
-            try:
-                response = requests.get(
-                    feed_url,
-                    headers=headers,
-                    timeout=self.CRYPTO_RSS_TIMEOUT_SECONDS,
-                )
-                if response.status_code != 200:
-                    errors.append(f"{source_name}: HTTP {response.status_code}")
-                    continue
-                parsed_items = self._parse_crypto_rss_entries(
-                    response.text,
-                    source_name=source_name,
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    max_results=max_results,
-                )
-                for item in parsed_items:
-                    item_url = (item.url or "").strip().lower()
-                    item_title = (item.title or "").strip().lower()
-                    if not item_url and not item_title:
-                        continue
-                    if (item_url and item_url in seen_urls) or (
-                        item_title and item_title in seen_titles
-                    ):
-                        continue
-                    if item_url:
-                        seen_urls.add(item_url)
-                    if item_title:
-                        seen_titles.add(item_title)
-                    collected.append(item)
-                    if len(collected) >= max_results:
-                        break
-            except Exception as exc:
-                errors.append(f"{source_name}: {type(exc).__name__}")
-                logger.debug("[CryptoRSS] %s 获取失败: %s", source_name, exc)
+        if result and result.items:
+            provider = result.provider
+            response = SearchResponse(
+                query=query,
+                results=[
+                    self._cryptopanic_item_to_search_result(item)
+                    for item in result.items[:max_results]
+                ],
+                provider=provider,
+                success=True,
+                search_time=round(time.monotonic() - started_at, 3),
+            )
+            self._record_news_search_run(
+                provider=provider,
+                operation="cryptopanic_news",
+                success=True,
+                latency_ms=self._elapsed_ms(started_at),
+                record_count=len(response.results),
+                cache_hit=bool(result.cache_used),
+            )
+            return response
 
-        raw_response = SearchResponse(
-            query=self._crypto_stock_news_query(stock_code, stock_name),
-            results=collected,
-            provider=provider_name,
-            success=bool(collected),
-            error_message=None if collected else ("；".join(errors[:4]) or "未获取到加密货币 RSS 资讯"),
+        self._record_news_search_run(
+            provider="CryptoPanic",
+            operation="cryptopanic_news",
+            success=False,
+            latency_ms=self._elapsed_ms(started_at),
+            record_count=0,
+            error_type="NoCryptoPanicNews",
+            error_message=error_message or "CryptoPanic 抓取失败且 ChromaDB 无可用缓存",
+        )
+        return SearchResponse(
+            query=query,
+            results=[],
+            provider="CryptoPanic",
+            success=False,
+            error_message=error_message or "CryptoPanic 抓取失败且 ChromaDB 无可用缓存",
             search_time=round(time.monotonic() - started_at, 3),
         )
-        filtered = self._filter_news_response(
-            raw_response,
-            search_days=search_days,
-            max_results=max_results,
-            log_scope=f"{stock_code}:{provider_name}:fallback",
-        )
-        ranked = self._rank_news_response(
-            filtered,
-            stock_code=stock_code,
-            stock_name=stock_name,
-            prefer_chinese=False,
-            max_results=max_results,
-            log_scope=f"{stock_code}:{provider_name}:fallback:rank",
-        )
-        admitted = self._filter_ranked_news_for_context(
-            ranked,
-            log_scope=f"{stock_code}:{provider_name}:fallback:admission",
-        )
-        return self._limit_search_response(admitted, max_results=max_results)
-
-    def _maybe_search_crypto_rss_news(
-        self,
-        *,
-        stock_code: str,
-        stock_name: str,
-        max_results: int,
-        search_days: int,
-        log_scope: str,
-    ) -> Optional[SearchResponse]:
-        if not self._is_crypto_symbol(stock_code):
-            return None
-
-        fallback_response = self._search_crypto_rss_news(
-            stock_code=stock_code,
-            stock_name=stock_name,
-            max_results=max_results,
-            search_days=search_days,
-        )
-        if fallback_response.results:
-            logger.info(
-                "%s 加密货币 RSS 兜底成功: %s(%s), 条数=%s",
-                log_scope,
-                stock_name,
-                stock_code,
-                len(fallback_response.results),
-            )
-        else:
-            logger.warning(
-                "%s 加密货币 RSS 兜底仍无结果: %s(%s), error=%s",
-                log_scope,
-                stock_name,
-                stock_code,
-                fallback_response.error_message,
-            )
-        return fallback_response
 
     @classmethod
     def _is_us_stock(cls, stock_code: str) -> bool:
@@ -3965,6 +3660,19 @@ class SearchService:
                 )
                 return cached
 
+        if is_crypto:
+            try:
+                crypto_response = self._search_cryptopanic_news(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    max_results=max_results,
+                )
+                self._put_cache(cache_key, crypto_response)
+                return crypto_response
+            finally:
+                if cache_owner and cache_event is not None:
+                    self._release_cache_fill(cache_key, cache_event)
+
         try:
             # 依次尝试各个搜索引擎（若过滤后为空，继续尝试下一引擎）
             had_provider_success = False
@@ -4133,16 +3841,6 @@ class SearchService:
                 return best_ranked_response
 
             if had_provider_success:
-                crypto_fallback = self._maybe_search_crypto_rss_news(
-                    stock_code=stock_code,
-                    stock_name=stock_name,
-                    max_results=max_results,
-                    search_days=search_days,
-                    log_scope="[股票新闻]",
-                )
-                if crypto_fallback and crypto_fallback.results:
-                    self._put_cache(cache_key, crypto_fallback)
-                    return crypto_fallback
                 return SearchResponse(
                     query=query,
                     results=[],
@@ -4152,16 +3850,6 @@ class SearchService:
                 )
             
             # 所有引擎都失败
-            crypto_fallback = self._maybe_search_crypto_rss_news(
-                stock_code=stock_code,
-                stock_name=stock_name,
-                max_results=max_results,
-                search_days=search_days,
-                log_scope="[股票新闻]",
-            )
-            if crypto_fallback and crypto_fallback.results:
-                self._put_cache(cache_key, crypto_fallback)
-                return crypto_fallback
             return SearchResponse(
                 query=query,
                 results=[],
@@ -4417,10 +4105,21 @@ class SearchService:
         
         # 轮流使用不同的搜索引擎
         provider_index = 0
+
+        if is_crypto and search_count < max_searches:
+            latest_response = self.search_stock_news(
+                stock_code,
+                stock_name,
+                max_results=target_per_dimension,
+            )
+            results["latest_news"] = latest_response
+            search_count += 1
         
         for dim in search_dimensions:
             if search_count >= max_searches:
                 break
+            if is_crypto and dim["name"] == "latest_news":
+                continue
             
             # 选择搜索引擎（轮流使用）
             available_providers = [p for p in self._providers if p.is_available]
@@ -4507,18 +4206,6 @@ class SearchService:
             
             # 短暂延迟避免请求过快
             time.sleep(0.5)
-
-        latest_news = results.get("latest_news")
-        if is_crypto and not (latest_news and latest_news.results):
-            fallback_response = self._maybe_search_crypto_rss_news(
-                stock_code=stock_code,
-                stock_name=stock_name,
-                max_results=target_per_dimension,
-                search_days=search_days,
-                log_scope="[情报搜索]",
-            )
-            if fallback_response and fallback_response.results:
-                results["latest_news"] = fallback_response
 
         return results
     
@@ -4805,7 +4492,6 @@ def get_search_service() -> SearchService:
                 _search_service = SearchService(
                     bocha_keys=config.bocha_api_keys,
                     tavily_keys=config.tavily_api_keys,
-                    anspire_keys=config.anspire_api_keys,
                     brave_keys=config.brave_api_keys,
                     serpapi_keys=config.serpapi_keys,
                     minimax_keys=config.minimax_api_keys,
@@ -4813,6 +4499,19 @@ def get_search_service() -> SearchService:
                     searxng_public_instances_enabled=config.searxng_public_instances_enabled,
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+                    cryptopanic_chroma_path=getattr(config, "cryptopanic_chroma_path", "") or None,
+                    cryptopanic_chroma_collection=getattr(
+                        config,
+                        "cryptopanic_chroma_collection",
+                        "cryptopanic_news",
+                    ),
+                    cryptopanic_opencli_path=getattr(config, "cryptopanic_opencli_path", "") or None,
+                    cryptopanic_refresh_interval_seconds=getattr(
+                        config,
+                        "cryptopanic_refresh_interval_seconds",
+                        900,
+                    ),
+                    cryptopanic_max_age_hours=getattr(config, "cryptopanic_max_age_hours", 24),
                 )
     
     return _search_service

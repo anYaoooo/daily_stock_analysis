@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-A股自选股智能分析系统 - 主调度程序
+BTC 智能分析系统 - 主调度程序
 ===================================
 
 职责：
@@ -44,19 +44,6 @@ if os.getenv("GITHUB_ACTIONS") != "true" and os.getenv("USE_PROXY", "false").low
     os.environ["http_proxy"] = proxy_url
     os.environ["https_proxy"] = proxy_url
 
-if os.getenv("DSA_PACKAGED_ALPHASIFT_IMPORT_PROBE") == "1":
-    import importlib
-    import sys
-
-    try:
-        importlib.import_module("alphasift.dsa_adapter")
-    except Exception as exc:
-        print(f"ERROR: packaged AlphaSift adapter import failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    print("OK: packaged AlphaSift adapter import succeeded")
-    sys.exit(0)
-
 import argparse
 import logging
 import sys
@@ -64,7 +51,7 @@ import time
 import uuid
 from datetime import date, datetime, timezone, timedelta
 
-from data_provider.base import canonical_stock_code
+from src.core.btc_only import canonical_btc_code
 from src.webui_frontend import prepare_webui_frontend_assets
 from src.config import get_config, Config
 from src.logging_config import setup_logging
@@ -256,19 +243,18 @@ def _reload_env_file_values_preserving_overrides() -> None:
 def parse_arguments() -> argparse.Namespace:
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
-        description='A股自选股智能分析系统',
+        description='BTC 智能分析系统',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 示例:
   python main.py                    # 正常运行
   python main.py --debug            # 调试模式
   python main.py --dry-run          # 仅获取数据，不进行 AI 分析
-  python main.py --stocks 600519,000001  # 指定分析特定股票
+  python main.py --stocks BTC            # 指定 BTC 分析
   python main.py --no-notify        # 不发送推送通知
   python main.py --check-notify     # 检查通知配置，不发送通知
   python main.py --single-notify    # 启用单股推送模式（每分析完一只立即推送）
   python main.py --schedule         # 启用定时任务模式
-  python main.py --market-review    # 仅运行大盘复盘
         '''
     )
 
@@ -287,7 +273,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--stocks',
         type=str,
-        help='指定要分析的股票代码，逗号分隔（覆盖配置文件）'
+        help='指定要分析的 BTC 代码/别名（支持 BTC、BTCUSDT、BTC-USD、BTC/USD）'
     )
 
     parser.add_argument(
@@ -305,7 +291,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--single-notify',
         action='store_true',
-        help='启用单股推送模式：每分析完一只股票立即推送，而不是汇总推送'
+        help='启用单标的推送模式：BTC 分析完成后立即推送，而不是汇总推送'
     )
 
     parser.add_argument(
@@ -330,13 +316,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--market-review',
         action='store_true',
-        help='仅运行大盘复盘分析'
+        help='已移除：BTC-only 模式不再支持股票大盘复盘'
     )
 
     parser.add_argument(
         '--no-market-review',
         action='store_true',
-        help='跳过大盘复盘分析'
+        help='兼容旧参数：BTC-only 模式默认不运行股票大盘复盘'
     )
 
     parser.add_argument(
@@ -400,7 +386,7 @@ def parse_arguments() -> argparse.Namespace:
         '--backtest-code',
         type=str,
         default=None,
-        help='仅回测指定股票代码'
+        help='仅回测指定 BTC 代码/别名'
     )
 
     parser.add_argument(
@@ -433,32 +419,7 @@ def _compute_trading_day_filter(
         - effective_region '' = all relevant markets closed, skip market review
         - should_skip_all: skip entire run when no stocks and no market review to run
     """
-    force_run = getattr(args, 'force_run', False)
-    if force_run or not getattr(config, 'trading_day_check_enabled', True):
-        return (stock_codes, None, False)
-
-    from src.core.trading_calendar import (
-        get_market_for_stock,
-        get_open_markets_today,
-        compute_effective_region,
-    )
-
-    open_markets = get_open_markets_today()
-    filtered_codes = []
-    for code in stock_codes:
-        mkt = get_market_for_stock(code)
-        if mkt in open_markets or mkt is None:
-            filtered_codes.append(code)
-
-    if config.market_review_enabled and not getattr(args, 'no_market_review', False):
-        effective_region = compute_effective_region(
-            getattr(config, 'market_review_region', 'cn') or 'cn', open_markets
-        )
-    else:
-        effective_region = None
-
-    should_skip_all = (not filtered_codes) and (effective_region or '') == ''
-    return (filtered_codes, effective_region, should_skip_all)
+    return (stock_codes, "crypto", False)
 
 
 def _run_market_review_with_shared_lock(
@@ -496,19 +457,7 @@ def _is_multi_market_region(region: str) -> bool:
 
 def _refresh_stock_index_cache_for_analysis(config: Config) -> None:
     """Best-effort stock-index refresh for CLI/scheduled analysis paths."""
-    try:
-        from src.services.stock_index_remote_service import (
-            refresh_remote_stock_index_cache,
-            settings_from_config,
-        )
-
-        result = refresh_remote_stock_index_cache(settings_from_config(config))
-        if result.refreshed:
-            logger.info("[stock-index] 分析前已刷新股票索引缓存: %s", result.cache_path)
-        elif result.error:
-            logger.debug("[stock-index] 分析前刷新未完成，继续使用本地索引: %s", result.error)
-    except Exception as exc:  # noqa: BLE001 - stock index freshness must not block analysis.
-        logger.warning("[stock-index] 分析前刷新股票索引失败，继续执行分析: %s", exc)
+    logger.debug("[stock-index] BTC-only 模式已禁用股票索引刷新")
 
 
 def _prime_daily_market_context(
@@ -641,13 +590,12 @@ def run_full_analysis(
     stock_codes: Optional[List[str]] = None
 ):
     """
-    执行完整的分析流程（个股 + 大盘复盘）
+    执行完整的 BTC 分析流程
 
     这是定时任务调用的主函数
     """
     # Import pipeline modules outside the broad try/except so that import-time
     # failures propagate to the caller instead of being silently swallowed.
-    from src.core.market_review import run_market_review
     from src.core.pipeline import StockAnalysisPipeline
 
     try:
@@ -669,7 +617,7 @@ def run_full_analysis(
             return
         if set(filtered_codes) != set(effective_codes):
             skipped = set(effective_codes) - set(filtered_codes)
-            logger.info("今日休市股票已跳过: %s", skipped)
+            logger.info("非 BTC 或不可交易标的已跳过: %s", skipped)
         stock_codes = filtered_codes
 
         # 命令行参数 --single-notify 覆盖配置（#55）
@@ -779,6 +727,8 @@ def run_full_analysis(
 
         # 2. 运行大盘复盘（如果启用且不是仅个股模式）
         if should_run_market_review:
+            from src.core.market_review import run_market_review
+
             schedule_mode = bool(
                 getattr(args, 'schedule', False)
                 or getattr(config, 'schedule_enabled', False)
@@ -871,7 +821,7 @@ def run_full_analysis(
             elif can_reuse_market_context:
                 market_report = market_context_full_report or market_context_summary
 
-        # Issue #190: 合并推送（个股+大盘复盘）
+        # Issue #190: 合并推送（BTC + 大盘复盘；BTC-only 默认不会进入大盘复盘）
         if merge_notification and (results or market_report) and not args.no_notify:
             parts = []
             if market_report:
@@ -910,10 +860,10 @@ def run_full_analysis(
             if feishu_doc.is_configured() and (results or market_report):
                 logger.info("正在创建飞书云文档...")
 
-                # 1. 准备标题 "01-01 13:01大盘复盘"
+                # 1. 准备标题
                 tz_cn = timezone(timedelta(hours=8))
                 now = datetime.now(tz_cn)
-                doc_title = f"{now.strftime('%Y-%m-%d %H:%M')} 大盘复盘"
+                doc_title = f"{now.strftime('%Y-%m-%d %H:%M')} BTC 分析"
 
                 # 2. 准备内容 (拼接个股分析和大盘复盘)
                 full_content = ""
@@ -1047,7 +997,7 @@ def _resolve_scheduled_stock_codes(stock_codes: Optional[List[str]]) -> Optional
     """Scheduled runs should always read the latest persisted watchlist."""
     if stock_codes is not None:
         logger.warning(
-            "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照，并在每次运行前重新读取最新的 STOCK_LIST。"
+            "定时模式下检测到 --stocks 参数；计划执行将忽略启动时 BTC 快照，并在每次运行前重新读取最新的 STOCK_LIST。"
         )
     return None
 
@@ -1122,7 +1072,7 @@ def main() -> int:
         return 1
 
     logger.info("=" * 60)
-    logger.info("A股自选股智能分析系统 启动")
+    logger.info("BTC 智能分析系统 启动")
     logger.info(f"运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
 
@@ -1141,11 +1091,15 @@ def main() -> int:
         print(format_notification_diagnostics(result))
         return 0 if result.ok else 1
 
-    # 解析股票列表（统一为大写 Issue #355）
+    # 解析 BTC 列表
     stock_codes = None
     if args.stocks:
-        stock_codes = [canonical_stock_code(c) for c in args.stocks.split(',') if (c or "").strip()]
-        logger.info(f"使用命令行指定的股票列表: {stock_codes}")
+        try:
+            stock_codes = [canonical_btc_code(c) for c in args.stocks.split(',') if (c or "").strip()]
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 1
+        logger.info(f"使用命令行指定的 BTC 列表: {stock_codes}")
 
     # === 处理 --webui / --webui-only 参数，映射到 --serve / --serve-only ===
     if args.webui:
@@ -1216,39 +1170,8 @@ def main() -> int:
             )
             return 0
 
-        # 模式1: 仅大盘复盘
         if args.market_review:
-            from src.core.market_review import run_market_review
-            from src.core.market_review_runtime import build_market_review_runtime
-
-            # Issue #373: Trading day check for market-review-only mode.
-            # Do NOT use _compute_trading_day_filter here: that helper checks
-            # config.market_review_enabled, which would wrongly block an
-            # explicit --market-review invocation when the flag is disabled.
-            effective_region = None
-            if not getattr(args, 'force_run', False) and getattr(config, 'trading_day_check_enabled', True):
-                from src.core.trading_calendar import get_open_markets_today, compute_effective_region as _compute_region
-                open_markets = get_open_markets_today()
-                effective_region = _compute_region(
-                    getattr(config, 'market_review_region', 'cn') or 'cn', open_markets
-                )
-                if effective_region == '':
-                    logger.info("今日大盘复盘相关市场均为非交易日，跳过执行。可使用 --force-run 强制执行。")
-                    return 0
-
-            logger.info("模式: 仅大盘复盘")
-            notifier, analyzer, search_service = build_market_review_runtime(config)
-
-            _run_market_review_with_shared_lock(
-                config,
-                run_market_review,
-                notifier=notifier,
-                analyzer=analyzer,
-                search_service=search_service,
-                send_notification=not args.no_notify,
-                override_region=effective_region,
-                trigger_source="cli",
-            )
+            logger.info("BTC-only 模式已移除股票大盘复盘任务，跳过 --market-review。")
             return 0
 
         # 模式2: 定时任务模式

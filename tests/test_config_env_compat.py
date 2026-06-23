@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.config import Config, DEFAULT_ALPHASIFT_INSTALL_SPEC, setup_env
+from src.config import Config, setup_env
 
 
 class ConfigEnvCompatibilityTestCase(unittest.TestCase):
@@ -67,43 +67,6 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
 
         self.assertEqual(config.fundamental_stage_timeout_seconds, 8.0)
         self.assertEqual(config.fundamental_fetch_timeout_seconds, 3.0)
-
-    @patch("src.config.setup_env")
-    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
-    def test_alphasift_install_spec_defaults_only_when_env_missing(
-        self, _mock_parse_litellm_yaml, _mock_setup_env
-    ):
-        with patch.dict(os.environ, {"STOCK_LIST": "600519"}, clear=True):
-            config = Config._load_from_env()
-
-        self.assertEqual(config.alphasift_install_spec, DEFAULT_ALPHASIFT_INSTALL_SPEC)
-
-    def test_env_example_alphasift_install_spec_matches_trusted_default(self):
-        env_example = Path(__file__).resolve().parents[1] / ".env.example"
-
-        for line in env_example.read_text(encoding="utf-8").splitlines():
-            if line.startswith("ALPHASIFT_INSTALL_SPEC="):
-                self.assertEqual(
-                    line,
-                    f"ALPHASIFT_INSTALL_SPEC={DEFAULT_ALPHASIFT_INSTALL_SPEC}",
-                )
-                break
-        else:
-            self.fail("ALPHASIFT_INSTALL_SPEC missing from .env.example")
-
-    @patch("src.config.setup_env")
-    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
-    def test_alphasift_install_spec_honors_explicit_empty(
-        self, _mock_parse_litellm_yaml, _mock_setup_env
-    ):
-        with patch.dict(
-            os.environ,
-            {"STOCK_LIST": "600519", "ALPHASIFT_INSTALL_SPEC": ""},
-            clear=True,
-        ):
-            config = Config._load_from_env()
-
-        self.assertEqual(config.alphasift_install_spec, "")
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])

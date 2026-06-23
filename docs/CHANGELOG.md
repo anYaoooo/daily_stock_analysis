@@ -11,10 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [新功能] 数据源新增 Binance 公共行情加密货币 fetcher，支持 `BTC` / `BTCUSDT` / `BTC-USD` / `BTC/USD` 获取比特币实时行情与日 K 数据，并在数据源管理器中独立路由加密货币标的。
 - [改进] Web 首页新增 `BTC 行情` 入口，可一键获取比特币实时价格与最近日 K 数据。
-- [修复] BTC 多维度资讯在搜索引擎不可用或结果为空时新增 CoinDesk、Cointelegraph、Decrypt、Bitcoin Magazine 公开 RSS 兜底，避免公共 SearXNG 限流时报告完全无资讯。
+- [改进] BTC 资讯来源切换为项目内置 CryptoPanic 抓取并写入 ChromaDB，抓取失败时仅读取 ChromaDB 缓存，不再使用原搜索/RSS 兜底作为 BTC 最新消息来源。
+- [修复] BTC 多维度资讯在 CryptoPanic 抓取失败时回退读取 ChromaDB 缓存，避免旧搜索/RSS 来源延迟影响最新消息。
 - [改进] BTC 资讯检索扩展宏观驱动查询，覆盖美联储、利率、CPI/PPI、就业、美股风险偏好和地缘冲突等影响比特币价格的外部因素。
 - [改进] BTC 行情接口支持 `include_news=true` 返回最新资讯，Web 首页点击 `BTC 行情` 时同步展示价格、K 线和资讯。
 - [改进] BTC K 线改为使用 Binance 原生周期，支持小时线、4 小时线、日线、周线和月线，Web 首页默认日线并可切换周期。
+- [改进] BTC 分析新增 Price Action、Fibonacci、Volume、rolling VWAP 与 EMA 交易框架补充，并要求报告结合多维度共振给出支撑、阻力和失效条件。
+- [改进] BTC 分析支持多空双向交易语义，报告需同时评估多单与空单触发、止损、目标和失效条件。
+- [修复] BTC 市场阶段上下文改为 7x24 加密货币交易语义，不再套用美股盘前/开盘/收盘约束，并跳过 A/H/美股大盘上下文注入。
+- [改进] 默认关闭 `MARKET_REVIEW_ENABLED`，避免项目启动时自动生成大盘复盘；需要自动复盘时可显式设为 `true`。
+- [修复] BTC 行情附带资讯时优先读取 CryptoPanic ChromaDB 缓存，并为资讯组装增加短超时保护，避免 opencli/CryptoPanic 卡顿导致行情接口显示上游超时。
+- [改进] 项目运行时收口为 BTC-only，移除股票大盘复盘、股票筛选、股票索引刷新和 AlphaSift/Anspire/AIHubMix 默认入口，默认仅保留 BTC 行情、CryptoPanic 新闻抓取与通知推送链路。
+- [改进] Web 首页个股栏改为保留同一 BTC 的多条历史分析记录，支持按单条记录选择、删除并可关闭/恢复侧栏。
 - [修复] AlphaSift 热点题材刷新在 EastMoney 瞬断且无缓存时返回友好空态，并让桌面更新保留 AlphaSift 热点缓存。
 - [修复] 问股从历史报告进入后的追问会持续携带当前标的，切回或重载已有会话时可从历史消息恢复基础当前标的，并由后端阻断未明确切换时的错误股票工具调用、交易所片段和指标缩写误路由。
 - [修复] 自选股加入和删除按等价股票代码匹配港股及大小写美股变体，避免 `00700`、`HK00700`、`00700.HK` 或 `aapl`、`AAPL` 被误判为不同标的。

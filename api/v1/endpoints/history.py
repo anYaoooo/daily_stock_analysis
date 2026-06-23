@@ -50,6 +50,7 @@ from src.utils.data_processing import (
     extract_board_detail_fields,
     extract_realtime_detail_fields,
 )
+from src.utils.sniper_points import extract_directional_strategy_plans
 from src.analysis_context_pack_overview import (
     extract_analysis_context_pack_overview,
     sanitize_context_snapshot_for_api,
@@ -243,11 +244,11 @@ def delete_history_records(
     "/stocks",
     response_model=StockBarResponse,
     responses={
-        200: {"description": "不重复个股列表"},
+        200: {"description": "个股栏历史记录列表"},
         500: {"description": "服务器错误", "model": ErrorResponse},
     },
-    summary="获取不重复个股列表",
-    description="返回历史记录中每只股票的最新一条分析摘要，不包含大盘复盘（code=MARKET）。",
+    summary="获取个股栏历史记录列表",
+    description="返回个股栏使用的历史分析摘要，保留同一标的的多条记录，不包含大盘复盘（code=MARKET）。",
 )
 def get_stock_bar(
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
@@ -262,25 +263,16 @@ def get_stock_bar(
         start = date_type.fromisoformat(start_date) if start_date else None
         end = date_type.fromisoformat(end_date) if end_date else None
 
-        # Fetch more than limit to compensate for normalization dedup shrinkage
-        # (e.g. 002460 + 002460.SZ both initially counted but merged to one)
-        fetch_limit = min(limit * 3, 500)
-        records = db_manager.get_distinct_stocks_from_history(
+        records, total = db_manager.get_analysis_history_paginated(
             start_date=start,
             end_date=end,
-            limit=fetch_limit,
+            offset=0,
+            limit=limit,
+            exclude_market_review=True,
         )
 
-        # Deduplicate by normalized code, keeping the record with highest id
-        seen: dict = {}
-        for record in records:
-            norm_code = _normalize_code_for_grouping(record.code or "")
-            if norm_code not in seen or record.id > seen[norm_code].id:
-                seen[norm_code] = record
-
         items = []
-        for norm_code in seen:
-            record = seen[norm_code]
+        for record in records:
             raw_result = parse_json_field(getattr(record, "raw_result", None))
             model_used = raw_result.get("model_used") if isinstance(raw_result, dict) else None
             action_fields = build_action_fields(
@@ -295,12 +287,7 @@ def get_stock_bar(
                 ),
             )
 
-            analysis_count = db_manager.get_analysis_history_paginated(
-                code=HistoryService._history_code_filter_candidates(
-                    record.code or "",
-                ),
-                limit=1,
-            )[1]
+            analysis_count = 1
             items.append(
                 StockBarItem(
                     id=record.id,
@@ -320,8 +307,7 @@ def get_stock_bar(
                 )
             )
 
-        items = items[:limit]
-        return StockBarResponse(total=len(items), items=items)
+        return StockBarResponse(total=total, items=items)
 
     except Exception as e:
         logger.error(f"查询个股栏失败: {e}", exc_info=True)
@@ -448,7 +434,8 @@ def get_history_detail(
             ideal_buy=result.get("ideal_buy"),
             secondary_buy=result.get("secondary_buy"),
             stop_loss=result.get("stop_loss"),
-            take_profit=result.get("take_profit")
+            take_profit=result.get("take_profit"),
+            **extract_directional_strategy_plans(result.get("raw_result")),
         )
         
         fallback_fundamental = db_manager.get_latest_fundamental_snapshot(

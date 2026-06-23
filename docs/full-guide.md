@@ -160,7 +160,7 @@ daily_stock_analysis/
 | `MINIMAX_API_KEYS` | [MiniMax](https://platform.minimax.io/) Coding Plan Web Search（结构化搜索结果） | 可选 |
 | `SEARXNG_BASE_URLS` | SearXNG 自建实例（无配额兜底，需在 settings.yml 启用 format: json）；留空时默认自动发现公共实例 | 可选 |
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否在 `SEARXNG_BASE_URLS` 为空时自动从 `searx.space` 获取公共实例（默认 `true`） | 可选 |
-| BTC 公开 RSS 兜底 | 当 BTC 多维度资讯搜索全部失败或为空时，自动读取 CoinDesk、Cointelegraph、Decrypt、Bitcoin Magazine 公开 RSS | 自动 |
+| BTC CryptoPanic + ChromaDB | BTC 最新资讯由内置 CryptoPanic 抓取写入 ChromaDB；抓取失败时仅读取 ChromaDB 缓存，不再使用旧搜索/RSS 最新消息源 | 自动 |
 | `TUSHARE_TOKEN` | [Tushare Pro](https://tushare.pro/weborder/#/login?reg=834638 ) Token | 可选 |
 | `LONGBRIDGE_OAUTH_CLIENT_ID` | [Longbridge OpenAPI](https://open.longbridge.com/) OAuth client_id；留空且无 Legacy Access Token 时会兼容使用 `LONGBRIDGE_APP_KEY` | 可选 |
 | `LONGBRIDGE_OAUTH_TOKEN_CACHE_B64` | OAuth token 缓存文件的 base64 内容，供 GitHub Actions / Docker 等 headless 环境恢复 SDK token 缓存 | 可选 |
@@ -341,6 +341,11 @@ daily_stock_analysis/
 | `SEARXNG_PUBLIC_INSTANCES_ENABLED` | 是否在 `SEARXNG_BASE_URLS` 为空时自动从 `searx.space` 获取公共实例（默认 `true`） | 可选 |
 | `NEWS_STRATEGY_PROFILE` | 新闻策略窗口档位：`ultra_short`(1天)/`short`(3天)/`medium`(7天)/`long`(30天)；实际窗口取与 `NEWS_MAX_AGE_DAYS` 的最小值 | 默认 `short` |
 | `NEWS_MAX_AGE_DAYS` | 新闻最大时效（天），搜索时限制结果在近期内 | 默认 `3` |
+| `CRYPTOPANIC_CHROMA_PATH` | BTC CryptoPanic 新闻写入/读取的 ChromaDB 目录；留空默认使用本机 Hermes 历史目录 | 可选 |
+| `CRYPTOPANIC_CHROMA_COLLECTION` | BTC 新闻 ChromaDB collection 名称 | 默认 `cryptopanic_news` |
+| `CRYPTOPANIC_OPENCLI_PATH` | opencli 可执行文件路径；留空自动尝试 `%APPDATA%\npm\opencli.cmd` 与 PATH | 可选 |
+| `CRYPTOPANIC_REFRESH_INTERVAL_SECONDS` | CryptoPanic 抓取节流间隔；间隔内直接读取 ChromaDB 缓存 | 默认 `900` |
+| `CRYPTOPANIC_MAX_AGE_HOURS` | ChromaDB 缓存新闻最大可用时长 | 默认 `24` |
 | `BIAS_THRESHOLD` | 乖离率阈值（%），超过提示不追高；强势趋势股自动放宽到 1.5 倍 | 默认 `5.0` |
 
 > 行为说明：搜索服务与社交舆情服务为可选增强链路。任一服务初始化失败时，系统会记录 warning 并降级为跳过该服务，仅影响对应环节，不会阻塞技术面主链路和主任务流。
@@ -421,7 +426,7 @@ daily_stock_analysis/
 | `ADMIN_AUTH_ENABLED` | Web 登录：设为 `true` 启用密码保护；首次访问在网页设置初始密码，可在「系统设置 > 修改密码」修改；忘记密码执行 `python -m src.auth reset_password`。Web 的 `.env` 备份导入导出仅在开启该开关后可用（桌面端不受此限制）。 | `false` |
 | `TRUST_X_FORWARDED_FOR` | 单层可信反向代理部署时设为 `true`，取 `X-Forwarded-For` 最右值作为真实客户端 IP（用于登录限流等）；直连公网时保持 `false` 防伪造。多级代理/CDN 场景下限流 key 可能退化为边缘代理 IP，需额外评估 | `false` |
 | `MAX_WORKERS` | 并发线程数 | `3` |
-| `MARKET_REVIEW_ENABLED` | 启用大盘复盘 | `true` |
+| `MARKET_REVIEW_ENABLED` | 启用大盘复盘；默认关闭，避免项目启动时自动生成大盘复盘，需要自动复盘时设为 `true` | `false` |
 | `DAILY_MARKET_CONTEXT_ENABLED` | 将当日大盘环境摘要注入个股分析 Prompt，并在高风险/退潮环境下软化激进买入建议；默认开启，设为 `false` 后仍可运行大盘复盘 | `true` |
 | `MARKET_REVIEW_REGION` | 大盘复盘市场区域：cn(A股)、hk(港股)、us(美股)、both(三市场)，us 适合仅关注美股的用户 | `cn` |
 | `MARKET_REVIEW_COLOR_SCHEME` | 大盘复盘指数涨跌颜色：`green_up`=绿涨红跌（默认），`red_up`=红涨绿跌 | `green_up` |

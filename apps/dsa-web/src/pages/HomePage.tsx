@@ -1,9 +1,8 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BarChart3, Check, SlidersHorizontal } from 'lucide-react';
+import { BarChart3, Check, PanelLeftOpen, SlidersHorizontal } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getParsedApiError, type ParsedApiError } from '../api/error';
-import { analysisApi } from '../api/analysis';
 import { historyApi } from '../api/history';
 import { stocksApi, type KLineData, type StockHistoryPeriod, type StockHistoryResponse, type StockQuoteResponse } from '../api/stocks';
 import { agentApi, type SkillInfo } from '../api/agent';
@@ -13,7 +12,6 @@ import { DashboardStateBlock } from '../components/dashboard';
 import { StockAutocomplete } from '../components/StockAutocomplete';
 import { StockHistoryTrendDrawer, StockBar } from '../components/history';
 import { ReportMarkdownDrawer } from '../components/report/ReportMarkdownDrawer';
-import { MarketReviewReportView } from '../components/report/MarketReviewReportView';
 import { ReportSummary } from '../components/report/ReportSummary';
 import { RunFlowPanel } from '../components/run-flow';
 import { TaskPanel } from '../components/tasks';
@@ -22,14 +20,8 @@ import { useWatchlist } from '../hooks/useWatchlist';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import type { SetupStatusResponse } from '../types/systemConfig';
 import { normalizeReportLanguage } from '../utils/reportLanguage';
-import type { MarketReviewPayload, StockBarItem, TaskInfo } from '../types/analysis';
+import type { TaskInfo } from '../types/analysis';
 import type { RunFlowSnapshotSource } from '../types/runFlow';
-
-type MarketReviewNotice = {
-  variant: 'success' | 'warning' | 'danger';
-  title: string;
-  message: string;
-} | null;
 
 type RunFlowDrawerState =
   | { open: false }
@@ -234,31 +226,19 @@ const HomePage: React.FC = () => {
   const location = useLocation();
   const { language: uiLanguage, t } = useUiLanguage();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isSubmittingMarketReview, setIsSubmittingMarketReview] = useState(false);
-  const [marketReviewNotice, setMarketReviewNotice] = useState<MarketReviewNotice>(null);
-  const [marketReviewError, setMarketReviewError] = useState<ParsedApiError | null>(null);
-  const [marketReviewReport, setMarketReviewReport] = useState<string | null>(null);
-  const [marketReviewPayload, setMarketReviewPayload] = useState<MarketReviewPayload | null>(null);
+  const [stockBarVisible, setStockBarVisible] = useState(true);
   const [cryptoMarket, setCryptoMarket] = useState<CryptoMarketState>(EMPTY_CRYPTO_MARKET_STATE);
   const [analysisSkills, setAnalysisSkills] = useState<SkillInfo[]>([]);
   const [selectedStrategyId, setSelectedStrategyId] = useState('');
   const [strategyMenuOpen, setStrategyMenuOpen] = useState(false);
   const [runFlowDrawer, setRunFlowDrawer] = useState<RunFlowDrawerState>({ open: false });
-  const marketReviewPollTimer = useRef<number | null>(null);
   const dashboardScrollRef = useRef<HTMLElement | null>(null);
   const strategyMenuRef = useRef<HTMLDivElement | null>(null);
   const strategyButtonRef = useRef<HTMLButtonElement | null>(null);
   const strategyItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const strategyInitialFocusIndexRef = useRef<number | null>(null);
 
-  const stopMarketReviewPolling = useCallback(() => {
-    if (marketReviewPollTimer.current !== null) {
-      window.clearInterval(marketReviewPollTimer.current);
-      marketReviewPollTimer.current = null;
-    }
-  }, []);
-
-  const scrollMarketReviewFeedbackIntoView = useCallback(() => {
+  const scrollDashboardTop = useCallback(() => {
     const scrollContainer = dashboardScrollRef.current;
     if (!scrollContainer) {
       return;
@@ -272,7 +252,6 @@ const HomePage: React.FC = () => {
     scrollContainer.scrollTop = 0;
   }, []);
 
-  useEffect(() => stopMarketReviewPolling, [stopMarketReviewPolling]);
   const [setupStatus, setSetupStatus] = useState<SetupStatusResponse | null>(null);
 
   const {
@@ -284,7 +263,6 @@ const HomePage: React.FC = () => {
     selectedReport,
     isLoadingReport,
     isHistoryTrendOpen,
-    marketReviewHistoryItems,
     stockHistoryItems,
     stockHistoryTotal,
     stockHistoryHasMore,
@@ -298,8 +276,6 @@ const HomePage: React.FC = () => {
     clearError,
     loadInitialHistory,
     refreshHistory,
-    loadMarketReviewHistory,
-    refreshMarketReviewHistory,
     selectHistoryItem,
     submitAnalysis,
     notify,
@@ -387,7 +363,6 @@ const HomePage: React.FC = () => {
   }, [analysisSkills, selectedStrategyId]);
 
   const reportLanguage = normalizeReportLanguage(selectedReport?.meta.reportLanguage);
-  const liveMarketReviewLanguage = normalizeReportLanguage(marketReviewPayload?.language);
   const isMarketReviewHistoryReport = selectedReport?.meta.reportType === 'market_review';
   const isHistoryTrendUnavailable = !selectedReport || !selectedReport.meta.stockCode;
   const bitcoinKLines = useMemo(
@@ -523,8 +498,6 @@ const HomePage: React.FC = () => {
   useDashboardLifecycle({
     loadInitialHistory,
     refreshHistory,
-    loadMarketReviewHistory,
-    refreshMarketReviewHistory,
     loadStockBar,
     refreshStockBar,
     syncTaskCreated,
@@ -536,37 +509,25 @@ const HomePage: React.FC = () => {
 
   const watchlistState = useWatchlist();
 
-  const clearMarketReviewState = useCallback(() => {
-    stopMarketReviewPolling();
-    setMarketReviewReport(null);
-    setMarketReviewPayload(null);
-    setMarketReviewNotice(null);
-    setMarketReviewError(null);
-  }, [stopMarketReviewPolling]);
-
   const handleHistoryItemClick = useCallback((recordId: number) => {
-    clearMarketReviewState();
     void selectHistoryItem(recordId);
     setSidebarOpen(false);
-  }, [clearMarketReviewState, selectHistoryItem]);
+  }, [selectHistoryItem]);
 
   const [isDeletingStock, setIsDeletingStock] = useState(false);
-  const handleDeleteStock = useCallback(async (stockCode: string) => {
+  const handleDeleteStockRecord = useCallback(async (recordId: number) => {
     if (isDeletingStock) return;
     setIsDeletingStock(true);
     try {
-      await historyApi.deleteByCode(stockCode);
+      await historyApi.deleteRecords([recordId]);
       await refreshStockBar();
       await refreshHistory(true);
-      if (stockCode === 'MARKET') {
-        await refreshMarketReviewHistory(false);
-      }
     } catch {
       // error silently ignored
     } finally {
       setIsDeletingStock(false);
     }
-  }, [isDeletingStock, refreshMarketReviewHistory, refreshStockBar, refreshHistory]);
+  }, [isDeletingStock, refreshStockBar, refreshHistory]);
 
   const handleSubmitAnalysis = useCallback(
     (
@@ -648,152 +609,6 @@ const HomePage: React.FC = () => {
     setRunFlowDrawer({ open: false });
   }, []);
 
-  const pollMarketReviewStatus = useCallback(
-    async (taskId: string) => {
-      stopMarketReviewPolling();
-
-      const maxAttempts = 120;
-      const intervalMs = 2000;
-      let attempts = 0;
-
-      const poll = async (): Promise<boolean> => {
-        if (attempts >= maxAttempts) {
-          stopMarketReviewPolling();
-          setMarketReviewReport(null);
-          setMarketReviewPayload(null);
-          setMarketReviewNotice({
-            variant: 'danger',
-            title: t('home.marketReviewTimeout'),
-            message: t('home.marketReviewTimeoutMessage'),
-          });
-          scrollMarketReviewFeedbackIntoView();
-          return false;
-        }
-
-        attempts += 1;
-
-        try {
-          const status = await analysisApi.getStatus(taskId);
-          if (status.status === 'pending' || status.status === 'processing') {
-            setMarketReviewReport(null);
-            setMarketReviewPayload(null);
-            const progress = typeof status.progress === 'number'
-              ? `${status.progress}%`
-              : t('home.progressActive');
-            setMarketReviewNotice({
-              variant: 'warning',
-              title: t('home.marketReviewInProgress'),
-              message: t('home.taskStatus', { status: status.status, progress }),
-            });
-            return true;
-          }
-
-          if (status.status === 'completed') {
-            stopMarketReviewPolling();
-            const marketReviewText = typeof status.marketReviewReport === 'string'
-              ? status.marketReviewReport
-              : '';
-            setMarketReviewReport(marketReviewText ? marketReviewText.trim() : null);
-            setMarketReviewPayload(status.marketReviewPayload ?? null);
-            setMarketReviewNotice({
-              variant: 'success',
-              title: t('home.marketReviewCompleted'),
-              message: marketReviewText ? t('home.marketReviewCompletedWithReport') : t('home.marketReviewCompletedWithoutReport'),
-            });
-            setMarketReviewError(null);
-            await refreshMarketReviewHistory(true);
-            scrollMarketReviewFeedbackIntoView();
-            return false;
-          }
-
-          if (status.status === 'failed') {
-            stopMarketReviewPolling();
-            setMarketReviewReport(null);
-            setMarketReviewPayload(null);
-            setMarketReviewError(
-              getParsedApiError({
-                response: {
-                  status: 500,
-                  data: {
-                    error: 'market_review_failed',
-                    message: status.error || t('home.marketReviewFailed'),
-                  },
-                },
-              }),
-            );
-            setMarketReviewNotice(null);
-            scrollMarketReviewFeedbackIntoView();
-            return false;
-          }
-
-          stopMarketReviewPolling();
-          setMarketReviewReport(null);
-          setMarketReviewPayload(null);
-          setMarketReviewNotice({
-            variant: 'danger',
-            title: t('home.marketReviewUnknownStatus'),
-            message: t('home.unknownTaskStatus', { status: status.status }),
-          });
-          scrollMarketReviewFeedbackIntoView();
-          return false;
-        } catch (err: unknown) {
-          const parsed = getParsedApiError(err);
-          if (attempts >= maxAttempts) {
-            stopMarketReviewPolling();
-            setMarketReviewReport(null);
-            setMarketReviewPayload(null);
-            setMarketReviewError(parsed);
-            setMarketReviewNotice(null);
-            scrollMarketReviewFeedbackIntoView();
-            return false;
-          }
-          return true;
-        }
-
-        return true;
-      };
-
-      if (await poll()) {
-        marketReviewPollTimer.current = window.setInterval(() => {
-          void poll().then((shouldContinue) => {
-            if (!shouldContinue) {
-              stopMarketReviewPolling();
-            }
-          });
-        }, intervalMs);
-      }
-    },
-    [refreshMarketReviewHistory, scrollMarketReviewFeedbackIntoView, stopMarketReviewPolling, t],
-  );
-
-  const handleTriggerMarketReview = useCallback(async () => {
-    setIsSubmittingMarketReview(true);
-    setMarketReviewNotice(null);
-    setMarketReviewError(null);
-    setMarketReviewReport(null);
-    setMarketReviewPayload(null);
-    scrollMarketReviewFeedbackIntoView();
-    try {
-      const result = await analysisApi.triggerMarketReview({ sendNotification: notify });
-      setMarketReviewNotice({
-        variant: 'success',
-        title: t('home.marketReviewSubmitted'),
-        message: result.message,
-      });
-      scrollMarketReviewFeedbackIntoView();
-
-      if (result.taskId) {
-        await pollMarketReviewStatus(result.taskId);
-      }
-    } catch (err: unknown) {
-      setMarketReviewError(getParsedApiError(err));
-      setMarketReviewNotice(null);
-      scrollMarketReviewFeedbackIntoView();
-    } finally {
-      setIsSubmittingMarketReview(false);
-    }
-  }, [notify, pollMarketReviewStatus, scrollMarketReviewFeedbackIntoView, t]);
-
   const loadBitcoinHistory = useCallback(async (period: StockHistoryPeriod) => {
     setCryptoMarket((current) => ({
       ...current,
@@ -831,7 +646,7 @@ const HomePage: React.FC = () => {
       historyPeriod: period,
       error: null,
     }));
-    scrollMarketReviewFeedbackIntoView();
+    scrollDashboardTop();
     try {
       const [quote, history] = await Promise.all([
         stocksApi.getQuote('BTC', { includeNews: true }),
@@ -853,61 +668,56 @@ const HomePage: React.FC = () => {
         error: getParsedApiError(err),
       }));
     }
-  }, [scrollMarketReviewFeedbackIntoView]);
+  }, [scrollDashboardTop]);
 
-  const mergedStockBarItems = useMemo<StockBarItem[]>(() => {
-    const latestMarketReview = marketReviewHistoryItems[0];
-    const stockItems = stockBarItems.filter((item) => item.stockCode !== 'MARKET');
-    if (!latestMarketReview) {
-      return stockItems;
-    }
-
-    const marketReviewItem: StockBarItem = {
-      id: latestMarketReview.id,
-      stockCode: 'MARKET',
-      stockName: latestMarketReview.stockName || t('home.marketReview'),
-      reportType: 'market_review',
-      sentimentScore: latestMarketReview.sentimentScore,
-      operationAdvice: latestMarketReview.operationAdvice,
-      analysisCount: Math.max(marketReviewHistoryItems.length, 1),
-      lastAnalysisTime: latestMarketReview.createdAt,
-      modelUsed: latestMarketReview.modelUsed,
-      marketPhaseSummary: latestMarketReview.marketPhaseSummary,
-    };
-
-    return [marketReviewItem, ...stockItems].sort((left, right) => {
-      const leftTime = left.lastAnalysisTime ? Date.parse(left.lastAnalysisTime) : 0;
-      const rightTime = right.lastAnalysisTime ? Date.parse(right.lastAnalysisTime) : 0;
-      return rightTime - leftTime;
-    });
-  }, [marketReviewHistoryItems, stockBarItems, t]);
+  const visibleStockBarItems = useMemo(
+    () => stockBarItems.filter((item) => item.stockCode !== 'MARKET' && item.reportType !== 'market_review'),
+    [stockBarItems],
+  );
 
   const sidebarContent = useMemo(
     () => (
       <div className="flex min-h-0 h-full flex-col gap-3 overflow-hidden">
         <TaskPanel tasks={activeTasks} onOpenRunFlow={openTaskRunFlow} />
-        <StockBar
-          items={mergedStockBarItems}
-          isLoading={isLoadingStockBar}
-          selectedStockCode={selectedReport?.meta.stockCode}
-          selectedRecordId={selectedReport?.meta.id}
-          onItemClick={handleHistoryItemClick}
-          onDeleteStock={handleDeleteStock}
-          isDeleting={isDeletingStock}
-          className="flex-1 overflow-hidden"
-        />
+        {stockBarVisible ? (
+          <StockBar
+            items={visibleStockBarItems}
+            isLoading={isLoadingStockBar}
+            selectedStockCode={selectedReport?.meta.stockCode}
+            selectedRecordId={selectedReport?.meta.id}
+            onItemClick={handleHistoryItemClick}
+            onDeleteRecord={handleDeleteStockRecord}
+            onClose={() => setStockBarVisible(false)}
+            isDeleting={isDeletingStock}
+            className="flex-1 overflow-hidden"
+          />
+        ) : (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => setStockBarVisible(true)}
+            className="w-full justify-start"
+            aria-label={t('stockBar.show')}
+          >
+            <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+            {t('stockBar.show')}
+          </Button>
+        )}
       </div>
     ),
     [
       activeTasks,
-      mergedStockBarItems,
       isLoadingStockBar,
       handleHistoryItemClick,
-      handleDeleteStock,
+      handleDeleteStockRecord,
       isDeletingStock,
       openTaskRunFlow,
       selectedReport?.meta.stockCode,
       selectedReport?.meta.id,
+      stockBarVisible,
+      t,
+      visibleStockBarItems,
     ],
   );
 
@@ -1016,18 +826,6 @@ const HomePage: React.FC = () => {
                 <BarChart3 className="h-4 w-4" aria-hidden="true" />
                 {t('home.bitcoinMarket')}
               </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="md"
-                isLoading={isSubmittingMarketReview}
-                loadingText={t('home.submitMarketReview')}
-                onClick={() => void handleTriggerMarketReview()}
-                className="h-10 flex-1 whitespace-nowrap md:flex-none"
-              >
-                <BarChart3 className="h-4 w-4" aria-hidden="true" />
-                {t('home.marketReview')}
-              </Button>
               <button
                 type="button"
                 onClick={() => handleSubmitAnalysis()}
@@ -1118,27 +916,6 @@ const HomePage: React.FC = () => {
             data-testid="home-dashboard-scroll"
             className="flex-1 min-w-0 min-h-0 overflow-x-auto overflow-y-auto px-3 pb-4 md:px-6 touch-pan-y"
           >
-            {marketReviewNotice ? (
-              <div className="mb-3">
-                <InlineAlert
-                  variant={marketReviewNotice.variant}
-                  title={marketReviewNotice.title}
-                  message={marketReviewNotice.message}
-                  className="rounded-xl px-3 py-2 text-xs shadow-none"
-                />
-              </div>
-            ) : null}
-
-            {marketReviewError ? (
-              <div className="mb-3">
-                <ApiErrorAlert
-                  error={marketReviewError}
-                  className="mb-1"
-                  onDismiss={() => setMarketReviewError(null)}
-                />
-              </div>
-            ) : null}
-
             {cryptoMarket.error ? (
               <div className="mb-3">
                 <ApiErrorAlert
@@ -1326,15 +1103,6 @@ const HomePage: React.FC = () => {
               </div>
             ) : null}
 
-            {marketReviewReport ? (
-              <MarketReviewReportView
-                content={marketReviewReport}
-                payload={marketReviewPayload}
-                reportLanguage={liveMarketReviewLanguage}
-                className="mb-3"
-              />
-            ) : null}
-
             {error ? (
               <ApiErrorAlert
                 error={error}
@@ -1342,11 +1110,11 @@ const HomePage: React.FC = () => {
                 onDismiss={clearError}
               />
             ) : null}
-            {!marketReviewReport && isLoadingReport ? (
+            {isLoadingReport ? (
               <div className="flex h-full flex-col items-center justify-center">
                 <DashboardStateBlock title={t('home.loadingReport')} loading />
               </div>
-            ) : !marketReviewReport && selectedReport ? (
+            ) : selectedReport ? (
               <div className={isHistoryTrendOpen ? 'max-w-6xl space-y-4 pb-8' : 'max-w-4xl space-y-4 pb-8'}>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {!isMarketReviewHistoryReport ? (
@@ -1374,19 +1142,7 @@ const HomePage: React.FC = () => {
                         {t('home.askAi')}
                       </Button>
                     </>
-                  ) : (
-                    <Button
-                      variant="home-action-ai"
-                      size="sm"
-                      disabled={isSubmittingMarketReview}
-                      isLoading={isSubmittingMarketReview}
-                      loadingText={t('home.submitMarketReview')}
-                      onClick={() => void handleTriggerMarketReview()}
-                    >
-                      <BarChart3 className="h-4 w-4" />
-                      {t('home.rerunMarketReview')}
-                    </Button>
-                  )}
+                  ) : null}
                   <Button
                     variant="home-action-ai"
                     size="sm"
@@ -1446,7 +1202,7 @@ const HomePage: React.FC = () => {
                   />
                 )}
               </div>
-            ) : !marketReviewReport ? (
+            ) : (
               <div className="flex h-full items-center justify-center">
                 <EmptyState
                   title={t('home.startAnalysisTitle')}
@@ -1459,7 +1215,7 @@ const HomePage: React.FC = () => {
                   )}
                 />
               </div>
-            ) : null}
+            )}
           </section>
         </div>
       </div>

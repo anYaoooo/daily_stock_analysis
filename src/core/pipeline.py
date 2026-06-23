@@ -73,6 +73,7 @@ from src.services.run_diagnostics import (
 from src.services.decision_signal_extractor import extract_and_persist_from_analysis_result
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
+from src.crypto_technical import build_crypto_technical_context
 from src.core.trading_calendar import (
     build_market_phase_context,
     get_effective_trading_date,
@@ -168,6 +169,19 @@ class StockAnalysisPipeline:
                 searxng_public_instances_enabled=self.config.searxng_public_instances_enabled,
                 news_max_age_days=self.config.news_max_age_days,
                 news_strategy_profile=getattr(self.config, "news_strategy_profile", "short"),
+                cryptopanic_chroma_path=getattr(self.config, "cryptopanic_chroma_path", "") or None,
+                cryptopanic_chroma_collection=getattr(
+                    self.config,
+                    "cryptopanic_chroma_collection",
+                    "cryptopanic_news",
+                ),
+                cryptopanic_opencli_path=getattr(self.config, "cryptopanic_opencli_path", "") or None,
+                cryptopanic_refresh_interval_seconds=getattr(
+                    self.config,
+                    "cryptopanic_refresh_interval_seconds",
+                    900,
+                ),
+                cryptopanic_max_age_hours=getattr(self.config, "cryptopanic_max_age_hours", 24),
             )
         except Exception as exc:
             logger.warning("搜索服务初始化失败，将以无搜索模式运行: %s", exc, exc_info=True)
@@ -438,6 +452,7 @@ class StockAnalysisPipeline:
 
             # Step 3: 趋势分析（基于交易理念）— 在 Agent 分支之前执行，供两条路径共用
             trend_result: Optional[TrendAnalysisResult] = None
+            crypto_technical_context: Optional[Dict[str, Any]] = None
             try:
                 from src.services.history_loader import get_frozen_target_date
                 _mkt = get_market_for_stock(normalize_stock_code(code))
@@ -451,6 +466,7 @@ class StockAnalysisPipeline:
                     if self.config.enable_realtime_quote and realtime_quote:
                         df = self._augment_historical_with_realtime(df, realtime_quote, code)
                     trend_result = self.trend_analyzer.analyze(df, code)
+                    crypto_technical_context = build_crypto_technical_context(df, code)
                     logger.info(f"{stock_name}({code}) 趋势分析: {trend_result.trend_status.value}, "
                               f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
             except Exception as e:
@@ -557,6 +573,7 @@ class StockAnalysisPipeline:
                 fundamental_context,
                 market_phase_context=market_phase_context_dict,
                 portfolio_context=portfolio_context,
+                crypto_technical_context=crypto_technical_context,
             )
             enhanced_context["market_phase_context"] = market_phase_context_dict
             self._attach_daily_market_context(
@@ -761,6 +778,7 @@ class StockAnalysisPipeline:
         fundamental_context: Optional[Dict[str, Any]] = None,
         market_phase_context: Optional[Dict[str, Any]] = None,
         portfolio_context: Optional[Dict[str, Any]] = None,
+        crypto_technical_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         增强分析上下文
@@ -847,6 +865,8 @@ class StockAnalysisPipeline:
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
             }
+        if crypto_technical_context:
+            enhanced['crypto_technical'] = crypto_technical_context
 
         # Issue #234：盘中分析使用实时 OHLC 与趋势 MA 覆盖 today。
         # 防护条件：trend_result.ma5 > 0 表示 MA 计算已成功且数据量充足。
@@ -1378,6 +1398,8 @@ class StockAnalysisPipeline:
         if getattr(self.config, "daily_market_context_enabled", True) is not True:
             return None
         if getattr(self.config, "market_review_enabled", None) is not True:
+            return None
+        if market == "crypto":
             return None
 
         try:

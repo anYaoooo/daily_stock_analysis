@@ -12,7 +12,7 @@ interface StockBarItemProps {
   item: StockBarItemType;
   isViewing: boolean;
   onClick: (recordId: number) => void;
-  onDelete?: (stockCode: string) => void;
+  onDelete?: (recordId: number) => void;
   isDeleting?: boolean;
   isMarketReview?: boolean;
 }
@@ -105,7 +105,7 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
                   size="xsm"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onDelete(item.stockCode);
+                    onDelete(item.id);
                   }}
                   disabled={isDeleting}
                   className="opacity-0 group-hover/item:opacity-100 transition-opacity h-6 w-6 p-0 flex items-center justify-center"

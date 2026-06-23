@@ -31,6 +31,7 @@ from src.services.run_diagnostics import (
     get_current_diagnostic_context,
     reset_run_diagnostic_context,
 )
+from src.utils.sniper_points import extract_directional_strategy_plans
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ class AnalysisService:
         sniper_points = {}
         if hasattr(result, 'get_sniper_points'):
             sniper_points = result.get_sniper_points() or {}
+        directional_plans = extract_directional_strategy_plans(result)
         
         # 计算情绪标签
         report_language = normalize_report_language(getattr(result, "report_language", "zh"))
@@ -230,6 +232,8 @@ class AnalysisService:
                 "secondary_buy": sniper_points.get("secondary_buy"),
                 "stop_loss": sniper_points.get("stop_loss"),
                 "take_profit": sniper_points.get("take_profit"),
+                "long_plan": directional_plans.get("long_plan"),
+                "short_plan": directional_plans.get("short_plan"),
             },
             "details": {
                 "news_summary": result.news_summary,

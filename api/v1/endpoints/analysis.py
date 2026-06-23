@@ -56,15 +56,6 @@ from api.v1.schemas.history import (
 from api.v1.schemas.run_flow import RunFlowSnapshot
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import Config
-from src.core.market_review_lock import (
-    MarketReviewExecutionLock as _MarketReviewExecutionLock,
-    market_review_lock_path,
-    release_market_review_lock as _release_market_review_lock,
-    try_acquire_market_review_lock as _try_acquire_market_review_lock,
-)
-from src.core.market_review_runtime import (
-    build_market_review_runtime as _runtime_build_market_review_runtime,
-)
 from src.analysis_context_pack_overview import (
     extract_analysis_context_pack_overview,
     sanitize_context_snapshot_for_api,
@@ -88,6 +79,7 @@ from src.utils.data_processing import (
     extract_board_detail_fields,
     extract_realtime_detail_fields,
 )
+from src.utils.sniper_points import extract_directional_strategy_plans
 
 logger = logging.getLogger(__name__)
 
@@ -106,14 +98,6 @@ def _get_task_trace_id(task: Any) -> Optional[str]:
     return None
 
 
-def _market_review_lock_path(config: Config) -> Path:
-    return market_review_lock_path(config)
-
-
-def _build_market_review_runtime(config: Config, source_message: Optional[Any] = None) -> tuple[Any, Any, Any]:
-    return _runtime_build_market_review_runtime(config, source_message)
-
-
 def _with_request_report_language(config: Config, report_language: Optional[str]) -> Config:
     """Return a request-scoped config copy when the caller overrides report language."""
     normalized = normalize_report_language(report_language, default="")
@@ -123,50 +107,6 @@ def _with_request_report_language(config: Config, report_language: Optional[str]
     scoped_config = copy.copy(config)
     scoped_config.report_language = normalized
     return scoped_config
-
-
-def _run_market_review_background(
-    send_notification: bool,
-    override_region: Optional[str] = None,
-    lock_token: Optional[_MarketReviewExecutionLock] = None,
-    config: Optional[Config] = None,
-    query_id: Optional[str] = None,
-) -> None:
-    """Run market review after the API response has been accepted."""
-    from src.core.market_review import run_market_review
-
-    runtime_config = config or get_config_dep()
-    try:
-        notifier, analyzer, search_service = _build_market_review_runtime(runtime_config)
-        review_kwargs = {
-            "notifier": notifier,
-            "analyzer": analyzer,
-            "search_service": search_service,
-            "config": runtime_config,
-            "send_notification": send_notification,
-            "override_region": override_region,
-            "return_structured": True,
-            "trigger_source": "api",
-        }
-        if query_id:
-            review_kwargs["query_id"] = query_id
-        logger.info(
-            "[MarketReview] component=market_review action=background_start "
-            "trigger_source=api task_id=%s region=%s",
-            query_id or "-",
-            override_region or getattr(runtime_config, "market_review_region", "cn") or "cn",
-        )
-        report = run_market_review(**review_kwargs)
-        if not report:
-            raise RuntimeError("大盘复盘未返回可持久化报告")
-        if hasattr(report, "report"):
-            return {
-                "result": report.report,
-                "market_review_payload": getattr(report, "market_review_payload", None),
-            }
-        return {"result": report}
-    finally:
-        _release_market_review_lock(lock_token)
 
 
 def _invalid_analysis_input_error() -> HTTPException:
@@ -489,50 +429,11 @@ def trigger_market_review(
     request: Optional[MarketReviewRequest] = Body(None),
     config: Config = Depends(get_config_dep),
 ) -> MarketReviewAccepted:
-    """Trigger market review from Web/API without blocking the request."""
-    request = request or MarketReviewRequest()
-
-    runtime_config = _with_request_report_language(
-        config,
-        getattr(request, "report_language", None),
-    )
-
-    lock_token = _try_acquire_market_review_lock(runtime_config)
-    if lock_token is None:
-        raise api_error(409, "duplicate_market_review", "大盘复盘正在执行中，请稍后再试")
-
-    try:
-        task_id = uuid.uuid4().hex
-        logger.info(
-            "[MarketReview] component=market_review action=submit trigger_source=api "
-            "task_id=%s region=%s send_notification=%s",
-            task_id,
-            getattr(runtime_config, "market_review_region", "cn") or "cn",
-            request.send_notification,
-        )
-        task = get_task_queue().submit_background_task(
-            lambda: _run_market_review_background(
-                request.send_notification,
-                override_region=None,
-                lock_token=lock_token,
-                config=runtime_config,
-                query_id=task_id,
-            ),
-            stock_code="market_review",
-            stock_name="大盘复盘",
-            message="大盘复盘任务已提交",
-            task_id=task_id,
-        )
-    except Exception:
-        _release_market_review_lock(lock_token)
-        raise
-
-    return MarketReviewAccepted(
-        status="accepted",
-        message="大盘复盘任务已提交，完成后会保存报告并按配置推送通知",
-        send_notification=request.send_notification,
-        task_id=task.task_id,
-        trace_id=_get_task_trace_id(task),
+    """Market review is intentionally unavailable in BTC-only mode."""
+    raise api_error(
+        410,
+        "market_review_removed",
+        "BTC-only 模式已移除股票大盘复盘任务；请直接运行 BTC 分析。",
     )
 
 
@@ -1106,6 +1007,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     secondary_buy=_stringify_report_strategy_value(getattr(record, 'secondary_buy', None)),
                     stop_loss=_stringify_report_strategy_value(getattr(record, 'stop_loss', None)),
                     take_profit=_stringify_report_strategy_value(getattr(record, 'take_profit', None)),
+                    **extract_directional_strategy_plans(raw_dict),
                 ),
                 details=details,
             ).model_dump()
@@ -1274,7 +1176,8 @@ def _build_analysis_report(
             ideal_buy=_stringify_report_strategy_value(strategy_data.get("ideal_buy")),
             secondary_buy=_stringify_report_strategy_value(strategy_data.get("secondary_buy")),
             stop_loss=_stringify_report_strategy_value(strategy_data.get("stop_loss")),
-            take_profit=_stringify_report_strategy_value(strategy_data.get("take_profit"))
+            take_profit=_stringify_report_strategy_value(strategy_data.get("take_profit")),
+            **extract_directional_strategy_plans(details_data),
         )
 
     extracted_fundamental = extract_fundamental_detail_fields(

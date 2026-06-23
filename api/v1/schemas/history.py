@@ -161,6 +161,17 @@ class ReportSummary(BaseModel):
     sentiment_label: Optional[str] = Field(None, description="情绪标签")
 
 
+class DirectionalStrategyPlan(BaseModel):
+    """多空方向策略计划"""
+
+    entry_price: Optional[str] = Field(None, description="入场价")
+    stop_loss: Optional[str] = Field(None, description="止损价")
+    take_profit: Optional[str] = Field(None, description="止盈目标")
+    trigger_condition: Optional[str] = Field(None, description="触发条件")
+    invalidation: Optional[str] = Field(None, description="失效条件")
+    reason: Optional[str] = Field(None, description="计划依据")
+
+
 class ReportStrategy(BaseModel):
     """策略点位区"""
     
@@ -168,6 +179,8 @@ class ReportStrategy(BaseModel):
     secondary_buy: Optional[str] = Field(None, description="第二买入价")
     stop_loss: Optional[str] = Field(None, description="止损价")
     take_profit: Optional[str] = Field(None, description="止盈价")
+    long_plan: Optional[DirectionalStrategyPlan] = Field(None, description="多单策略计划")
+    short_plan: Optional[DirectionalStrategyPlan] = Field(None, description="空单策略计划")
 
 
 class AnalysisContextPackOverviewSubject(BaseModel):
@@ -291,7 +304,23 @@ class AnalysisReport(BaseModel):
                 "ideal_buy": "1800.00",
                 "secondary_buy": "1750.00",
                 "stop_loss": "1700.00",
-                "take_profit": "2000.00"
+                "take_profit": "2000.00",
+                "long_plan": {
+                    "entry_price": "突破 1800 后回踩确认",
+                    "stop_loss": "1760",
+                    "take_profit": "1900",
+                    "trigger_condition": "放量站上压力位",
+                    "invalidation": "跌回突破位下方",
+                    "reason": "趋势与量能共振"
+                },
+                "short_plan": {
+                    "entry_price": "跌破 1700 后反抽不回",
+                    "stop_loss": "1730",
+                    "take_profit": "1620",
+                    "trigger_condition": "关键支撑失守",
+                    "invalidation": "重新站回 1700",
+                    "reason": "支撑破位且量能确认"
+                }
             },
             "details": None
         }
@@ -311,9 +340,9 @@ class MarkdownReportResponse(BaseModel):
 
 
 class StockBarItem(BaseModel):
-    """个股栏条目（去重后的股票维度摘要）"""
+    """个股栏条目（单条历史记录摘要）"""
 
-    id: int = Field(..., description="该股最新一次分析的历史记录主键 ID")
+    id: int = Field(..., description="历史记录主键 ID")
     stock_code: str = Field(..., description="股票代码")
     stock_name: Optional[str] = Field(None, description="股票名称")
     report_type: Optional[str] = Field(None, description="报告类型")

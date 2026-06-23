@@ -12,6 +12,7 @@
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Optional
 import re
 
@@ -46,6 +47,7 @@ from data_provider.base import normalize_stock_code
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+NEWS_PAYLOAD_TIMEOUT_SECONDS = 8.0
 
 # 须在 /{stock_code} 路由之前定义
 ALLOWED_MIME_STR = ", ".join(ALLOWED_MIME)
@@ -407,7 +409,7 @@ def remove_from_watchlist(
 
 def _build_stock_news_items(stock_code: str, stock_name: Optional[str]) -> list[StockNewsItem]:
     """Best-effort latest-news payload for quote responses."""
-    try:
+    def _load_news_items() -> list[StockNewsItem]:
         from src.search_service import get_search_service
 
         service = get_search_service()
@@ -434,6 +436,21 @@ def _build_stock_news_items(stock_code: str, stock_name: Optional[str]) -> list[
                 )
             )
         return news_items
+
+    try:
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stock-news-payload")
+        future = executor.submit(_load_news_items)
+        try:
+            return future.result(timeout=NEWS_PAYLOAD_TIMEOUT_SECONDS)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+    except FutureTimeoutError:
+        logger.warning(
+            "获取 %s 资讯超过 %.1fs，行情接口将继续返回价格数据",
+            stock_code,
+            NEWS_PAYLOAD_TIMEOUT_SECONDS,
+        )
+        return []
     except Exception as e:
         logger.warning("获取 %s 资讯失败，行情接口将继续返回价格数据: %s", stock_code, e)
         return []

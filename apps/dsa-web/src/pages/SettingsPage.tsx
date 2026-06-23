@@ -3,8 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth, useSystemConfig } from '../hooks';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { createParsedApiError, getParsedApiError, type ParsedApiError } from '../api/error';
-import { alphasiftApi, notifyAlphaSiftConfigChanged, notifySystemConfigChanged } from '../api/alphasift';
-import { systemConfigApi } from '../api/systemConfig';
+import { notifySystemConfigChanged, systemConfigApi } from '../api/systemConfig';
 import { ApiErrorAlert, Button, ConfirmDialog, EmptyState } from '../components/common';
 import {
   AuthSettingsCard,
@@ -214,11 +213,8 @@ const SettingsPage: React.FC = () => {
   const { language: uiLanguage, t } = useUiLanguage();
   const [envBackupActionError, setEnvBackupActionError] = useState<ParsedApiError | null>(null);
   const [envBackupActionSuccess, setEnvBackupActionSuccess] = useState<string>('');
-  const [alphaSiftActionError, setAlphaSiftActionError] = useState<ParsedApiError | null>(null);
-  const [alphaSiftActionSuccess, setAlphaSiftActionSuccess] = useState<string>('');
   const [isExportingEnv, setIsExportingEnv] = useState(false);
   const [isImportingEnv, setIsImportingEnv] = useState(false);
-  const [isUpdatingAlphaSift, setIsUpdatingAlphaSift] = useState(false);
   const [showImportConfirm, setShowImportConfirm] = useState(false);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
   const [isCheckingDesktopUpdate, setIsCheckingDesktopUpdate] = useState(false);
@@ -256,7 +252,6 @@ const SettingsPage: React.FC = () => {
     save,
     resetDraft,
     setDraftValue,
-    getChangedItems,
     refreshAfterExternalSave,
     configVersion,
     maskToken,
@@ -326,8 +321,6 @@ const SettingsPage: React.FC = () => {
 
   const rawActiveItems = itemsByCategory[activeCategory] || [];
   const rawActiveItemMap = new Map(rawActiveItems.map((item) => [item.key, String(item.value ?? '')]));
-  const alphasiftItem = (itemsByCategory.data_source || []).find((item) => item.key === 'ALPHASIFT_ENABLED');
-  const alphasiftEnabled = String(alphasiftItem?.value ?? '').trim().toLowerCase() === 'true';
   const hasConfiguredChannels = Boolean((rawActiveItemMap.get('LLM_CHANNELS') || '').trim());
   const hasLitellmConfig = Boolean((rawActiveItemMap.get('LITELLM_CONFIG') || '').trim());
 
@@ -341,7 +334,6 @@ const SettingsPage: React.FC = () => {
     'LITELLM_MODEL',
     'AGENT_LITELLM_MODEL',
     'LITELLM_FALLBACK_MODELS',
-    'AIHUBMIX_KEY',
     'DEEPSEEK_API_KEY',
     'DEEPSEEK_API_KEYS',
     'GEMINI_API_KEY',
@@ -367,6 +359,7 @@ const SettingsPage: React.FC = () => {
   ]);
   const DATA_SOURCE_HIDDEN_KEYS = new Set([
     'ALPHASIFT_ENABLED',
+    'ALPHASIFT_INSTALL_SPEC',
   ]);
   const AGENT_HIDDEN_KEYS = new Set<string>();
   const activeItems =
@@ -485,64 +478,12 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  const updateAlphaSiftEnabled = async (nextEnabled: boolean) => {
-    setAlphaSiftActionError(null);
-    setAlphaSiftActionSuccess('');
-    setIsUpdatingAlphaSift(true);
-    try {
-      if (nextEnabled) {
-        await alphasiftApi.enable();
-        await refreshAfterExternalSave(['ALPHASIFT_ENABLED']);
-        setAlphaSiftActionSuccess(t('settings.enabledAlphaSiftSuccess'));
-        return;
-      }
-
-      await systemConfigApi.update({
-        configVersion,
-        maskToken,
-        reloadNow: true,
-        items: [{ key: 'ALPHASIFT_ENABLED', value: 'false' }],
-      });
-      notifyAlphaSiftConfigChanged();
-      await refreshAfterExternalSave(['ALPHASIFT_ENABLED']);
-      setAlphaSiftActionSuccess(t('settings.disabledAlphaSiftSuccess'));
-    } catch (error: unknown) {
-      setAlphaSiftActionError(getParsedApiError(error));
-      await refreshAfterExternalSave(['ALPHASIFT_ENABLED']);
-    } finally {
-      setIsUpdatingAlphaSift(false);
-    }
-  };
-
   const handleSaveConfig = async () => {
-    const changedItems = getChangedItems();
-    const changedAlphaSiftItem = changedItems.find((item) => item.key === 'ALPHASIFT_ENABLED');
     const result = await save();
     if (!result.success) {
       return;
     }
     notifySystemConfigChanged();
-    if (!changedAlphaSiftItem) {
-      return;
-    }
-
-    setAlphaSiftActionError(null);
-    setAlphaSiftActionSuccess('');
-    try {
-      const isAlphaSiftEnabled = changedAlphaSiftItem.value.trim().toLowerCase() === 'true';
-      if (isAlphaSiftEnabled) {
-        await alphasiftApi.enable();
-        await refreshAfterExternalSave(['ALPHASIFT_ENABLED']);
-        setAlphaSiftActionSuccess(t('settings.enabledAlphaSiftSuccess'));
-        return;
-      }
-
-      notifyAlphaSiftConfigChanged();
-      setAlphaSiftActionSuccess(t('settings.disabledAlphaSiftSuccess'));
-    } catch (error: unknown) {
-      setAlphaSiftActionError(getParsedApiError(error));
-      await refreshAfterExternalSave(['ALPHASIFT_ENABLED']);
-    }
   };
 
   const openDesktopReleasePage = async () => {
@@ -681,55 +622,6 @@ const SettingsPage: React.FC = () => {
           </aside>
 
           <section className="space-y-4">
-            {alphasiftItem ? (
-              <SettingsSectionCard
-                title={t('settings.alphaSift')}
-                description={t('settings.alphaSiftDescription')}
-              >
-                <div className="flex flex-col gap-4 rounded-2xl border settings-border bg-background/35 px-4 py-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">
-                      {alphasiftEnabled ? t('settings.alphaSiftEnabled') : t('settings.alphaSiftDisabled')}
-                    </p>
-                    <p className="mt-1 text-xs leading-6 text-muted-text">
-                      {t('settings.alphaSiftSummary')}
-                    </p>
-                    <p className="mt-2 text-xs leading-6 text-amber-700 dark:text-amber-300">
-                      {t('settings.alphaSiftRisk')}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="settings-secondary"
-                      onClick={() => setActiveCategory('data_source')}
-                    >
-                      {t('settings.viewConfigItems')}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={alphasiftEnabled ? 'settings-secondary' : 'settings-primary'}
-                      onClick={() => void updateAlphaSiftEnabled(!alphasiftEnabled)}
-                      disabled={isSaving || isLoading || isUpdatingAlphaSift}
-                      isLoading={isUpdatingAlphaSift}
-                      loadingText={alphasiftEnabled ? t('settings.disablingAlphaSift') : t('settings.enablingAlphaSift')}
-                    >
-                      {alphasiftEnabled ? t('settings.disableAlphaSift') : t('settings.enableAlphaSift')}
-                    </Button>
-                  </div>
-                </div>
-                {alphaSiftActionError ? (
-                  <div className="mt-3">
-                    <ApiErrorAlert error={alphaSiftActionError} />
-                  </div>
-                ) : null}
-                {!alphaSiftActionError && alphaSiftActionSuccess ? (
-                  <div className="mt-3">
-                    <SettingsAlert title={t('settings.actionSuccess')} message={alphaSiftActionSuccess} variant="success" />
-                  </div>
-                ) : null}
-              </SettingsSectionCard>
-            ) : null}
             {activeCategory === 'system' ? <AuthSettingsCard /> : null}
             {activeCategory === 'system' ? (
               <SettingsSectionCard

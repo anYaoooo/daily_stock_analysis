@@ -50,15 +50,6 @@ export const LLM_PROVIDER_CAPABILITY_LABELS: Record<LLMProviderCapability, { lab
 
 export const LLM_PROVIDER_TEMPLATES: LLMProviderTemplate[] = [
   {
-    channelId: 'aihubmix',
-    label: 'AIHubmix（聚合平台）',
-    protocol: 'openai',
-    baseUrl: 'https://aihubmix.com/v1',
-    placeholderModels: 'gpt-5.5,claude-sonnet-4-6,gemini-3.1-pro-preview',
-    capabilities: ['openai-compatible', 'aggregator'],
-    officialSources: [{ label: 'AIHubmix', url: 'https://aihubmix.com/' }],
-  },
-  {
     channelId: 'deepseek',
     label: 'DeepSeek 官方',
     protocol: 'deepseek',

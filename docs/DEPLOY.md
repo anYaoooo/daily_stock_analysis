@@ -212,7 +212,7 @@ journalctl -u stock-analyzer -f
 |--------|--------|------|
 | `SCHEDULE_ENABLED` | `false` | 是否启用定时任务 |
 | `SCHEDULE_TIME` | `18:00` | 每日执行时间 |
-| `MARKET_REVIEW_ENABLED` | `true` | 是否启用大盘复盘 |
+| `MARKET_REVIEW_ENABLED` | `false` | 是否启用大盘复盘；默认关闭以避免项目启动时自动生成 |
 | `ANSPIRE_API_KEYS` | - | Anspire 大模型与新闻搜索（推荐） |
 | `AIHUBMIX_KEY` | - | AIHubMix 一 Key 多模型（推荐） |
 | `SERPAPI_API_KEYS` | - | SerpAPI 实时金融新闻搜索（推荐） |

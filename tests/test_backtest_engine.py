@@ -58,6 +58,54 @@ class BacktestEngineTestCase(unittest.TestCase):
         self.assertEqual(res["simulated_return_pct"], 0.0)
         self.assertEqual(res["first_hit"], "not_applicable")
 
+    def test_explicit_short_advice_opens_short_position(self):
+        self.assertEqual(
+            BacktestEngine.infer_position_recommendation("BTC 空单入场，跌破支撑后做空开仓"),
+            "short",
+        )
+        self.assertEqual(
+            BacktestEngine.infer_direction_expected("BTC 空单入场，跌破支撑后做空开仓"),
+            "down",
+        )
+
+    def test_short_take_profit_hit_when_price_falls(self):
+        cfg = EvaluationConfig(eval_window_days=3, neutral_band_pct=2.0)
+        bars = self._bars(date(2024, 1, 1), [98, 95, 94], highs=[101, 99, 96], lows=[97, 94, 93])
+        res = BacktestEngine.evaluate_single(
+            operation_advice="BTC 空单入场，做空开仓",
+            analysis_date=date(2024, 1, 1),
+            start_price=100,
+            forward_bars=bars,
+            stop_loss=103,
+            take_profit=94,
+            config=cfg,
+        )
+
+        self.assertEqual(res["position_recommendation"], "short")
+        self.assertTrue(res["hit_take_profit"])
+        self.assertEqual(res["first_hit"], "take_profit")
+        self.assertEqual(res["simulated_exit_price"], 94)
+        self.assertAlmostEqual(res["simulated_return_pct"], 6.0)
+
+    def test_short_stop_loss_hit_when_price_rises(self):
+        cfg = EvaluationConfig(eval_window_days=3, neutral_band_pct=2.0)
+        bars = self._bars(date(2024, 1, 1), [101, 103, 104], highs=[102, 104, 105], lows=[99, 101, 103])
+        res = BacktestEngine.evaluate_single(
+            operation_advice="open short below support",
+            analysis_date=date(2024, 1, 1),
+            start_price=100,
+            forward_bars=bars,
+            stop_loss=104,
+            take_profit=94,
+            config=cfg,
+        )
+
+        self.assertEqual(res["position_recommendation"], "short")
+        self.assertTrue(res["hit_stop_loss"])
+        self.assertEqual(res["first_hit"], "stop_loss")
+        self.assertEqual(res["simulated_exit_price"], 104)
+        self.assertAlmostEqual(res["simulated_return_pct"], -4.0)
+
     def test_wait_maps_to_cash_and_flat_direction(self):
         cfg = EvaluationConfig(eval_window_days=3, neutral_band_pct=2.0)
         # Stock drops ~5%: AI said wait (neutral), stock moved significantly → loss

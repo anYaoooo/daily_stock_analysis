@@ -22,6 +22,7 @@ import litellm
 from json_repair import repair_json
 from litellm import Router
 
+from data_provider.base import normalize_stock_code
 from src.agent.llm_adapter import (
     get_thinking_extra_body,
     resolve_fallback_litellm_wire_models,
@@ -62,6 +63,7 @@ from src.report_language import (
 )
 from src.schemas.decision_action import build_action_fields
 from src.schemas.report_schema import AnalysisReportSchema
+from src.core.trading_calendar import get_market_for_stock
 from src.market_context import get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
 from src.market_phase_prompt import format_market_phase_prompt_section
@@ -1952,6 +1954,22 @@ class GeminiAnalyzer:
                 "stop_loss": "止损位：XX元（失效条件或X%风险）",
                 "take_profit": "目标位：XX元（按阻力位/风险回报比制定）"
             },
+            "long_plan": {
+                "entry_price": "多单入场价：XX（突破确认/回踩确认）",
+                "stop_loss": "多单止损：XX",
+                "take_profit": "多单目标：XX",
+                "trigger_condition": "多单触发条件",
+                "invalidation": "多单失效条件",
+                "reason": "多单依据：价格行为/量能/VWAP/EMA/斐波那契共振"
+            },
+            "short_plan": {
+                "entry_price": "空单入场价：XX（跌破确认/反抽确认）",
+                "stop_loss": "空单止损：XX",
+                "take_profit": "空单目标：XX",
+                "trigger_condition": "空单触发条件",
+                "invalidation": "空单失效条件",
+                "reason": "空单依据：价格行为/量能/VWAP/EMA/斐波那契共振"
+            },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
                 "entry_plan": "分批建仓策略描述",
@@ -2120,17 +2138,52 @@ class GeminiAnalyzer:
             ),
         )
 
+    def _adapt_default_skill_policy_for_context(
+        self,
+        default_skill_policy: str,
+        *,
+        context: Dict[str, Any],
+        use_legacy_default_prompt: bool,
+    ) -> str:
+        """Use a two-way BTC baseline instead of the stock long-only baseline."""
+
+        if not default_skill_policy or not use_legacy_default_prompt:
+            return default_skill_policy
+
+        market = str(context.get("market") or "").strip().lower()
+        code = str(context.get("code") or context.get("stock_code") or "").strip()
+        normalized = normalize_stock_code(code)
+        if market != "crypto" and get_market_for_stock(normalized) != "crypto":
+            return default_skill_policy
+
+        from src.agent.skills.defaults import get_crypto_two_way_trading_skill_policy
+
+        return get_crypto_two_way_trading_skill_policy(explicit_skill_selection=False)
+
     def _get_analysis_system_prompt(self, report_language: str, stock_code: str = "") -> str:
         """Build the analyzer system prompt with output-language guidance."""
         lang = normalize_report_language(report_language)
         market_role = get_market_role(stock_code, lang)
         market_guidelines = get_market_guidelines(stock_code, lang)
         skill_instructions, default_skill_policy, use_legacy_default_prompt = self._get_skill_prompt_sections()
+        default_skill_policy = self._adapt_default_skill_policy_for_context(
+            default_skill_policy,
+            context={"code": stock_code},
+            use_legacy_default_prompt=use_legacy_default_prompt,
+        )
         if use_legacy_default_prompt:
-            base_prompt = self.LEGACY_DEFAULT_SYSTEM_PROMPT.replace(
-                "{market_placeholder}", market_role
-            ).replace(
-                "{guidelines_placeholder}", market_guidelines
+            if default_skill_policy and default_skill_policy != CORE_TRADING_SKILL_POLICY_ZH:
+                base_prompt = (
+                    self.SYSTEM_PROMPT.replace("{market_placeholder}", market_role)
+                    .replace("{guidelines_placeholder}", market_guidelines)
+                    .replace("{default_skill_policy_section}", f"{default_skill_policy}\n")
+                    .replace("{skills_section}", "")
+                )
+            else:
+                base_prompt = self.LEGACY_DEFAULT_SYSTEM_PROMPT.replace(
+                    "{market_placeholder}", market_role
+                ).replace(
+                    "{guidelines_placeholder}", market_guidelines
             )
         else:
             skills_section = ""
@@ -2946,6 +2999,14 @@ class GeminiAnalyzer:
         code = context.get('code', 'Unknown')
         report_language = normalize_report_language(report_language)
         _, _, use_legacy_default_prompt = self._get_skill_prompt_sections()
+        normalized_code = normalize_stock_code(str(code))
+        is_crypto_context = (
+            str(context.get("market") or "").strip().lower() == "crypto"
+            or get_market_for_stock(normalized_code) == "crypto"
+            or isinstance(context.get("crypto_technical"), dict)
+        )
+        if is_crypto_context:
+            use_legacy_default_prompt = False
         
         # 优先使用上下文中的股票名称（从 realtime_quote 获取）
         stock_name = context.get('stock_name', name)
@@ -3233,6 +3294,31 @@ class GeminiAnalyzer:
 **一致性约束**：
 {chr(10).join('- ' + note for note in consistency_notes)}
 """
+
+        crypto_technical = context.get("crypto_technical") if isinstance(context, dict) else None
+        if isinstance(crypto_technical, dict):
+            price_action = crypto_technical.get("price_action") or {}
+            fib = crypto_technical.get("fibonacci") or {}
+            fib_levels = fib.get("retracement_levels") or {}
+            volume = crypto_technical.get("volume") or {}
+            vwap = crypto_technical.get("vwap") or {}
+            ema = crypto_technical.get("ema") or {}
+            prompt += f"""
+### BTC 交易框架补充（必须纳入结论）
+| 维度 | 当前读数 | 分析要求 |
+|------|----------|----------|
+| Price Action（价格行为） | 状态={price_action.get('state', unknown_text)}；近20根高点={price_action.get('recent_high', 'N/A')}；近20根低点={price_action.get('recent_low', 'N/A')}；最新涨跌={price_action.get('close_change_pct', 'N/A')}% | 直接判断当前是突破、跌破、推进还是区间震荡；不要只复述指标 |
+| Fibonacci（斐波那契回调） | swing high={fib.get('swing_high', 'N/A')}；swing low={fib.get('swing_low', 'N/A')}；38.2%={fib_levels.get('38.2%', 'N/A')}；50%={fib_levels.get('50.0%', 'N/A')}；61.8%={fib_levels.get('61.8%', 'N/A')} | 将这些位置作为潜在支撑/阻力，给出回踩和失守观察点 |
+| Volume（成交量） | 最新={volume.get('latest', 'N/A')}；均量={volume.get('average', 'N/A')}；量比={volume.get('ratio', 'N/A')}；确认={volume.get('confirmation', 'N/A')} | 判断突破/跌破是否有成交量确认，低量突破必须降权 |
+| VWAP（成交量加权均价） | rolling20 VWAP={vwap.get('rolling_20', 'N/A')}；价格位置={vwap.get('price_position', 'N/A')} | 价格在 VWAP 上方偏多头强势，下方偏空头压制；日线数据下按 rolling VWAP 解读 |
+| EMA（指数移动平均） | EMA20={ema.get('ema20', 'N/A')}；EMA50={ema.get('ema50', 'N/A')}；结构={ema.get('structure', 'N/A')} | 判断短中期趋势延续或反转，必须和 MA/MACD/RSI 交叉验证 |
+
+> BTC 特别要求：最终操作建议必须同时引用 Price Action、Fibonacci、Volume、VWAP、EMA 中至少三个维度；若这些维度互相冲突，优先输出“等待确认/区间策略”，不要给激进追涨、抄底或盲目开空建议。
+> BTC 双向交易要求：BTC 支持多单和空单，分析时必须同时评估 Long/多单与 Short/空单，不得只给多单买入视角。若多头条件更强，给出多单入场、止损、目标和失效条件；若空头条件更强，给出空单入场/做空开仓、止损、目标和失效条件；若多空都不满足，明确“不做多也不做空，等待确认”。
+> BTC 策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 必须同时输出，分别包含 `entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件，不要省略该方向。
+> BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。
+> BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；其中 `buy` 表示多单开仓/加多，`sell` 表示空单开仓/加空或多单风控退出，`hold` 表示等待/区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”。
+"""
         
         # 添加昨日对比数据
         if 'yesterday' in context:
@@ -3341,13 +3427,17 @@ class GeminiAnalyzer:
 4. ❓ 消息面有无重大利空或与技能结论冲突的信息？
 5. ❓ 若结论成立，具体触发条件、止损位、观察点分别是什么？
 """
+        if isinstance(crypto_technical, dict):
+            prompt += """
+6. ❓ BTC 专项：Price Action、Fibonacci、Volume、VWAP、EMA 对多单与空单分别是否形成共振？多单/空单各自的触发价、止损价、目标价、确认条件和失效条件是什么？
+"""
         prompt += f"""
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
 - **核心结论**：一句话说清该买/该卖/该等
 - **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做
-- **具体狙击点位**：买入价、止损价、目标价（精确到分）
+- **具体狙击点位**：买入价、止损价、目标价（精确到分）；BTC 必须同时输出 `long_plan` 与 `short_plan` 两套策略，且每套都包含入场价、止损价、目标价、触发条件、失效条件和依据
 - **检查清单**：每项用 ✅/⚠️/❌ 标记
 - **消息面时间合规**：`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息
 - **技术面一致性**：严禁把“空头排列”和“多头排列”等互斥结论同时当作有效依据；若基本面/事件面与技术面冲突，必须明确写“事件先行、技术待确认”或“基本面偏多，但技术面尚未确认”

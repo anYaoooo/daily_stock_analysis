@@ -569,6 +569,48 @@ class AnalysisHistoryTestCase(unittest.TestCase):
 
         self.assertEqual([record.code for record in records], ["600519"])
 
+    def test_stock_bar_returns_multiple_records_for_same_symbol(self) -> None:
+        if get_stock_bar is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        first_result = self._build_result()
+        first_result.code = "BTC"
+        first_result.name = "Bitcoin"
+        second_result = self._build_result()
+        second_result.code = "BTC"
+        second_result.name = "Bitcoin"
+        second_result.sentiment_score = 36
+
+        first_id = self.db.save_analysis_history(
+            result=first_result,
+            query_id="query_btc_stock_bar_1",
+            report_type="detailed",
+            news_content="BTC first",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        second_id = self.db.save_analysis_history(
+            result=second_result,
+            query_id="query_btc_stock_bar_2",
+            report_type="detailed",
+            news_content="BTC second",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.assertGreater(first_id, 0)
+        self.assertGreater(second_id, 0)
+
+        response = get_stock_bar(
+            start_date=None,
+            end_date=None,
+            limit=10,
+            db_manager=self.db,
+        )
+
+        btc_items = [item for item in response.items if item.stock_code == "BTC"]
+        self.assertEqual([item.id for item in btc_items], [second_id, first_id])
+        self.assertEqual([item.analysis_count for item in btc_items], [1, 1])
+
     def test_stock_bar_item_derives_action_fields_from_legacy_advice(self) -> None:
         if get_stock_bar is None:
             self.skipTest("fastapi is not installed in this test environment")

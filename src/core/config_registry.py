@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 from src.config import (
     AGENT_CONTEXT_COMPRESSION_PROFILES,
     AGENT_MAX_STEPS_DEFAULT,
-    DEFAULT_ALPHASIFT_INSTALL_SPEC,
 )
 from src.notification_noise import NOTIFICATION_SEVERITIES
 from src.notification_routing import ROUTABLE_NOTIFICATION_CHANNELS
@@ -80,35 +79,48 @@ WEB_SETTINGS_HIDDEN_FROM_UI = {
     "USE_PROXY",
     "PROXY_HOST",
     "PROXY_PORT",
+    "ALPHASIFT_ENABLED",
+    "ALPHASIFT_INSTALL_SPEC",
+    "DAILY_MARKET_CONTEXT_ENABLED",
+    "MARKET_REVIEW_COLOR_SCHEME",
+    "MARKET_REVIEW_ENABLED",
+    "MARKET_REVIEW_REGION",
+    "STOCK_INDEX_REMOTE_UPDATE_ENABLED",
+    "TUSHARE_TOKEN",
+    "TICKFLOW_API_KEY",
+    "PYTDX_HOST",
+    "PYTDX_PORT",
+    "PYTDX_SERVERS",
+    "AIHUBMIX_KEY",
+    "ANSPIRE_API_KEYS",
+    "ANSPIRE_LLM_ENABLED",
+    "ANSPIRE_LLM_BASE_URL",
+    "ANSPIRE_LLM_MODEL",
 }
 
 _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "STOCK_LIST": {
-        "title": "Stock List",
-        "description": "Comma-separated watchlist stock codes.",
+        "title": "BTC Symbol",
+        "description": "BTC-only analysis symbol list. BTC aliases are normalized to BTC.",
         "category": "base",
         "data_type": "array",
         "ui_control": "textarea",
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "600519,300750,002594",
+        "default_value": "BTC",
         "options": [],
         "validation": {"min_items": 1},
         "display_order": 10,
         "help_key": "settings.base.STOCK_LIST",
         "examples": [
-            "STOCK_LIST=600519,300750,002594",
-            "STOCK_LIST=600519,hk00700,AAPL",
+            "STOCK_LIST=BTC",
+            "STOCK_LIST=BTCUSDT",
         ],
         "docs": [
             {
                 "label": "完整指南：环境变量完整列表",
                 "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
-            },
-            {
-                "label": "Tushare 股票列表指南",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/TUSHARE_STOCK_LIST_GUIDE.md",
             },
         ],
         "warning_codes": [],
@@ -274,7 +286,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "display_order": 4,
         "help_key": "settings.ai_model.LLM_CHANNELS",
         "examples": [
-            "LLM_CHANNELS=deepseek,aihubmix",
+            "LLM_CHANNELS=deepseek,gemini",
             "LLM_DEEPSEEK_BASE_URL=https://api.deepseek.com",
             "LLM_DEEPSEEK_API_KEY=sk-xxxx",
             "LLM_DEEPSEEK_MODELS=deepseek-v4-flash,deepseek-v4-pro",
@@ -371,80 +383,6 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
-    "AIHUBMIX_KEY": {
-        "title": "AIHubmix Key",
-        "description": "AIHubmix one-stop API key – access all mainstream models with a single key, no VPN required. Auto-sets base URL to aihubmix.com/v1. Get key: https://aihubmix.com/?aff=CfMq",
-        "category": "ai_model",
-        "data_type": "string",
-        "ui_control": "password",
-        "is_sensitive": True,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": None,
-        "options": [],
-        "validation": {},
-        "display_order": 5,
-        "help_key": "settings.ai_model.provider_keys",
-        "examples": [
-            "AIHUBMIX_KEY=sk-xxxx",
-        ],
-        "docs": [
-            {
-                "label": "LLM 配置指南",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/LLM_CONFIG_GUIDE.md",
-            },
-            {
-                "label": "LLM 服务商配置速查",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/llm-providers.md",
-            },
-        ],
-        "warning_codes": ["secret_value"],
-    },
-    "ANSPIRE_LLM_ENABLED": {
-        "title": "Anspire LLM Enabled",
-        "description": "Use ANSPIRE_API_KEYS as an OpenAI-compatible Anspire LLM key when no higher-priority LLM channel or OpenAI-compatible key is configured.",
-        "category": "ai_model",
-        "data_type": "boolean",
-        "ui_control": "switch",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": "true",
-        "options": [],
-        "validation": {},
-        "display_order": 6,
-    },
-    "ANSPIRE_LLM_BASE_URL": {
-        "title": "Anspire LLM Base URL",
-        "description": "Anspire OpenAI-compatible gateway. Default: https://open-gateway.anspire.cn/v6; global endpoint: https://open-gateway.anspire.ai/v6.",
-        "category": "ai_model",
-        "data_type": "string",
-        "ui_control": "text",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": "https://open-gateway.anspire.cn/v6",
-        "options": [],
-        "validation": {"format": "url"},
-        "display_order": 7,
-    },
-    "ANSPIRE_LLM_MODEL": {
-        "title": "Anspire LLM Model",
-        "description": "Default model used when ANSPIRE_API_KEYS enables the Anspire LLM gateway without an explicit LITELLM_MODEL.",
-        "category": "ai_model",
-        "data_type": "string",
-        "ui_control": "text",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": "Doubao-Seed-2.0-lite",
-        "options": [],
-        "validation": {},
-        "display_order": 8,
-    },
-    # ------------------------------------------------------------------
-    # AI Model – DeepSeek official (independent from OpenAI-compatible)
-    # ------------------------------------------------------------------
     "DEEPSEEK_API_KEY": {
         "title": "DeepSeek API Key",
         "description": "Official DeepSeek API key (from https://platform.deepseek.com). For compatibility, a key set alone still auto-infers deepseek/deepseek-chat and logs a deprecation warning; new configs should migrate to deepseek/deepseek-v4-flash. Also works in multi-channel mode.",
@@ -489,165 +427,6 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {"multi_value": True, "delimiter": ","},
         "display_order": 7,
     },
-    "TUSHARE_TOKEN": {
-        "title": "Tushare Token",
-        "description": "Token for Tushare Pro API.",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "password",
-        "is_sensitive": True,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": None,
-        "options": [],
-        "validation": {},
-        "display_order": 10,
-        "help_key": "settings.data_source.TUSHARE_TOKEN",
-        "examples": [
-            "TUSHARE_TOKEN=your_tushare_token",
-        ],
-        "docs": [
-            {
-                "label": "Tushare 股票列表指南",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/TUSHARE_STOCK_LIST_GUIDE.md",
-            },
-            {
-                "label": "完整指南：环境变量完整列表",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
-            },
-        ],
-        "warning_codes": ["secret_value"],
-    },
-    "TICKFLOW_API_KEY": {
-        "title": "TickFlow API Key",
-        "description": "API key for TickFlow market review enhancement (A-share indices, plus market stats when universe queries are enabled).",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "password",
-        "is_sensitive": True,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": None,
-        "options": [],
-        "validation": {},
-        "display_order": 15,
-    },
-    "STOCK_INDEX_REMOTE_UPDATE_ENABLED": {
-        "title": "Remote Stock Index Updates",
-        "description": "Automatically refresh the local stock autocomplete index from the built-in GitHub main source.",
-        "category": "data_source",
-        "data_type": "boolean",
-        "ui_control": "switch",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": "true",
-        "options": [],
-        "validation": {},
-        "display_order": 16,
-        "help_key": "settings.data_source.stock_index_remote",
-        "examples": [
-            "STOCK_INDEX_REMOTE_UPDATE_ENABLED=true",
-            "STOCK_INDEX_REMOTE_UPDATE_ENABLED=false",
-        ],
-        "docs": [
-            {
-                "label": "Tushare 股票列表指南",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/TUSHARE_STOCK_LIST_GUIDE.md",
-            },
-        ],
-        "warning_codes": [],
-    },
-    "ALPHASIFT_ENABLED": {
-        "title": "AlphaSift Screening",
-        "description": "Enable the built-in AlphaSift stock screening tab. Disabled by default. This switch only affects the AlphaSift screening path; it does not migrate, sanitize, or clear existing LLM/runtime fields in `.env`.",
-        "category": "data_source",
-        "data_type": "boolean",
-        "ui_control": "switch",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": "false",
-        "options": [],
-        "validation": {},
-        "display_order": 17,
-        "help_key": "settings.data_source.ALPHASIFT_ENABLED",
-        "examples": [
-            "ALPHASIFT_ENABLED=false",
-            "ALPHASIFT_ENABLED=true",
-        ],
-        "docs": [
-            {
-                "label": "LiteLLM Providers（官方）",
-                "href": "https://docs.litellm.ai/docs/providers",
-            },
-            {
-                "label": "LiteLLM OpenAI-compatible（官方）",
-                "href": "https://docs.litellm.ai/docs/providers/openai_compatible",
-            },
-            {
-                "label": "OpenAI 请求与鉴权（官方）",
-                "href": "https://platform.openai.com/docs/api-reference/authentication",
-            },
-            {
-                "label": "AlphaSift 集成说明",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/alphasift-integration.md",
-            },
-        ],
-    },
-    "ALPHASIFT_INSTALL_SPEC": {
-        "title": "AlphaSift Install Spec",
-        "description": "Pinned AlphaSift pip source used for explicit repair installs and source verification. It is not used for normal runtime calls after startup dependency installation; runtime compatibility is built from DSA's resolved LLM/runtime context.",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "password",
-        "is_sensitive": True,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": DEFAULT_ALPHASIFT_INSTALL_SPEC,
-        "options": [],
-        "validation": {},
-        "display_order": 18,
-        "help_key": "settings.data_source.ALPHASIFT_INSTALL_SPEC",
-        "examples": [
-            f"ALPHASIFT_INSTALL_SPEC={DEFAULT_ALPHASIFT_INSTALL_SPEC}",
-        ],
-        "docs": [
-            {
-                "label": "requirements.txt（版本与依赖边界）",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/requirements.txt",
-            },
-            {
-                "label": "AlphaSift 集成说明",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/alphasift-integration.md",
-            },
-        ],
-    },
-    "REALTIME_SOURCE_PRIORITY": {
-        "title": "Realtime Source Priority",
-        "description": "Comma-separated priority for realtime quote providers.",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "text",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": "tencent,akshare_sina,efinance,akshare_em",
-        "options": [],
-        "validation": {},
-        "display_order": 20,
-        "help_key": "settings.data_source.REALTIME_SOURCE_PRIORITY",
-        "examples": [
-            "REALTIME_SOURCE_PRIORITY=tencent,akshare_sina,efinance,akshare_em",
-        ],
-        "docs": [
-            {
-                "label": "完整指南：数据源配置",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#数据源配置",
-            },
-        ],
-        "warning_codes": ["provider_priority_order"],
-    },
     "ENABLE_REALTIME_TECHNICAL_INDICATORS": {
         "title": "Realtime Technical Indicators",
         "description": "Use intraday realtime price for MA5/MA10/MA20 and trend analysis (Issue #234). Disable to use yesterday close.",
@@ -673,31 +452,6 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
         "warning_codes": [],
-    },
-    "ANSPIRE_API_KEYS": {
-        "title": "Anspire API Keys",
-        "description": "Comma-separated Anspire Open API keys. Used by Anspire Search and, by default, the Anspire OpenAI-compatible LLM gateway.",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "password",
-        "is_sensitive": True,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": None,
-        "options": [],
-        "validation": {"multi_value": True, "delimiter": ","},
-        "display_order": 22,
-        "help_key": "settings.data_source.search_api_keys",
-        "examples": [
-            "ANSPIRE_API_KEYS=key1,key2",
-        ],
-        "docs": [
-            {
-                "label": "完整指南：搜索服务配置",
-                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#搜索服务配置",
-            },
-        ],
-        "warning_codes": ["secret_value", "comma_separated_keys"],
     },
     "TAVILY_API_KEYS": {
         "title": "Tavily API Keys",
@@ -944,48 +698,6 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "validation": {"min": 0.0, "max": 50.0},
         "display_order": 62,
     },
-    "PYTDX_HOST": {
-        "title": "Pytdx Host",
-        "description": "Tongdaxin data server IP. Used with PYTDX_PORT. Overrides built-in defaults.",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "text",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": None,
-        "options": [],
-        "validation": {},
-        "display_order": 55,
-    },
-    "PYTDX_PORT": {
-        "title": "Pytdx Port",
-        "description": "Tongdaxin data server port (e.g. 7709). Used with PYTDX_HOST.",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "text",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": None,
-        "options": [],
-        "validation": {},
-        "display_order": 56,
-    },
-    "PYTDX_SERVERS": {
-        "title": "Pytdx Servers",
-        "description": "Comma-separated ip:port (e.g. 192.168.1.1:7709,10.0.0.1:7709). Overrides PYTDX_HOST+PYTDX_PORT.",
-        "category": "data_source",
-        "data_type": "string",
-        "ui_control": "text",
-        "is_sensitive": False,
-        "is_required": False,
-        "is_editable": True,
-        "default_value": None,
-        "options": [],
-        "validation": {},
-        "display_order": 57,
-    },
     "GEMINI_API_KEY": {
         "title": "Gemini API Key",
         "description": "Single API key for Gemini service (from https://aistudio.google.com).",
@@ -1105,7 +817,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "OPENAI_API_KEYS": {
         "title": "OpenAI API Keys (Multi)",
-        "description": "Comma-separated OpenAI-compatible API keys for load balancing. Takes priority over AIHUBMIX_KEY and OPENAI_API_KEY.",
+        "description": "Comma-separated OpenAI-compatible API keys for load balancing. Takes priority over OPENAI_API_KEY.",
         "category": "ai_model",
         "data_type": "string",
         "ui_control": "password",
@@ -3026,13 +2738,13 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "true",
+        "default_value": "false",
         "options": [],
         "validation": {},
         "display_order": 46,
         "help_key": "settings.system.market_review",
         "examples": [
-            "MARKET_REVIEW_ENABLED=true",
+            "MARKET_REVIEW_ENABLED=false",
             "MARKET_REVIEW_REGION=cn",
         ],
         "docs": [
@@ -3996,33 +3708,6 @@ _DOC_CUSTOM_WEBHOOK = [
 ]
 
 _FIELD_HELP_METADATA: Dict[str, Dict[str, Any]] = {
-    "ANSPIRE_LLM_ENABLED": {
-        "help_key": "settings.ai_model.anspire_llm",
-        "examples": [
-            "ANSPIRE_LLM_ENABLED=true",
-            "ANSPIRE_API_KEYS=your_anspire_key",
-        ],
-        "docs": _DOC_LLM_CONFIG,
-        "warning_codes": [],
-    },
-    "ANSPIRE_LLM_BASE_URL": {
-        "help_key": "settings.ai_model.anspire_llm",
-        "examples": [
-            "ANSPIRE_LLM_BASE_URL=https://open-gateway.anspire.cn/v6",
-            "ANSPIRE_LLM_BASE_URL=https://open-gateway.anspire.ai/v6",
-        ],
-        "docs": _DOC_LLM_CONFIG,
-        "warning_codes": ["base_url_must_match_provider"],
-    },
-    "ANSPIRE_LLM_MODEL": {
-        "help_key": "settings.ai_model.anspire_llm",
-        "examples": [
-            "ANSPIRE_LLM_MODEL=Doubao-Seed-2.0-lite",
-            "LITELLM_MODEL=openai/Doubao-Seed-2.0-lite",
-        ],
-        "docs": _DOC_LLM_CONFIG,
-        "warning_codes": [],
-    },
     "DEEPSEEK_API_KEYS": {
         "help_key": "settings.ai_model.provider_keys",
         "examples": [
@@ -4139,14 +3824,6 @@ _FIELD_HELP_METADATA: Dict[str, Dict[str, Any]] = {
         "docs": _DOC_LLM_CONFIG,
         "warning_codes": ["legacy_provider_setting"],
     },
-    "TICKFLOW_API_KEY": {
-        "help_key": "settings.data_source.TICKFLOW_API_KEY",
-        "examples": [
-            "TICKFLOW_API_KEY=your_tickflow_key",
-        ],
-        "docs": _DOC_FULL_GUIDE_DATA_SOURCE,
-        "warning_codes": ["secret_value"],
-    },
     "SERPAPI_API_KEYS": {
         "help_key": "settings.data_source.search_api_keys",
         "examples": [
@@ -4196,32 +3873,6 @@ _FIELD_HELP_METADATA: Dict[str, Dict[str, Any]] = {
         ],
         "docs": _DOC_FULL_GUIDE_DATA_SOURCE,
         "warning_codes": [],
-    },
-    "PYTDX_HOST": {
-        "help_key": "settings.data_source.pytdx",
-        "examples": [
-            "PYTDX_HOST=119.147.212.81",
-            "PYTDX_PORT=7709",
-        ],
-        "docs": _DOC_FULL_GUIDE_DATA_SOURCE,
-        "warning_codes": [],
-    },
-    "PYTDX_PORT": {
-        "help_key": "settings.data_source.pytdx",
-        "examples": [
-            "PYTDX_PORT=7709",
-            "PYTDX_HOST=119.147.212.81",
-        ],
-        "docs": _DOC_FULL_GUIDE_DATA_SOURCE,
-        "warning_codes": [],
-    },
-    "PYTDX_SERVERS": {
-        "help_key": "settings.data_source.pytdx",
-        "examples": [
-            "PYTDX_SERVERS=119.147.212.81:7709,119.147.212.81:7711",
-        ],
-        "docs": _DOC_FULL_GUIDE_DATA_SOURCE,
-        "warning_codes": ["overrides_pytdx_host_port"],
     },
     "DINGTALK_APP_KEY": {
         "help_key": "settings.notification.chat_bots",
@@ -4498,6 +4149,8 @@ def build_schema_response() -> Dict[str, Any]:
         category_map[category["category"]] = {**category, "fields": []}
 
     for key in sorted(_FIELD_DEFINITIONS.keys()):
+        if key in WEB_SETTINGS_HIDDEN_FROM_UI:
+            continue
         field = get_field_definition(key)
         category_map[field["category"]]["fields"].append(field)
 
@@ -4524,22 +4177,14 @@ def _infer_category(key: str) -> str:
         return "base"
     if key.startswith("BACKTEST_"):
         return "backtest"
-    if key.startswith(("GEMINI_", "OPENAI_", "ANTHROPIC_", "LITELLM_", "AIHUBMIX_", "DEEPSEEK_", "LLM_")):
+    if key.startswith(("GEMINI_", "OPENAI_", "ANTHROPIC_", "LITELLM_", "DEEPSEEK_", "LLM_")):
         return "ai_model"
     if key.endswith("_PRIORITY") or key.startswith(
         (
-            "TUSHARE",
-            "TICKFLOW",
-            "AKSHARE",
-            "EFINANCE",
-            "PYTDX",
-            "BAOSTOCK",
-            "YFINANCE",
             "TAVILY",
             "SERPAPI",
             "BRAVE",
             "BOCHA",
-            "ANSPIRE",
             "SEARXNG",
             "NEWS_",
             "BIAS_",

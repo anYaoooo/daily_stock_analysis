@@ -1,9 +1,9 @@
-name: 每日股票分析
+name: 每日 BTC 分析
 
 on:
   # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
   schedule:
-    - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
+    - cron: '0 10 * * *'
   
   # 手动触发
   workflow_dispatch:
@@ -11,12 +11,10 @@ on:
       mode:
         description: '运行模式'
         required: true
-        default: 'full'
+        default: 'btc'
         type: choice
         options:
-          - full          # 完整分析（股票+大盘）
-          - market-only   # 仅大盘复盘
-          - stocks-only   # 仅股票分析
+          - btc
       force_run:
         description: '强制运行（跳过交易日检查）'
         required: false
@@ -25,7 +23,7 @@ on:
 
 # 并发控制：同一时间只运行一个分析任务
 concurrency:
-  group: stock-analysis
+  group: btc-analysis
   cancel-in-progress: false
 
 jobs:
@@ -56,7 +54,7 @@ jobs:
         run: |
           mkdir -p data logs reports
       
-      - name: 执行股票分析
+      - name: 执行 BTC 分析
         env:
           # ==========================================
           # AI 配置
@@ -83,9 +81,6 @@ jobs:
           GEMINI_MODEL_FALLBACK: ${{ vars.GEMINI_MODEL_FALLBACK || secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.5-flash' }}
           GEMINI_REQUEST_DELAY: '3.0'
           
-          # AIHubMix（优先于 OPENAI_API_KEY，自动适配 base_url，推荐国内用户）
-          AIHUBMIX_KEY: ${{ secrets.AIHUBMIX_KEY }}
-
           # OpenAI 兼容 API（备选）
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_KEYS: ${{ secrets.OPENAI_API_KEYS }}
@@ -133,22 +128,6 @@ jobs:
           LLM_DEEPSEEK_MODELS: ${{ vars.LLM_DEEPSEEK_MODELS || secrets.LLM_DEEPSEEK_MODELS }}
           LLM_DEEPSEEK_ENABLED: ${{ vars.LLM_DEEPSEEK_ENABLED || secrets.LLM_DEEPSEEK_ENABLED }}
           LLM_DEEPSEEK_EXTRA_HEADERS: ${{ vars.LLM_DEEPSEEK_EXTRA_HEADERS || secrets.LLM_DEEPSEEK_EXTRA_HEADERS }}
-
-          LLM_AIHUBMIX_PROTOCOL: ${{ vars.LLM_AIHUBMIX_PROTOCOL || secrets.LLM_AIHUBMIX_PROTOCOL }}
-          LLM_AIHUBMIX_BASE_URL: ${{ vars.LLM_AIHUBMIX_BASE_URL || secrets.LLM_AIHUBMIX_BASE_URL }}
-          LLM_AIHUBMIX_API_KEY: ${{ secrets.LLM_AIHUBMIX_API_KEY }}
-          LLM_AIHUBMIX_API_KEYS: ${{ secrets.LLM_AIHUBMIX_API_KEYS }}
-          LLM_AIHUBMIX_MODELS: ${{ vars.LLM_AIHUBMIX_MODELS || secrets.LLM_AIHUBMIX_MODELS }}
-          LLM_AIHUBMIX_ENABLED: ${{ vars.LLM_AIHUBMIX_ENABLED || secrets.LLM_AIHUBMIX_ENABLED }}
-          LLM_AIHUBMIX_EXTRA_HEADERS: ${{ vars.LLM_AIHUBMIX_EXTRA_HEADERS || secrets.LLM_AIHUBMIX_EXTRA_HEADERS }}
-
-          LLM_ANSPIRE_PROTOCOL: ${{ vars.LLM_ANSPIRE_PROTOCOL || secrets.LLM_ANSPIRE_PROTOCOL }}
-          LLM_ANSPIRE_BASE_URL: ${{ vars.LLM_ANSPIRE_BASE_URL || secrets.LLM_ANSPIRE_BASE_URL }}
-          LLM_ANSPIRE_API_KEY: ${{ secrets.LLM_ANSPIRE_API_KEY }}
-          LLM_ANSPIRE_API_KEYS: ${{ secrets.LLM_ANSPIRE_API_KEYS }}
-          LLM_ANSPIRE_MODELS: ${{ vars.LLM_ANSPIRE_MODELS || secrets.LLM_ANSPIRE_MODELS }}
-          LLM_ANSPIRE_ENABLED: ${{ vars.LLM_ANSPIRE_ENABLED || secrets.LLM_ANSPIRE_ENABLED }}
-          LLM_ANSPIRE_EXTRA_HEADERS: ${{ vars.LLM_ANSPIRE_EXTRA_HEADERS || secrets.LLM_ANSPIRE_EXTRA_HEADERS }}
 
           LLM_OPENAI_PROTOCOL: ${{ vars.LLM_OPENAI_PROTOCOL || secrets.LLM_OPENAI_PROTOCOL }}
           LLM_OPENAI_BASE_URL: ${{ vars.LLM_OPENAI_BASE_URL || secrets.LLM_OPENAI_BASE_URL }}
@@ -231,31 +210,8 @@ jobs:
           LLM_OLLAMA_EXTRA_HEADERS: ${{ vars.LLM_OLLAMA_EXTRA_HEADERS || secrets.LLM_OLLAMA_EXTRA_HEADERS }}
 
           # ==========================================
-          # 数据源
-          # ==========================================
-          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-          # Longbridge OpenAPI（美股/港股实时行情字段补充；不设则仅 YFinance/AkShare，无 [Longbridge] 调用）
-          LONGBRIDGE_OAUTH_CLIENT_ID: ${{ vars.LONGBRIDGE_OAUTH_CLIENT_ID || secrets.LONGBRIDGE_OAUTH_CLIENT_ID }}
-          LONGBRIDGE_OAUTH_TOKEN_CACHE_B64: ${{ secrets.LONGBRIDGE_OAUTH_TOKEN_CACHE_B64 }}
-          LONGBRIDGE_APP_KEY: ${{ secrets.LONGBRIDGE_APP_KEY }}
-          LONGBRIDGE_APP_SECRET: ${{ secrets.LONGBRIDGE_APP_SECRET }}
-          LONGBRIDGE_ACCESS_TOKEN: ${{ secrets.LONGBRIDGE_ACCESS_TOKEN }}
-          LONGBRIDGE_REGION: ${{ vars.LONGBRIDGE_REGION || secrets.LONGBRIDGE_REGION }}
-          LONGBRIDGE_HTTP_URL: ${{ vars.LONGBRIDGE_HTTP_URL || secrets.LONGBRIDGE_HTTP_URL }}
-          LONGBRIDGE_QUOTE_WS_URL: ${{ vars.LONGBRIDGE_QUOTE_WS_URL || secrets.LONGBRIDGE_QUOTE_WS_URL }}
-          LONGBRIDGE_TRADE_WS_URL: ${{ vars.LONGBRIDGE_TRADE_WS_URL || secrets.LONGBRIDGE_TRADE_WS_URL }}
-          LONGBRIDGE_STATIC_INFO_TTL_SECONDS: ${{ vars.LONGBRIDGE_STATIC_INFO_TTL_SECONDS || secrets.LONGBRIDGE_STATIC_INFO_TTL_SECONDS }}
-          LONGBRIDGE_ENABLE_OVERNIGHT: ${{ vars.LONGBRIDGE_ENABLE_OVERNIGHT || secrets.LONGBRIDGE_ENABLE_OVERNIGHT }}
-          LONGBRIDGE_PUSH_CANDLESTICK_MODE: ${{ vars.LONGBRIDGE_PUSH_CANDLESTICK_MODE || secrets.LONGBRIDGE_PUSH_CANDLESTICK_MODE }}
-          LONGBRIDGE_PRINT_QUOTE_PACKAGES: ${{ vars.LONGBRIDGE_PRINT_QUOTE_PACKAGES || secrets.LONGBRIDGE_PRINT_QUOTE_PACKAGES }}
-          
-          # ==========================================
           # 搜索服务
           # ==========================================
-          ANSPIRE_API_KEYS: ${{ secrets.ANSPIRE_API_KEYS }} 
-          ANSPIRE_LLM_MODEL: ${{ vars.ANSPIRE_LLM_MODEL || secrets.ANSPIRE_LLM_MODEL }}
-          ANSPIRE_LLM_BASE_URL: ${{ vars.ANSPIRE_LLM_BASE_URL || secrets.ANSPIRE_LLM_BASE_URL }}
-          ANSPIRE_LLM_ENABLED: ${{ vars.ANSPIRE_LLM_ENABLED || secrets.ANSPIRE_LLM_ENABLED }}
           BOCHA_API_KEYS: ${{ secrets.BOCHA_API_KEYS }}
           TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
           SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
@@ -286,7 +242,7 @@ jobs:
           EMAIL_SENDER: ${{ vars.EMAIL_SENDER || secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVERS: ${{ vars.EMAIL_RECEIVERS || secrets.EMAIL_RECEIVERS }}
-          EMAIL_SENDER_NAME: ${{ vars.EMAIL_SENDER_NAME || secrets.EMAIL_SENDER_NAME || 'daily_stock_analysis股票分析助手' }}
+          EMAIL_SENDER_NAME: ${{ vars.EMAIL_SENDER_NAME || secrets.EMAIL_SENDER_NAME || 'BTC 分析助手' }}
           
           # 方式五：Pushover
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
@@ -347,11 +303,9 @@ jobs:
           NOTIFICATION_DAILY_DIGEST_ENABLED: ${{ vars.NOTIFICATION_DAILY_DIGEST_ENABLED || secrets.NOTIFICATION_DAILY_DIGEST_ENABLED || 'false' }}
 
           # ==========================================
-          # 自选股配置
+          # BTC 配置
           # ==========================================
-          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
-          MARKET_REVIEW_REGION: ${{ vars.MARKET_REVIEW_REGION || secrets.MARKET_REVIEW_REGION || 'cn' }}
-          MARKET_REVIEW_COLOR_SCHEME: ${{ vars.MARKET_REVIEW_COLOR_SCHEME || secrets.MARKET_REVIEW_COLOR_SCHEME || 'green_up' }}
+          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || 'BTC' }}
           
           # ==========================================
           # 运行配置 ⬅️ 新增！
@@ -360,21 +314,19 @@ jobs:
           REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || secrets.REPORT_LANGUAGE || '' }}
           REPORT_SHOW_LLM_MODEL: ${{ vars.REPORT_SHOW_LLM_MODEL || secrets.REPORT_SHOW_LLM_MODEL || 'true' }}
           SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
-          MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
+          MARKET_REVIEW_ENABLED: 'false'
+          DAILY_MARKET_CONTEXT_ENABLED: 'false'
+          STOCK_INDEX_REMOTE_UPDATE_ENABLED: 'false'
           ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
-          TRADING_DAY_CHECK_ENABLED: ${{ vars.TRADING_DAY_CHECK_ENABLED || secrets.TRADING_DAY_CHECK_ENABLED || 'true' }}
+          TRADING_DAY_CHECK_ENABLED: 'false'
           
           # ==========================================
           # 系统配置
           # ==========================================
           LOG_LEVEL: INFO
           MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '1' }}
-          # 筹码分布：默认 false（云端接口不稳定）；需启用时在 Settings → Variables 添加 ENABLE_CHIP_DISTRIBUTION=true
-          ENABLE_CHIP_DISTRIBUTION: ${{ vars.ENABLE_CHIP_DISTRIBUTION || secrets.ENABLE_CHIP_DISTRIBUTION || 'false' }}
-          # 实时行情数据源优先级（腾讯有量比且稳定，推荐首选）
-          # 可选值: tencent, akshare_sina, efinance, akshare_em, tushare
-          # 如果有 Tushare Pro 高积分账号，可将 tushare 放在首位
-          REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tencent,akshare_sina,efinance,akshare_em' }}
+          ENABLE_CHIP_DISTRIBUTION: 'false'
+          REALTIME_SOURCE_PRIORITY: crypto
           
         run: |
           # 处理 LITELLM YAML 配置文件
@@ -391,38 +343,30 @@ jobs:
           MODE="${{ github.event.inputs.mode || 'full' }}"
           
           echo "=========================================="
-          echo "🚀 A股自选股智能分析系统"
+          echo "🚀 BTC 智能分析系统"
           echo "=========================================="
           echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           echo "🎯 运行模式: $MODE"
-          echo "📊 自选股: $STOCK_LIST"
+          echo "📊 标的: $STOCK_LIST"
           echo "📝 报告类型: $REPORT_TYPE"
           echo ""
           echo "=========================================="
           echo "📋 配置检查"
           echo "=========================================="
           echo "【AI 配置】"
-          if [ -n "$LITELLM_CONFIG" ] || [ -n "$LITELLM_API_KEY" ] || [ -n "$LITELLM_MODEL" ] || [ -n "$ANSPIRE_API_KEYS" ]; then
+          if [ -n "$LITELLM_CONFIG" ] || [ -n "$LITELLM_API_KEY" ] || [ -n "$LITELLM_MODEL" ]; then
             echo "  LiteLLM: ✅ 已配置"
           else
             echo "  LiteLLM: ❌ 未配置"
           fi
           echo "  Gemini API Key: $([ -n "$GEMINI_API_KEY" ] && echo '✅ 已配置' || echo '❌ 未配置')"
           echo "  DeepSeek Key:   $([ -n "$DEEPSEEK_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  Anspire Key:    $([ -n "$ANSPIRE_API_KEYS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          echo "  AIHubMix Key:   $([ -n "$AIHUBMIX_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "  OpenAI API Key: $([ -n "$OPENAI_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo "  Anthropic Key:  $([ -n "$ANTHROPIC_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo ""
           echo "【数据源】"
-          echo "  Tushare Token: $([ -n "$TUSHARE_TOKEN" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
-          if [ -n "$LONGBRIDGE_APP_KEY" ] && [ -n "$LONGBRIDGE_APP_SECRET" ] && [ -n "$LONGBRIDGE_ACCESS_TOKEN" ]; then
-            echo "  Longbridge: ✅ 已配置（Legacy API Key）"
-          elif [ -n "$LONGBRIDGE_OAUTH_CLIENT_ID" ] || { [ -n "$LONGBRIDGE_APP_KEY" ] && [ -z "$LONGBRIDGE_ACCESS_TOKEN" ]; }; then
-            echo "  Longbridge: $([ -n "$LONGBRIDGE_OAUTH_TOKEN_CACHE_B64" ] && echo '✅ 已配置（OAuth token cache）' || echo '🟡 已配置 OAuth client，缺少 token cache')"
-          else
-            echo "  Longbridge: ⚪ 未配置（仅 YFinance 等，无长桥调用）"
-          fi
+          echo "  BTC 行情: ✅ Binance 公共接口"
+          echo "  BTC 新闻: ✅ CryptoPanic/ChromaDB"
           echo ""
           echo "【搜索引擎】"
           echo "  Bocha API Keys: $([ -n "$BOCHA_API_KEYS" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
@@ -463,14 +407,8 @@ jobs:
             echo "⚡ 已启用强制运行模式（跳过交易日检查）"
           fi
 
-          # 执行分析
-          if [ "$MODE" = "market-only" ]; then
-            python main.py --market-review $FORCE_RUN_ARG
-          elif [ "$MODE" = "stocks-only" ]; then
-            python main.py --no-market-review $FORCE_RUN_ARG
-          else
-            python main.py $FORCE_RUN_ARG
-          fi
+          # 执行 BTC 分析
+          python main.py --stocks BTC --no-market-review $FORCE_RUN_ARG
       
       - name: 上传分析报告
         uses: actions/upload-artifact@v6

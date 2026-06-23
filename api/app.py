@@ -30,7 +30,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
@@ -137,13 +136,7 @@ from api.middlewares.auth import add_auth_middleware
 from api.middlewares.error_handler import add_error_handlers
 from api.v1.schemas.common import HealthResponse
 from src.auth import is_auth_enabled
-from src.data.stock_index_loader import find_existing_stock_index_path
 from src.services.system_config_service import SystemConfigService
-from src.services.stock_index_remote_service import (
-    get_remote_stock_index_cache_path,
-    refresh_remote_stock_index_cache,
-    settings_from_config,
-)
 
 
 _STOCK_INDEX_FILENAME = "stocks.index.json"
@@ -157,34 +150,17 @@ def _bundled_stock_index_path() -> Path:
 
 
 async def _refresh_stock_index_cache_in_background(reason: str) -> None:
-    try:
-        from src.config import get_config
-
-        settings = settings_from_config(get_config())
-        result = await run_in_threadpool(refresh_remote_stock_index_cache, settings)
-        if result.refreshed:
-            logger.info("[stock-index] background refresh completed (%s): %s", reason, result.cache_path)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - index refresh must stay best-effort.
-        logger.warning("[stock-index] background refresh failed (%s): %s", reason, exc)
+    logger.debug("[stock-index] BTC-only mode skips background stock-index refresh (%s)", reason)
 
 
 def _schedule_stock_index_background_refresh(app: FastAPI, reason: str) -> None:
-    task = getattr(app.state, "stock_index_refresh_task", None)
-    if task is not None and not task.done():
-        return
-
-    app.state.stock_index_refresh_task = asyncio.create_task(
-        _refresh_stock_index_cache_in_background(reason)
-    )
+    return None
 
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     """Initialize and release shared services for the app lifecycle."""
     app.state.system_config_service = SystemConfigService()
-    _schedule_stock_index_background_refresh(app, "startup")
     try:
         yield
     finally:
@@ -213,13 +189,13 @@ def create_app(static_dir: Optional[Path] = None) -> FastAPI:
     
     # 创建 FastAPI 实例
     app = FastAPI(
-        title="Daily Stock Analysis API",
+        title="BTC Analysis API",
         description=(
-            "A股/港股/美股自选股智能分析系统 API\n\n"
+            "BTC 智能分析系统 API\n\n"
             "## 功能模块\n"
-            "- 股票分析：触发 AI 智能分析\n"
+            "- BTC 分析：触发 AI 智能分析\n"
             "- 历史记录：查询历史分析报告\n"
-            "- 股票数据：获取行情数据\n\n"
+            "- BTC 数据：获取行情数据与新闻缓存\n\n"
             "## 认证方式\n"
             "支持可选管理员认证：ADMIN_AUTH_ENABLED=true 时，除登录、状态、健康检查和 "
             "OpenAPI 文档外，/api/v1/* 需要有效管理员会话 Cookie；关闭时不强制认证。"
@@ -338,45 +314,23 @@ def create_app(static_dir: Optional[Path] = None) -> FastAPI:
             timestamp=datetime.now().isoformat()
         )
 
-    def _stock_index_candidate_paths() -> tuple[Path, ...]:
-        local_candidates = (
-            static_dir / _STOCK_INDEX_FILENAME,
-            _bundled_stock_index_path(),
-        )
-        local_path = next((path for path in local_candidates if path.is_file()), None)
-        if local_path is None:
-            return (get_remote_stock_index_cache_path(),)
-        return (
-            get_remote_stock_index_cache_path(),
-            local_path,
-        )
-
-    def _find_existing_stock_index_path() -> Optional[Path]:
-        remote_cache_path = get_remote_stock_index_cache_path()
-        return find_existing_stock_index_path(
-            _stock_index_candidate_paths(),
-            remote_cache_path=remote_cache_path,
-        )
-
     @app.api_route(
         f"/{_STOCK_INDEX_FILENAME}",
         methods=["GET", "HEAD"],
         include_in_schema=False,
     )
     async def serve_stock_index():
-        """Serve the freshest available stock autocomplete index."""
-        _schedule_stock_index_background_refresh(app, "serve-stock-index")
-
-        index_path = _find_existing_stock_index_path()
-        if index_path is None:
-            return Response(
-                content="stock index not found",
-                status_code=404,
-                media_type="text/plain",
-            )
-        return FileResponse(
-            index_path,
-            media_type="application/json",
+        """Serve a tiny BTC-only autocomplete index for legacy frontend consumers."""
+        return JSONResponse(
+            content=[
+                {
+                    "code": "BTC",
+                    "name": "Bitcoin",
+                    "market": "CRYPTO",
+                    "type": "crypto",
+                    "aliases": ["BTCUSDT", "BTC-USD", "BTC/USD"],
+                }
+            ],
             headers=_STOCK_INDEX_HEADERS,
         )
     

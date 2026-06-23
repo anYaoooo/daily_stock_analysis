@@ -21,6 +21,12 @@ import type {
   ValidateSystemConfigResponse,
 } from '../types/systemConfig';
 
+export const SYSTEM_CONFIG_CHANGED_EVENT = 'dsa-system-config-changed';
+
+export function notifySystemConfigChanged(): void {
+  window.dispatchEvent(new Event(SYSTEM_CONFIG_CHANGED_EVENT));
+}
+
 export class SystemConfigValidationError extends Error {
   issues: SystemConfigValidationErrorResponse['issues'];
   parsedError: ParsedApiError;

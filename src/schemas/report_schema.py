@@ -105,10 +105,23 @@ class PositionStrategy(BaseModel):
     risk_control: Optional[str] = None
 
 
+class DirectionalStrategyPlan(BaseModel):
+    """Directional long/short plan for BTC and other two-way instruments."""
+
+    entry_price: Optional[Union[str, int, float]] = None
+    stop_loss: Optional[Union[str, int, float]] = None
+    take_profit: Optional[Union[str, int, float]] = None
+    trigger_condition: Optional[str] = None
+    invalidation: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class BattlePlan(BaseModel):
     """Battle plan block."""
 
     sniper_points: Optional[SniperPoints] = None
+    long_plan: Optional[DirectionalStrategyPlan] = None
+    short_plan: Optional[DirectionalStrategyPlan] = None
     position_strategy: Optional[PositionStrategy] = None
     action_checklist: Optional[List[str]] = None
 

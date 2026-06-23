@@ -482,7 +482,7 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
                 label="渠道名称"
                 fieldKey="LLM_CHANNEL_NAME"
                 helpKey="settings.llm_channel.channel_name"
-                examples={['LLM_CHANNELS=deepseek,aihubmix', 'LLM_DEEPSEEK_MODELS=deepseek-v4-flash,deepseek-v4-pro']}
+                examples={['LLM_CHANNELS=deepseek,gemini', 'LLM_DEEPSEEK_MODELS=deepseek-v4-flash,deepseek-v4-pro']}
               />
             <Input
               id={channelNameInputId}
@@ -1113,7 +1113,7 @@ const LEGACY_PROVIDER_KEYS: Record<string, string[]> = {
   gemini: ['GEMINI_API_KEYS', 'GEMINI_API_KEY'],
   vertex_ai: ['GEMINI_API_KEYS', 'GEMINI_API_KEY'],
   anthropic: ['ANTHROPIC_API_KEYS', 'ANTHROPIC_API_KEY'],
-  openai: ['OPENAI_API_KEYS', 'AIHUBMIX_KEY', 'OPENAI_API_KEY'],
+  openai: ['OPENAI_API_KEYS', 'OPENAI_API_KEY'],
   deepseek: ['DEEPSEEK_API_KEYS', 'DEEPSEEK_API_KEY'],
 };
 
@@ -1392,7 +1392,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
   const [capabilityStates, setCapabilityStates] = useState<Record<string, ChannelCapabilityState>>({});
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [addPreset, setAddPreset] = useState('aihubmix');
+  const [addPreset, setAddPreset] = useState('deepseek');
   const addChannelIdRef = useRef(0);
 
   const prevChannelsRef = useRef(channelsFingerprint);

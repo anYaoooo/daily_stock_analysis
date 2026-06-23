@@ -26,9 +26,8 @@ import pandas as pd
 import numpy as np
 from src.data.stock_index_loader import get_index_stock_name
 from src.data.stock_mapping import STOCK_NAME_MAP, is_meaningful_stock_name
+from src.core.btc_only import BTC_CANONICAL_CODE, canonical_btc_code, is_supported_btc_code
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
-from .fundamental_adapter import AkshareFundamentalAdapter
-from .yfinance_fundamental_adapter import YfinanceFundamentalAdapter
 from .realtime_types import CircuitBreaker
 
 # 配置日志
@@ -91,6 +90,9 @@ def normalize_stock_code(stock_code: str) -> str:
     """
     code = stock_code.strip()
     upper = code.upper()
+
+    if is_supported_btc_code(upper):
+        return canonical_btc_code(upper)
 
     # Normalize HK prefix to a canonical 5-digit form (e.g. hk1810 -> HK01810)
     if upper.startswith('HK') and not upper.startswith('HK.'):
@@ -205,12 +207,10 @@ def _is_meaningful_chip_distribution(chip: Any) -> bool:
 
 
 def _market_tag(code: str) -> str:
-    """返回市场标签: cn/us/hk."""
-    if _is_us_market(code):
-        return "us"
-    if _is_hk_market(code):
-        return "hk"
-    return "cn"
+    """返回市场标签；当前运行时仅支持 BTC 加密货币。"""
+    if is_supported_btc_code(code):
+        return "crypto"
+    return "unsupported"
 
 
 def is_bse_code(code: str) -> bool:
@@ -268,7 +268,10 @@ def canonical_stock_code(code: str) -> str:
         '600519'  -> '600519'  (digits are unchanged)
         'hk00700' -> 'HK00700'
     """
-    return (code or "").strip().upper()
+    raw = (code or "").strip().upper()
+    if is_supported_btc_code(raw):
+        return BTC_CANONICAL_CODE
+    return raw
 
 
 class DataFetchError(Exception):
@@ -611,8 +614,8 @@ class DataFetcherManager:
         else:
             # 默认数据源将在首次使用时延迟加载
             self._init_default_fetchers()
-        self._fundamental_adapter = AkshareFundamentalAdapter()
-        self._yfinance_fundamental_adapter = YfinanceFundamentalAdapter()
+        self._fundamental_adapter = None
+        self._yfinance_fundamental_adapter = None
         self._tickflow_fetcher = None
         self._tickflow_api_key: Optional[str] = None
         self._tickflow_lock = RLock()
@@ -805,50 +808,8 @@ class DataFetcherManager:
         return name
 
     def _get_tickflow_fetcher(self):
-        """Lazily create a TickFlow fetcher for market-review-only calls."""
-        from src.config import get_config
-
-        config = get_config()
-        api_key = (getattr(config, "tickflow_api_key", None) or "").strip()
-
-        if not hasattr(self, "_tickflow_lock") or self._tickflow_lock is None:
-            self._tickflow_lock = RLock()
-
-        with self._tickflow_lock:
-            current_fetcher = getattr(self, "_tickflow_fetcher", None)
-            current_key = getattr(self, "_tickflow_api_key", None)
-
-            if not api_key:
-                if current_fetcher is not None and hasattr(current_fetcher, "close"):
-                    try:
-                        current_fetcher.close()
-                    except Exception as exc:
-                        logger.debug("[TickFlowFetcher] 关闭旧实例失败: %s", exc)
-                self._tickflow_fetcher = None
-                self._tickflow_api_key = None
-                return None
-
-            if current_fetcher is not None and current_key == api_key:
-                return current_fetcher
-
-            if current_fetcher is not None and hasattr(current_fetcher, "close"):
-                try:
-                    current_fetcher.close()
-                except Exception as exc:
-                    logger.debug("[TickFlowFetcher] 切换实例时关闭失败: %s", exc)
-
-            try:
-                from .tickflow_fetcher import TickFlowFetcher
-
-                fetcher = TickFlowFetcher(api_key=api_key)
-                self._tickflow_fetcher = fetcher
-                self._tickflow_api_key = api_key
-                return fetcher
-            except Exception as exc:
-                logger.warning("[TickFlowFetcher] 初始化失败: %s", exc)
-                self._tickflow_fetcher = None
-                self._tickflow_api_key = None
-                return None
+        """TickFlow is stock-market-only and disabled in BTC-only runtime."""
+        return None
 
     def close(self) -> None:
         """Best-effort release of manager-owned resources."""
@@ -1101,67 +1062,14 @@ class DataFetcherManager:
           3. BaostockFetcher (Priority 3)
           4. YfinanceFetcher (Priority 4)
         """
-        from src.config import get_config
         from .crypto_fetcher import CryptoFetcher
-        from .efinance_fetcher import EfinanceFetcher
-        from .tencent_fetcher import TencentFetcher
-        from .akshare_fetcher import AkshareFetcher
-        from .tushare_fetcher import TushareFetcher
-        from .pytdx_fetcher import PytdxFetcher
-        from .baostock_fetcher import BaostockFetcher
-        from .yfinance_fetcher import YfinanceFetcher
-        from .longbridge_fetcher import LongbridgeFetcher
-        config = get_config()
-        # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
         crypto = CryptoFetcher()
-        efinance = EfinanceFetcher()
-        tencent = TencentFetcher()
-        akshare = AkshareFetcher()
-        pytdx = PytdxFetcher()      # 通达信数据源（可配 PYTDX_HOST/PYTDX_PORT）
-        baostock = BaostockFetcher()
-        yfinance = YfinanceFetcher()
-        optional_fetchers: List[BaseFetcher] = []
-
-        tushare_token = (getattr(config, "tushare_token", None) or "").strip()
-        if tushare_token:
-            optional_fetchers.append(TushareFetcher())  # 会根据 Token 配置自动调整优先级
-        else:
-            logger.debug("[数据源初始化] 跳过未配置的 TushareFetcher")
-
-        if LongbridgeFetcher.has_configured_credentials(config):
-            optional_fetchers.append(LongbridgeFetcher())  # 长桥（美股/港股兜底，懒加载）
-        else:
-            logger.debug("[数据源初始化] 跳过未配置的 LongbridgeFetcher")
-
-        finnhub_api_key = (getattr(config, "finnhub_api_key", None) or "").strip()
-        if finnhub_api_key:
-            from .finnhub_fetcher import FinnhubFetcher
-            optional_fetchers.append(FinnhubFetcher())
-        else:
-            logger.debug("[数据源初始化] 跳过未配置的 FinnhubFetcher")
-
-        alphavantage_api_key = (getattr(config, "alphavantage_api_key", None) or "").strip()
-        if alphavantage_api_key:
-            from .alphavantage_fetcher import AlphaVantageFetcher
-            optional_fetchers.append(AlphaVantageFetcher())
-        else:
-            logger.debug("[数据源初始化] 跳过未配置的 AlphaVantageFetcher")
 
         # 初始化数据源列表
         self._ensure_concurrency_guards()
         with self._fetchers_lock:
-            self._fetchers = [
-                efinance,
-                tencent,
-                akshare,
-                pytdx,
-                baostock,
-                yfinance,
-                crypto,
-                *optional_fetchers,
-            ]
+            self._fetchers = [crypto]
 
-            # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
             self._fetchers.sort(key=lambda f: f.priority)
             self._refresh_fetcher_indexes_locked()
 
