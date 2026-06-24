@@ -422,6 +422,115 @@ class BacktestSummary(Base):
     )
 
 
+class CryptoBacktestResult(Base):
+    """BTC plan-level backtest result."""
+
+    __tablename__ = 'crypto_backtest_results'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    analysis_history_id = Column(
+        Integer,
+        ForeignKey('analysis_history.id'),
+        nullable=False,
+        index=True,
+    )
+
+    code = Column(String(16), nullable=False, index=True)
+    analysis_created_at = Column(DateTime, index=True)
+    evaluated_at = Column(DateTime, default=datetime.now, index=True)
+
+    plan_type = Column(String(24), nullable=False, index=True)  # daily_long/daily_short/intraday
+    horizon = Column(String(16), nullable=False, index=True)  # daily/intraday
+    direction = Column(String(8), nullable=False)  # long/short/wait
+    engine_version = Column(String(24), nullable=False, default='btc-plan-v2')
+
+    eval_status = Column(String(24), nullable=False, default='pending')
+    evaluation_start = Column(DateTime)
+    evaluation_end = Column(DateTime)
+
+    entry_price = Column(Float)
+    stop_loss = Column(Float)
+    take_profit = Column(Float)
+    entry_triggered = Column(Boolean)
+    entry_triggered_at = Column(DateTime)
+
+    start_price = Column(Float)
+    end_close = Column(Float)
+    max_high = Column(Float)
+    min_low = Column(Float)
+
+    direction_correct = Column(Boolean, nullable=True)
+    outcome = Column(String(24))  # win/loss/neutral/no_entry/skipped/insufficient_data
+
+    hit_stop_loss = Column(Boolean)
+    hit_take_profit = Column(Boolean)
+    first_hit = Column(String(24))
+    first_hit_at = Column(DateTime)
+    first_hit_bars = Column(Integer)
+
+    simulated_entry_price = Column(Float)
+    simulated_exit_price = Column(Float)
+    simulated_exit_reason = Column(String(32))
+    simulated_return_pct = Column(Float)
+
+    raw_plan_json = Column(Text)
+    diagnostics_json = Column(Text)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'analysis_history_id',
+            'plan_type',
+            'engine_version',
+            name='uix_crypto_backtest_analysis_plan_version',
+        ),
+        Index('ix_crypto_backtest_code_plan_time', 'code', 'plan_type', 'analysis_created_at'),
+    )
+
+
+class CryptoBacktestSummary(Base):
+    """BTC plan-level backtest aggregate metrics."""
+
+    __tablename__ = 'crypto_backtest_summaries'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    scope = Column(String(16), nullable=False, index=True)  # overall/code/horizon/plan_type
+    code = Column(String(16), index=True)
+    horizon = Column(String(16), index=True)
+    plan_type = Column(String(24), index=True)
+    engine_version = Column(String(24), nullable=False, default='btc-plan-v2')
+    computed_at = Column(DateTime, default=datetime.now, index=True)
+
+    total_evaluations = Column(Integer, default=0)
+    completed_count = Column(Integer, default=0)
+    triggered_count = Column(Integer, default=0)
+    no_entry_count = Column(Integer, default=0)
+    skipped_count = Column(Integer, default=0)
+    insufficient_count = Column(Integer, default=0)
+    win_count = Column(Integer, default=0)
+    loss_count = Column(Integer, default=0)
+    neutral_count = Column(Integer, default=0)
+
+    direction_accuracy_pct = Column(Float)
+    win_rate_pct = Column(Float)
+    avg_simulated_return_pct = Column(Float)
+
+    plan_type_breakdown_json = Column(Text)
+    diagnostics_json = Column(Text)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'scope',
+            'code',
+            'horizon',
+            'plan_type',
+            'engine_version',
+            name='uix_crypto_backtest_summary_scope_key_version',
+        ),
+    )
+
+
 class PortfolioAccount(Base):
     """Portfolio account metadata."""
 

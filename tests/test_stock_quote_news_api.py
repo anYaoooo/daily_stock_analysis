@@ -65,7 +65,7 @@ def test_build_stock_news_items_timeout_returns_empty_payload() -> None:
         assert _build_stock_news_items("BTC", "Bitcoin") == []
 
 
-def test_cryptopanic_news_prefers_chroma_cache_before_fetching() -> None:
+def test_cryptopanic_news_reads_chroma_cache_only() -> None:
     cached_item = CryptoPanicNewsItem(
         title="Bitcoin BTC liquidity improves",
         source="cryptopanic.com",
@@ -82,6 +82,28 @@ def test_cryptopanic_news_prefers_chroma_cache_before_fetching() -> None:
     assert result.provider == "CryptoPanicChroma"
     assert result.cache_used is True
     assert result.items == [cached_item]
+    service.fetch_news.assert_not_called()
+
+
+def test_cryptopanic_news_uses_stale_chroma_without_fetching() -> None:
+    cached_item = CryptoPanicNewsItem(
+        title="Bitcoin BTC stale cache item",
+        source="cryptopanic.com",
+        time_ago="2d",
+        coins=("BTC",),
+        fetch_time="2026-06-20T08:00:00",
+    )
+    service = CryptoPanicNewsService(refresh_interval_seconds=0)
+    service.read_from_chroma = MagicMock(side_effect=[[], [cached_item]])
+    service.fetch_news = MagicMock(side_effect=AssertionError("OpenCLI fetch must not run"))
+
+    result = service.get_latest_news(coin="BTC", limit=1)
+
+    assert result.provider == "CryptoPanicChromaStale"
+    assert result.cache_used is True
+    assert result.items == [cached_item]
+    assert "已使用过期缓存" in (result.error_message or "")
+    service.read_from_chroma.assert_any_call(coin="BTC", limit=1, allow_stale=True)
     service.fetch_news.assert_not_called()
 
 

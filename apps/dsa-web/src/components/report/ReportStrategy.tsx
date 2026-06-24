@@ -1,6 +1,7 @@
 import type React from 'react';
 import type {
   DirectionalStrategyPlan,
+  IntradayStrategyPlan,
   ReportLanguage,
   ReportStrategy as ReportStrategyType,
 } from '../../types/analysis';
@@ -21,9 +22,10 @@ interface StrategyItemProps {
 
 interface DirectionalPlanCardProps {
   title: string;
-  plan: DirectionalStrategyPlan;
+  plan: DirectionalStrategyPlan | IntradayStrategyPlan;
   tone: string;
   text: ReturnType<typeof getReportText>;
+  includeDailyConstraint?: boolean;
 }
 
 const StrategyItem: React.FC<StrategyItemProps> = ({
@@ -48,18 +50,29 @@ const StrategyItem: React.FC<StrategyItemProps> = ({
 const hasPlanValue = (plan?: DirectionalStrategyPlan | null): plan is DirectionalStrategyPlan =>
   Boolean(plan && Object.values(plan).some((value) => typeof value === 'string' && value.trim()));
 
+const hasIntradayPlanValue = (plan?: IntradayStrategyPlan | null): plan is IntradayStrategyPlan =>
+  Boolean(plan && Object.values(plan).some((value) => {
+    if (typeof value === 'boolean') {
+      return true;
+    }
+    return typeof value === 'string' && value.trim();
+  }));
+
 const DirectionalPlanCard: React.FC<DirectionalPlanCardProps> = ({
   title,
   plan,
   tone,
   text,
+  includeDailyConstraint = false,
 }) => {
   const rows = [
+    { label: text.direction, value: 'direction' in plan ? plan.direction : undefined },
     { label: text.entryPrice, value: plan.entryPrice },
     { label: text.stopLoss, value: plan.stopLoss },
     { label: text.takeProfit, value: plan.takeProfit },
     { label: text.triggerCondition, value: plan.triggerCondition },
     { label: text.invalidation, value: plan.invalidation },
+    { label: text.dailyConstraint, value: includeDailyConstraint && 'dailyConstraint' in plan ? plan.dailyConstraint : undefined },
     { label: text.reason, value: plan.reason },
   ].filter((row) => row.value && row.value.trim());
 
@@ -95,6 +108,7 @@ export const ReportStrategy: React.FC<ReportStrategyProps> = ({ strategy, langua
   const reportLanguage = normalizeReportLanguage(language);
   const text = getReportText(reportLanguage);
   const hasDirectionalPlans = hasPlanValue(strategy.longPlan) || hasPlanValue(strategy.shortPlan);
+  const intradayPlan = hasIntradayPlanValue(strategy.intradayPlan) ? strategy.intradayPlan : null;
 
   const strategyItems = [
     {
@@ -127,21 +141,32 @@ export const ReportStrategy: React.FC<ReportStrategyProps> = ({ strategy, langua
         className="mb-3"
       />
       {hasDirectionalPlans ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {hasPlanValue(strategy.longPlan) && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {hasPlanValue(strategy.longPlan) && (
+              <DirectionalPlanCard
+                title={text.longPlan}
+                plan={strategy.longPlan}
+                tone="--home-strategy-buy"
+                text={text}
+              />
+            )}
+            {hasPlanValue(strategy.shortPlan) && (
+              <DirectionalPlanCard
+                title={text.shortPlan}
+                plan={strategy.shortPlan}
+                tone="--home-strategy-stop"
+                text={text}
+              />
+            )}
+          </div>
+          {intradayPlan && (
             <DirectionalPlanCard
-              title={text.longPlan}
-              plan={strategy.longPlan}
-              tone="--home-strategy-buy"
+              title={text.intradayPlan}
+              plan={intradayPlan}
+              tone="--home-strategy-secondary"
               text={text}
-            />
-          )}
-          {hasPlanValue(strategy.shortPlan) && (
-            <DirectionalPlanCard
-              title={text.shortPlan}
-              plan={strategy.shortPlan}
-              tone="--home-strategy-stop"
-              text={text}
+              includeDailyConstraint
             />
           )}
         </div>
@@ -150,6 +175,17 @@ export const ReportStrategy: React.FC<ReportStrategyProps> = ({ strategy, langua
           {strategyItems.map((item) => (
             <StrategyItem key={item.label} {...item} />
           ))}
+        </div>
+      )}
+      {!hasDirectionalPlans && intradayPlan && (
+        <div className="mt-3">
+          <DirectionalPlanCard
+            title={text.intradayPlan}
+            plan={intradayPlan}
+            tone="--home-strategy-secondary"
+            text={text}
+            includeDailyConstraint
+          />
         </div>
       )}
     </Card>

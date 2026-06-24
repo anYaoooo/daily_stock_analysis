@@ -172,6 +172,20 @@ class DirectionalStrategyPlan(BaseModel):
     reason: Optional[str] = Field(None, description="计划依据")
 
 
+class IntradayStrategyPlan(BaseModel):
+    """小时线日内策略计划"""
+
+    enabled: Optional[bool] = Field(None, description="是否存在可执行日内机会")
+    direction: Optional[str] = Field(None, description="日内方向：long/short/wait/none")
+    entry_price: Optional[str] = Field(None, description="小时线入场价")
+    stop_loss: Optional[str] = Field(None, description="小时线止损价")
+    take_profit: Optional[str] = Field(None, description="小时线止盈目标")
+    trigger_condition: Optional[str] = Field(None, description="小时线触发条件")
+    invalidation: Optional[str] = Field(None, description="小时线失效条件")
+    daily_constraint: Optional[str] = Field(None, description="日线约束")
+    reason: Optional[str] = Field(None, description="日内计划依据")
+
+
 class ReportStrategy(BaseModel):
     """策略点位区"""
     
@@ -181,6 +195,7 @@ class ReportStrategy(BaseModel):
     take_profit: Optional[str] = Field(None, description="止盈价")
     long_plan: Optional[DirectionalStrategyPlan] = Field(None, description="多单策略计划")
     short_plan: Optional[DirectionalStrategyPlan] = Field(None, description="空单策略计划")
+    intraday_plan: Optional[IntradayStrategyPlan] = Field(None, description="小时线日内策略计划")
 
 
 class AnalysisContextPackOverviewSubject(BaseModel):

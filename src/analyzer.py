@@ -1970,6 +1970,17 @@ class GeminiAnalyzer:
                 "invalidation": "空单失效条件",
                 "reason": "空单依据：价格行为/量能/VWAP/EMA/斐波那契共振"
             },
+            "intraday_plan": {
+                "enabled": false,
+                "direction": "none/long/short/wait",
+                "entry_price": "小时线日内入场价：XX；无机会则写等待",
+                "stop_loss": "小时线日内止损：XX；必须受日线失效位约束",
+                "take_profit": "小时线日内目标：XX",
+                "trigger_condition": "小时线触发条件",
+                "invalidation": "小时线失效条件",
+                "daily_constraint": "日线方向/关键支撑阻力/失效条件如何约束本次日内交易",
+                "reason": "小时线日内机会依据；无机会时说明原因"
+            },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
                 "entry_plan": "分批建仓策略描述",
@@ -3297,14 +3308,18 @@ class GeminiAnalyzer:
 
         crypto_technical = context.get("crypto_technical") if isinstance(context, dict) else None
         if isinstance(crypto_technical, dict):
-            price_action = crypto_technical.get("price_action") or {}
-            fib = crypto_technical.get("fibonacci") or {}
+            timeframes = crypto_technical.get("timeframes") or {}
+            daily_crypto = timeframes.get("daily") if isinstance(timeframes.get("daily"), dict) else crypto_technical
+            hourly_crypto = timeframes.get("hourly") if isinstance(timeframes.get("hourly"), dict) else None
+            intraday = crypto_technical.get("intraday") if isinstance(crypto_technical.get("intraday"), dict) else {}
+            price_action = daily_crypto.get("price_action") or {}
+            fib = daily_crypto.get("fibonacci") or {}
             fib_levels = fib.get("retracement_levels") or {}
-            volume = crypto_technical.get("volume") or {}
-            vwap = crypto_technical.get("vwap") or {}
-            ema = crypto_technical.get("ema") or {}
+            volume = daily_crypto.get("volume") or {}
+            vwap = daily_crypto.get("vwap") or {}
+            ema = daily_crypto.get("ema") or {}
             prompt += f"""
-### BTC 交易框架补充（必须纳入结论）
+### BTC 交易框架补充（日线，必须纳入结论）
 | 维度 | 当前读数 | 分析要求 |
 |------|----------|----------|
 | Price Action（价格行为） | 状态={price_action.get('state', unknown_text)}；近20根高点={price_action.get('recent_high', 'N/A')}；近20根低点={price_action.get('recent_low', 'N/A')}；最新涨跌={price_action.get('close_change_pct', 'N/A')}% | 直接判断当前是突破、跌破、推进还是区间震荡；不要只复述指标 |
@@ -3313,11 +3328,30 @@ class GeminiAnalyzer:
 | VWAP（成交量加权均价） | rolling20 VWAP={vwap.get('rolling_20', 'N/A')}；价格位置={vwap.get('price_position', 'N/A')} | 价格在 VWAP 上方偏多头强势，下方偏空头压制；日线数据下按 rolling VWAP 解读 |
 | EMA（指数移动平均） | EMA20={ema.get('ema20', 'N/A')}；EMA50={ema.get('ema50', 'N/A')}；结构={ema.get('structure', 'N/A')} | 判断短中期趋势延续或反转，必须和 MA/MACD/RSI 交叉验证 |
 
-> BTC 特别要求：最终操作建议必须同时引用 Price Action、Fibonacci、Volume、VWAP、EMA 中至少三个维度；若这些维度互相冲突，优先输出“等待确认/区间策略”，不要给激进追涨、抄底或盲目开空建议。
+> BTC 日线特别要求：日线是主方向和风险边界，最终操作建议必须同时引用 Price Action、Fibonacci、Volume、VWAP、EMA 中至少三个维度；若这些维度互相冲突，优先输出“等待确认/区间策略”，不要给激进追涨、抄底或盲目开空建议。
 > BTC 双向交易要求：BTC 支持多单和空单，分析时必须同时评估 Long/多单与 Short/空单，不得只给多单买入视角。若多头条件更强，给出多单入场、止损、目标和失效条件；若空头条件更强，给出空单入场/做空开仓、止损、目标和失效条件；若多空都不满足，明确“不做多也不做空，等待确认”。
-> BTC 策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 必须同时输出，分别包含 `entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件，不要省略该方向。
+> BTC 日线策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 只承载日线级主策略，必须同时输出，分别包含 `entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件，不要省略该方向。
+> BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `enabled`、`direction`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`daily_constraint`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件。
 > BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。
 > BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；其中 `buy` 表示多单开仓/加多，`sell` 表示空单开仓/加空或多单风控退出，`hold` 表示等待/区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”。
+"""
+            if hourly_crypto:
+                hourly_price_action = hourly_crypto.get("price_action") or {}
+                hourly_volume = hourly_crypto.get("volume") or {}
+                hourly_vwap = hourly_crypto.get("vwap") or {}
+                hourly_ema = hourly_crypto.get("ema") or {}
+                prompt += f"""
+### BTC 小时线日内交易机会（必须服从日线）
+| 维度 | 当前读数 | 分析要求 |
+|------|----------|----------|
+| 日线偏向 | {intraday.get('daily_bias', 'N/A')} | 作为主方向、仓位和止损边界，不得被小时线单独推翻 |
+| 小时线偏向 | {intraday.get('hourly_bias', 'N/A')} | 只用于入场、加减仓和日内触发判断 |
+| 对齐状态 | {intraday.get('alignment', 'N/A')} | aligned_long/short 才能优先寻找同向交易；conflict 时等待确认 |
+| 小时线 Price Action | 状态={hourly_price_action.get('state', unknown_text)}；近20根高点={hourly_price_action.get('recent_high', 'N/A')}；近20根低点={hourly_price_action.get('recent_low', 'N/A')}；最新涨跌={hourly_price_action.get('close_change_pct', 'N/A')}% | 判断日内突破、跌破、反抽或回踩是否构成触发 |
+| 小时线 Volume/VWAP/EMA | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')} | 判断日内触发是否有量价和均线确认 |
+| 日内机会 | {intraday.get('opportunity', 'N/A')} | 必须写清是否有日内交易机会；没有机会时说明等待什么小时线条件 |
+
+> BTC 小时线约束：小时线只作为执行层，必须服从日线方向、日线关键支撑/阻力和日线失效条件。小时线与日线冲突时，不得给出逆日线主动开仓建议；只能输出等待确认、减仓风控或区间观察。若给出日内多单/空单，必须写入 `dashboard.battle_plan.intraday_plan`，同时说明小时线触发价、止损、目标，以及对应的日线依据。
 """
         
         # 添加昨日对比数据
@@ -3437,7 +3471,7 @@ class GeminiAnalyzer:
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
 - **核心结论**：一句话说清该买/该卖/该等
 - **持仓分类建议**：空仓者怎么做 vs 持仓者怎么做
-- **具体狙击点位**：买入价、止损价、目标价（精确到分）；BTC 必须同时输出 `long_plan` 与 `short_plan` 两套策略，且每套都包含入场价、止损价、目标价、触发条件、失效条件和依据
+- **具体狙击点位**：买入价、止损价、目标价（精确到分）；BTC 必须同时输出日线级 `long_plan` 与 `short_plan` 两套策略，且每套都包含入场价、止损价、目标价、触发条件、失效条件和依据；若存在小时线数据，必须额外输出 `intraday_plan`，单独描述 1 小时线日内机会，不能与日线主策略混写
 - **检查清单**：每项用 ✅/⚠️/❌ 标记
 - **消息面时间合规**：`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息
 - **技术面一致性**：严禁把“空头排列”和“多头排列”等互斥结论同时当作有效依据；若基本面/事件面与技术面冲突，必须明确写“事件先行、技术待确认”或“基本面偏多，但技术面尚未确认”

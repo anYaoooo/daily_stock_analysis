@@ -30,6 +30,7 @@ from src.report_language import (
     normalize_report_language,
 )
 from src.storage import DatabaseManager
+from src.core.btc_only import is_supported_btc_code
 from src.services.run_diagnostics import build_run_diagnostic_summary
 from src.market_phase_summary import extract_market_phase_summary
 from src.schemas.decision_action import build_action_fields
@@ -356,7 +357,12 @@ class HistoryService:
             if not record:
                 logger.warning(f"resolve_and_get_news: record not found for {record_id}")
                 return []
-            return self.get_news_intel(query_id=record.query_id, limit=limit)
+            items = self.get_news_intel(query_id=record.query_id, limit=limit)
+            if items:
+                return items
+            if is_supported_btc_code(getattr(record, "code", "")):
+                return self._get_btc_chroma_news(limit=limit)
+            return []
         except Exception as e:
             logger.error(f"resolve_and_get_news failed for {record_id}: {e}", exc_info=True)
             return []
@@ -630,6 +636,35 @@ class HistoryService:
         except Exception as e:
             logger.error(f"根据 record_id 查询新闻情报失败: {e}", exc_info=True)
             return []
+
+    def _get_btc_chroma_news(self, limit: int) -> List[Dict[str, str]]:
+        """Return BTC news from local ChromaDB for report-page news fallback."""
+        try:
+            from src.services.cryptopanic_news_service import build_cryptopanic_news_service_from_env
+
+            result = build_cryptopanic_news_service_from_env().get_latest_news(
+                coin="BTC",
+                limit=limit,
+            )
+        except Exception as e:
+            logger.warning("BTC ChromaDB news fallback failed: %s", e)
+            return []
+
+        items: List[Dict[str, str]] = []
+        for item in result.items[:limit]:
+            title = (item.title or "").strip()
+            if not title:
+                continue
+            source = (item.source or "").strip()
+            time_ago = (item.time_ago or "").strip()
+            meta_parts = [part for part in (source, time_ago) if part]
+            snippet = " | ".join(meta_parts)
+            items.append({
+                "title": title,
+                "snippet": snippet,
+                "url": "",
+            })
+        return items
 
     def _fallback_news_by_analysis_context(self, query_id: str, limit: int) -> List[Any]:
         """
@@ -1044,6 +1079,22 @@ class HistoryService:
                     f"| 🔵 {labels['secondary_buy_label']} | {self._clean_sniper_value(sniper.get('secondary_buy', 'N/A'))} |",
                     f"| 🛑 {labels['stop_loss_label']} | {self._clean_sniper_value(sniper.get('stop_loss', 'N/A'))} |",
                     f"| 🎊 {labels['take_profit_label']} | {self._clean_sniper_value(sniper.get('take_profit', 'N/A'))} |",
+                    "",
+                ])
+            intraday = battle.get('intraday_plan', {})
+            if intraday:
+                report_lines.extend([
+                    "**⏱️ 小时线日内计划（服从日线）**",
+                    "",
+                    "| 项目 | 计划 |",
+                    "|------|------|",
+                    f"| 方向 | {intraday.get('direction', 'N/A')} |",
+                    f"| 入场 | {self._clean_sniper_value(intraday.get('entry_price', 'N/A'))} |",
+                    f"| 止损 | {self._clean_sniper_value(intraday.get('stop_loss', 'N/A'))} |",
+                    f"| 目标 | {self._clean_sniper_value(intraday.get('take_profit', 'N/A'))} |",
+                    f"| 触发 | {intraday.get('trigger_condition', 'N/A')} |",
+                    f"| 日线约束 | {intraday.get('daily_constraint', 'N/A')} |",
+                    f"| 依据 | {intraday.get('reason', 'N/A')} |",
                     "",
                 ])
             # 仓位策略

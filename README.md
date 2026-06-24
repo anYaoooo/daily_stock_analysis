@@ -6,7 +6,7 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| BTC 行情 | 通过 Binance 公共接口获取 BTC 实时行情与 K 线数据，无需股票数据源依赖 |
+| BTC 行情 | 通过 CCXT 对接 Binance 公共行情获取 BTC 实时行情与 K 线数据，无需股票数据源依赖 |
 | BTC 新闻 | 内置 CryptoPanic 抓取并写入 ChromaDB；抓取失败时仅读取 ChromaDB 缓存 |
 | AI 分析 | 支持 Gemini、DeepSeek、Anthropic、OpenAI/OpenAI-compatible、Ollama 等通用模型接入 |
 | 多空策略 | 分析同时输出多单和空单计划，包含入场、止损、止盈、触发条件和失效条件 |

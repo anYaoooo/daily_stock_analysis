@@ -31,6 +31,7 @@ from src.notification_routing import (
     split_notification_route_channels,
 )
 from src.notification_contracts import is_feishu_static_configured
+from src.core.btc_only import is_supported_btc_code
 from src.notification_noise import (
     NotificationNoiseDecision,
     evaluate_notification_noise,
@@ -51,6 +52,7 @@ from src.report_language import (
 from bot.models import BotMessage
 from src.utils.sanitize import sanitize_diagnostic_text
 from src.utils.data_processing import normalize_model_used
+from src.utils.sniper_points import extract_directional_strategy_plans
 from src.notification_sender import (
     AstrbotSender,
     CustomWebhookSender,
@@ -327,6 +329,13 @@ class NotificationService(
         if normalized_type == ReportType.BRIEF:
             return self.generate_brief_report(results, report_date=report_date)
         return self.generate_dashboard_report(results, report_date=report_date)
+
+    @staticmethod
+    def _single_btc_result(results: List[AnalysisResult]) -> Optional[AnalysisResult]:
+        if len(results) != 1:
+            return None
+        result = results[0]
+        return result if is_supported_btc_code(getattr(result, "code", "")) else None
 
     def _collect_models_used(self, results: List[AnalysisResult]) -> List[str]:
         if not self._should_show_llm_model():
@@ -1043,6 +1052,10 @@ class NotificationService(
         ma_label = "Moving Averages" if report_language == "en" else "均线"
         volume_analysis_label = "Volume" if report_language == "en" else "量能"
         news_heading = "News Flow" if report_language == "en" else "消息面"
+        btc_result = self._single_btc_result(results)
+        if btc_result is not None:
+            report_time = report_date or datetime.now().strftime('%Y-%m-%d %H:%M')
+            return self._generate_btc_single_stock_report(btc_result, report_time, report_language)
         if getattr(config, 'report_renderer_enabled', False) and results:
             from src.services.report_renderer import render
             out = render(
@@ -1265,6 +1278,23 @@ class NotificationService(
                             "",
                         ])
                     # 仓位策略
+                    intraday = battle.get('intraday_plan', {})
+                    if intraday:
+                        report_lines.extend([
+                            "**⏱️ 小时线日内计划（服从日线）**",
+                            "",
+                            "| 项目 | 计划 |",
+                            "|------|------|",
+                            f"| 方向 | {intraday.get('direction', 'N/A')} |",
+                            f"| 入场 | {self._clean_sniper_value(intraday.get('entry_price', 'N/A'))} |",
+                            f"| 止损 | {self._clean_sniper_value(intraday.get('stop_loss', 'N/A'))} |",
+                            f"| 目标 | {self._clean_sniper_value(intraday.get('take_profit', 'N/A'))} |",
+                            f"| 触发 | {intraday.get('trigger_condition', 'N/A')} |",
+                            f"| 日线约束 | {intraday.get('daily_constraint', 'N/A')} |",
+                            f"| 依据 | {intraday.get('reason', 'N/A')} |",
+                            "",
+                        ])
+                    # 仓位策略
                     position = battle.get('position_strategy', {})
                     if position:
                         report_lines.extend([
@@ -1351,6 +1381,10 @@ class NotificationService(
         config = get_config()
         report_language = self._get_report_language(results)
         labels = get_report_labels(report_language)
+        btc_result = self._single_btc_result(results)
+        if btc_result is not None:
+            report_time = datetime.now().strftime('%Y-%m-%d %H:%M')
+            return self._generate_btc_single_stock_report(btc_result, report_time, report_language)
         if getattr(config, 'report_renderer_enabled', False) and results:
             from src.services.report_renderer import render
             out = render(
@@ -1652,6 +1686,9 @@ class NotificationService(
         """
         report_date = datetime.now().strftime('%Y-%m-%d %H:%M')
         report_language = self._get_report_language(result)
+        if is_supported_btc_code(getattr(result, "code", "")):
+            return self._generate_btc_single_stock_report(result, report_date, report_language)
+
         labels = get_report_labels(report_language)
         signal_text, signal_emoji, _ = self._get_signal_level(result)
         dashboard = result.dashboard if hasattr(result, 'dashboard') and result.dashboard else {}
@@ -1739,6 +1776,29 @@ class NotificationService(
             take_profit = sniper.get('take_profit', '-')
             lines.append(f"| {ideal_buy} | {stop_loss} | {take_profit} |")
             lines.append("")
+
+        intraday = battle.get('intraday_plan', {}) if battle else {}
+        if intraday:
+            lines.extend([
+                "### ⏱️ 小时线日内计划（服从日线）",
+                "",
+                "| 方向 | 入场 | 止损 | 目标 |",
+                "|------|------|------|------|",
+                (
+                    f"| {intraday.get('direction', '-')} | "
+                    f"{intraday.get('entry_price', '-')} | "
+                    f"{intraday.get('stop_loss', '-')} | "
+                    f"{intraday.get('take_profit', '-')} |"
+                ),
+                "",
+            ])
+            if intraday.get('trigger_condition'):
+                lines.append(f"- 触发条件：{intraday.get('trigger_condition')}")
+            if intraday.get('daily_constraint'):
+                lines.append(f"- 日线约束：{intraday.get('daily_constraint')}")
+            if intraday.get('reason'):
+                lines.append(f"- 依据：{intraday.get('reason')}")
+            lines.append("")
         
         # 持仓建议
         pos_advice = core.get('position_advice', {}) if core else {}
@@ -1762,6 +1822,80 @@ class NotificationService(
         lines.append(f"*{labels['not_investment_advice']}*")
 
         return "\n".join(lines)
+
+    def _generate_btc_single_stock_report(
+        self,
+        result: AnalysisResult,
+        report_date: str,
+        report_language: str,
+    ) -> str:
+        """Render BTC push content with only directional advice and technicals."""
+        labels = get_report_labels(report_language)
+        signal_text, signal_emoji, _ = self._get_signal_level(result)
+        stock_name = self._get_display_name(result, report_language)
+        plans = extract_directional_strategy_plans(result)
+
+        lines = [
+            f"## {signal_emoji} {stock_name} ({result.code})",
+            "",
+            f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+            "",
+            f"### 多空建议",
+            "",
+            f"**{signal_text}**: {localize_operation_advice(result.operation_advice, report_language)}",
+            "",
+        ]
+
+        self._append_btc_plan(lines, "日线多单计划", plans.get("long_plan"))
+        self._append_btc_plan(lines, "日线空单计划", plans.get("short_plan"))
+        intraday = plans.get("intraday_plan")
+        if intraday:
+            self._append_btc_plan(lines, "小时线日内计划", intraday)
+
+        technical_lines = []
+        if getattr(result, "technical_analysis", ""):
+            technical_lines.append(str(result.technical_analysis))
+        if getattr(result, "ma_analysis", ""):
+            technical_lines.append(f"均线：{result.ma_analysis}")
+        if getattr(result, "volume_analysis", ""):
+            technical_lines.append(f"量能：{result.volume_analysis}")
+        if getattr(result, "pattern_analysis", ""):
+            technical_lines.append(f"形态：{result.pattern_analysis}")
+        if technical_lines:
+            lines.extend(["### 技术分析", ""])
+            lines.extend(f"- {line}" for line in technical_lines)
+            lines.append("")
+
+        lines.append("---")
+        lines.append(f"*{labels['not_investment_advice']}*")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _append_btc_plan(
+        lines: List[str],
+        title: str,
+        plan: Optional[Dict[str, Any]],
+    ) -> None:
+        if not plan:
+            return
+
+        rows = [
+            ("入场", plan.get("entry_price")),
+            ("止损", plan.get("stop_loss")),
+            ("目标", plan.get("take_profit")),
+            ("触发", plan.get("trigger_condition")),
+            ("失效", plan.get("invalidation")),
+            ("依据", plan.get("reason")),
+        ]
+        if title == "小时线日内计划" and plan.get("direction"):
+            rows.insert(0, ("方向", plan.get("direction")))
+        rows = [(label, str(value).strip()) for label, value in rows if value is not None and str(value).strip()]
+        if not rows:
+            return
+
+        lines.extend([f"#### {title}", ""])
+        lines.extend(f"- {label}: {value}" for label, value in rows)
+        lines.append("")
 
     # Display name mapping for realtime data sources
     _SOURCE_DISPLAY_NAMES = {

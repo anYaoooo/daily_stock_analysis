@@ -23,6 +23,17 @@ def test_extract_directional_strategy_plans_from_dashboard() -> None:
                     "invalidation": "重新站回支撑",
                     "reason": "跌破且量能确认",
                 },
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "long",
+                    "entry_price": "小时线入场：100500",
+                    "stop_loss": "99800",
+                    "take_profit": "102000",
+                    "trigger_condition": "小时线突破前高",
+                    "invalidation": "跌回小时线 VWAP 下方",
+                    "daily_constraint": "必须守住日线支撑 99000",
+                    "reason": "小时线与日线同向",
+                },
             }
         }
     )
@@ -33,6 +44,9 @@ def test_extract_directional_strategy_plans_from_dashboard() -> None:
     assert plans["long_plan"]["trigger_condition"] == "突破确认"
     assert plans["short_plan"]["entry_price"] == "空单入场：98000"
     assert plans["short_plan"]["invalidation"] == "重新站回支撑"
+    assert plans["intraday_plan"]["enabled"] is True
+    assert plans["intraday_plan"]["direction"] == "long"
+    assert plans["intraday_plan"]["daily_constraint"] == "必须守住日线支撑 99000"
 
 
 def test_extract_directional_strategy_plans_from_strategy_payload() -> None:
@@ -40,8 +54,10 @@ def test_extract_directional_strategy_plans_from_strategy_payload() -> None:
         {
             "long_plan": {"entry_price": "100000", "take_profit": "103000"},
             "short_plan": {"entry_price": "98000", "take_profit": "95000"},
+            "intraday_plan": {"enabled": False, "direction": "wait", "reason": "小时线未触发"},
         }
     )
 
     assert plans["long_plan"]["entry_price"] == "100000"
     assert plans["short_plan"]["take_profit"] == "95000"
+    assert plans["intraday_plan"]["direction"] == "wait"

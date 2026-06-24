@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- [新功能] BTC/加密货币资讯检索支持 CryptoPanic 优先来源，可配置官方 API Token，并可在本地桌面显式启用 OpenCLI 浏览器兜底。
+- [新功能] BTC 分析报告新增计划级回测落库：从历史报告提取日线多单、日线空单与小时线日内计划，次日评估入场触发、止盈止损、模拟收益和正确率，并提供 BTC 回测 API 与 schedule 后台检查。
+- [修复] BTC 实时行情在 CCXT/Binance ticker 调用返回 404 或异常时自动切换 Binance REST 公共接口兜底，避免行情接口误报未找到。
+- [改进] BTC 行情获取改为通过 CCXT 开源库对接 Binance 公共行情，保留现有 CryptoFetcher 调用接口与 BTC 代码兼容格式。
+- [新功能] 新增 CCXT / OKX 私有交易接口封装与 API，支持余额、持仓、挂单、下单、撤单、杠杆和保证金模式操作；默认 dry-run 且不接入自动分析交易。
+- [新功能] CCXT 私有交易接口支持 `CRYPTO_TRADING_EXCHANGE=bybit` 对接 Bybit Demo Trading，新增 Bybit demo key、期货结算币种、isolated 保证金和默认杠杆配置。
+- [改进] Web 持仓入口改造为 BTC 交易页面，展示 CCXT 交易所连接状态、USDT 余额、BTC 持仓、挂单，并支持手动下单、撤单、杠杆和保证金设置。
+- [新功能] BTC/加密货币资讯检索支持 CryptoPanic ChromaDB 本地缓存优先来源。
 - [新功能] 数据源新增 Binance 公共行情加密货币 fetcher，支持 `BTC` / `BTCUSDT` / `BTC-USD` / `BTC/USD` 获取比特币实时行情与日 K 数据，并在数据源管理器中独立路由加密货币标的。
 - [改进] Web 首页新增 `BTC 行情` 入口，可一键获取比特币实时价格与最近日 K 数据。
 - [改进] BTC 资讯来源切换为项目内置 CryptoPanic 抓取并写入 ChromaDB，抓取失败时仅读取 ChromaDB 缓存，不再使用原搜索/RSS 兜底作为 BTC 最新消息来源。
@@ -19,9 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] BTC K 线改为使用 Binance 原生周期，支持小时线、4 小时线、日线、周线和月线，Web 首页默认日线并可切换周期。
 - [改进] BTC 分析新增 Price Action、Fibonacci、Volume、rolling VWAP 与 EMA 交易框架补充，并要求报告结合多维度共振给出支撑、阻力和失效条件。
 - [改进] BTC 分析支持多空双向交易语义，报告需同时评估多单与空单触发、止损、目标和失效条件。
+- [改进] 定时 BTC 分析改为每小时整点执行，并在 BTC 分析中加入小时线日内机会判断且要求小时线交易服从日线交易框架。
 - [修复] BTC 市场阶段上下文改为 7x24 加密货币交易语义，不再套用美股盘前/开盘/收盘约束，并跳过 A/H/美股大盘上下文注入。
 - [改进] 默认关闭 `MARKET_REVIEW_ENABLED`，避免项目启动时自动生成大盘复盘；需要自动复盘时可显式设为 `true`。
 - [修复] BTC 行情附带资讯时优先读取 CryptoPanic ChromaDB 缓存，并为资讯组装增加短超时保护，避免 opencli/CryptoPanic 卡顿导致行情接口显示上游超时。
+- [改进] BTC 资讯检索改为只读取 ChromaDB 缓存并支持过期缓存兜底，不再通过 OpenCLI 抓取；BTC 单标的推送收敛为多空建议和技术分析。
+- [修复] BTC Agent 分析在生成报告前预取多维度资讯并注入 `news_context`，避免报告页有新闻但分析输入块显示 `news_context_missing`。
+- [改进] BTC 单标的完整报告推送改用 BTC 专用模板，仅保留多空建议、日线多/空计划、小时线日内计划和技术分析。
+- [修复] BTC 历史报告资讯动态在未落库 `news_intel` 时回退读取 ChromaDB 缓存，避免报告页显示暂无相关动态。
+- [改进] BTC 计划级回测升级为正式交易回测口径，纳入初始权益、单笔风险、名义仓位、杠杆、手续费、滑点、资金曲线、最大回撤、profit factor、净 PnL 和总收益率。
+- [改进] BTC 计划级回测默认升级为 `btc-plan-v2`，新增 K 线快照哈希、前视偏差校验、单笔 R 倍数和低样本置信标记。
+- [改进] 回测结果支持删除单条记录，删除后自动重算普通回测与 BTC 计划级回测汇总指标。
+- [文档] 新增 BTC 正式交易回测系统说明，覆盖算法流程、指标口径、API、配置、当前评估、限制和升级路线。
 - [改进] 项目运行时收口为 BTC-only，移除股票大盘复盘、股票筛选、股票索引刷新和 AlphaSift/Anspire/AIHubMix 默认入口，默认仅保留 BTC 行情、CryptoPanic 新闻抓取与通知推送链路。
 - [改进] Web 首页个股栏改为保留同一 BTC 的多条历史分析记录，支持按单条记录选择、删除并可关闭/恢复侧栏。
 - [修复] AlphaSift 热点题材刷新在 EastMoney 瞬断且无缓存时返回友好空态，并让桌面更新保留 AlphaSift 热点缓存。

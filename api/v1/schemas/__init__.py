@@ -43,6 +43,11 @@ from api.v1.schemas.stocks import (
 from api.v1.schemas.backtest import (
     BacktestRunRequest,
     BacktestRunResponse,
+    BacktestDeleteResponse,
+    CryptoBacktestMetrics,
+    CryptoBacktestResultsResponse,
+    CryptoBacktestResultItem,
+    CryptoBacktestRunResponse,
     BacktestResultItem,
     BacktestResultsResponse,
     PerformanceMetrics,
@@ -114,6 +119,19 @@ from api.v1.schemas.decision_signals import (
     DecisionSignalMutationResponse,
     DecisionSignalStatusUpdateRequest,
 )
+from api.v1.schemas.crypto_trading import (
+    CryptoTradingStatusResponse,
+    CryptoBalanceResponse,
+    CryptoListResponse,
+    CryptoCreateOrderRequest,
+    CryptoCreateOrderResponse,
+    CryptoCancelOrderRequest,
+    CryptoCancelOrderResponse,
+    CryptoSetLeverageRequest,
+    CryptoSetLeverageResponse,
+    CryptoSetMarginModeRequest,
+    CryptoSetMarginModeResponse,
+)
 
 __all__ = [
     # common
@@ -148,6 +166,11 @@ __all__ = [
     # backtest
     "BacktestRunRequest",
     "BacktestRunResponse",
+    "BacktestDeleteResponse",
+    "CryptoBacktestMetrics",
+    "CryptoBacktestResultsResponse",
+    "CryptoBacktestResultItem",
+    "CryptoBacktestRunResponse",
     "BacktestResultItem",
     "BacktestResultsResponse",
     "PerformanceMetrics",
@@ -214,4 +237,16 @@ __all__ = [
     "DecisionSignalListResponse",
     "DecisionSignalMutationResponse",
     "DecisionSignalStatusUpdateRequest",
+    # crypto trading
+    "CryptoTradingStatusResponse",
+    "CryptoBalanceResponse",
+    "CryptoListResponse",
+    "CryptoCreateOrderRequest",
+    "CryptoCreateOrderResponse",
+    "CryptoCancelOrderRequest",
+    "CryptoCancelOrderResponse",
+    "CryptoSetLeverageRequest",
+    "CryptoSetLeverageResponse",
+    "CryptoSetMarginModeRequest",
+    "CryptoSetMarginModeResponse",
 ]

@@ -117,6 +117,12 @@ export interface DirectionalStrategyPlan {
   reason?: string;
 }
 
+export interface IntradayStrategyPlan extends DirectionalStrategyPlan {
+  enabled?: boolean | string;
+  direction?: string;
+  dailyConstraint?: string;
+}
+
 export interface ReportStrategy {
   idealBuy?: string;
   secondaryBuy?: string;
@@ -124,6 +130,7 @@ export interface ReportStrategy {
   takeProfit?: string;
   longPlan?: DirectionalStrategyPlan | null;
   shortPlan?: DirectionalStrategyPlan | null;
+  intradayPlan?: IntradayStrategyPlan | null;
 }
 
 export interface RelatedBoard {

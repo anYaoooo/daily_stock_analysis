@@ -228,6 +228,7 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         self.assertIn("`sell` 表示空单开仓", prompt)
         self.assertIn("long_plan", prompt)
         self.assertIn("short_plan", prompt)
+        self.assertIn("intraday_plan", prompt)
         self.assertIn("必须同时输出", prompt)
         self.assertNotIn("是否满足 MA5>MA10>MA20 多头排列", prompt)
 
@@ -240,6 +241,71 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         self.assertIn("必须同时评估多单与空单", prompt)
         self.assertNotIn("多头排列必须条件", prompt)
         self.assertNotIn("只做多头排列的股票", prompt)
+
+    def test_prompt_includes_hourly_intraday_framework_when_context_present(self) -> None:
+        analyzer = GeminiAnalyzer()
+        analyzer._get_skill_prompt_sections = lambda: ("", "", False)
+        daily_context = {
+            "price_action": {
+                "state": "breakout",
+                "recent_high": 101000,
+                "recent_low": 95000,
+                "close_change_pct": 2.5,
+            },
+            "fibonacci": {
+                "swing_high": 101000,
+                "swing_low": 90000,
+                "retracement_levels": {"38.2%": 96798, "50.0%": 95500, "61.8%": 94202},
+            },
+            "volume": {"latest": 1200, "average": 1000, "ratio": 1.2, "confirmation": "normal"},
+            "vwap": {"rolling_20": 98000, "price_position": "above"},
+            "ema": {"ema20": 97000, "ema50": 94000, "structure": "bullish"},
+        }
+        hourly_context = {
+            "price_action": {
+                "state": "bullish_push",
+                "recent_high": 100800,
+                "recent_low": 98700,
+                "close_change_pct": 0.8,
+            },
+            "fibonacci": {
+                "swing_high": 100800,
+                "swing_low": 98700,
+                "retracement_levels": {"38.2%": 99998, "50.0%": 99750, "61.8%": 99502},
+            },
+            "volume": {"latest": 120, "average": 100, "ratio": 1.2, "confirmation": "normal"},
+            "vwap": {"rolling_20": 99500, "price_position": "above"},
+            "ema": {"ema20": 99200, "ema50": 98900, "structure": "bullish"},
+        }
+        context = {
+            "code": "BTC",
+            "stock_name": "Bitcoin",
+            "date": "2026-06-22",
+            "today": {"close": 100000, "volume": 1200},
+            "crypto_technical": {
+                **daily_context,
+                "timeframes": {"daily": daily_context, "hourly": hourly_context},
+                "intraday": {
+                    "daily_bias": "long",
+                    "hourly_bias": "long",
+                    "alignment": "aligned_long",
+                    "opportunity": "小时线与日线偏多共振，可寻找顺日线的日内多单触发。",
+                },
+            },
+        }
+
+        prompt = analyzer._format_prompt(context, "Bitcoin", report_language="zh")
+
+        self.assertIn("BTC 小时线日内交易机会", prompt)
+        self.assertIn("必须服从日线", prompt)
+        self.assertIn("日线偏向", prompt)
+        self.assertIn("小时线偏向", prompt)
+        self.assertIn("aligned_long", prompt)
+        self.assertIn("小时线只作为执行层", prompt)
+        self.assertIn("小时线与日线冲突时", prompt)
+        self.assertIn("BTC 小时线日内计划强制结构", prompt)
+        self.assertIn("dashboard.battle_plan.intraday_plan", prompt)
+        self.assertIn("daily_constraint", prompt)
 
 
 class TestEnhanceContextRealtimeOverride(unittest.TestCase):

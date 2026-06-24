@@ -73,7 +73,7 @@ from src.services.run_diagnostics import (
 from src.services.decision_signal_extractor import extract_and_persist_from_analysis_result
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
-from src.crypto_technical import build_crypto_technical_context
+from src.crypto_technical import build_crypto_multi_timeframe_context
 from src.core.trading_calendar import (
     build_market_phase_context,
     get_effective_trading_date,
@@ -81,6 +81,7 @@ from src.core.trading_calendar import (
     get_market_now,
     is_market_open,
 )
+from data_provider.crypto_fetcher import CryptoFetcher, is_crypto_code
 from data_provider.us_index_mapping import is_us_stock_code
 from bot.models import BotMessage
 
@@ -466,7 +467,13 @@ class StockAnalysisPipeline:
                     if self.config.enable_realtime_quote and realtime_quote:
                         df = self._augment_historical_with_realtime(df, realtime_quote, code)
                     trend_result = self.trend_analyzer.analyze(df, code)
-                    crypto_technical_context = build_crypto_technical_context(df, code)
+                    hourly_df = None
+                    if is_crypto_code(code):
+                        try:
+                            hourly_df = CryptoFetcher().get_kline_data(code, period="hourly", days=7)
+                        except Exception as exc:
+                            logger.warning("%s(%s) BTC 小时线数据获取失败，仅使用日线分析: %s", stock_name, code, exc)
+                    crypto_technical_context = build_crypto_multi_timeframe_context(df, hourly_df, code)
                     logger.info(f"{stock_name}({code}) 趋势分析: {trend_result.trend_status.value}, "
                               f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
             except Exception as e:
@@ -488,6 +495,7 @@ class StockAnalysisPipeline:
                     market_phase_summary=market_phase_summary,
                     daily_market_context=daily_market_context,
                     portfolio_context=portfolio_context,
+                    crypto_technical_context=crypto_technical_context,
                 )
 
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
@@ -1076,6 +1084,7 @@ class StockAnalysisPipeline:
         market_phase_summary: Optional[Dict[str, Any]] = None,
         daily_market_context: Optional[DailyMarketContext] = None,
         portfolio_context: Optional[Dict[str, Any]] = None,
+        crypto_technical_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[AnalysisResult]:
         """
         使用 Agent 模式分析单只股票。
@@ -1118,6 +1127,51 @@ class StockAnalysisPipeline:
                 initial_context["chip_distribution"] = self._safe_to_dict(chip_data)
             if trend_result:
                 initial_context["trend_result"] = self._safe_to_dict(trend_result)
+            if crypto_technical_context:
+                initial_context["crypto_technical"] = crypto_technical_context
+
+            news_result_count: Optional[int] = None
+            news_intel_prefetched = False
+            if self.search_service is not None and self.search_service.is_available:
+                try:
+                    logger.info(f"[{code}] Agent mode: prefetching news intelligence...")
+                    intel_results = self.search_service.search_comprehensive_intel(
+                        stock_code=code,
+                        stock_name=stock_name,
+                        max_searches=5,
+                    )
+                    if intel_results:
+                        news_context = self.search_service.format_intel_report(
+                            intel_results,
+                            stock_name,
+                        )
+                        total_results = sum(
+                            len(response.results)
+                            for response in intel_results.values()
+                            if response and response.success
+                        )
+                        news_result_count = total_results
+                        if news_context:
+                            initial_context["news_context"] = news_context
+                            initial_context["news_result_count"] = total_results
+                            logger.info(
+                                f"[{code}] Agent mode: news intelligence injected into analysis input ({total_results} results)"
+                            )
+
+                        query_context = self._build_query_context(query_id=query_id)
+                        for dim_name, response in intel_results.items():
+                            if response and response.success and response.results:
+                                self.db.save_news_intel(
+                                    code=code,
+                                    name=stock_name,
+                                    dimension=dim_name,
+                                    query=response.query,
+                                    response=response,
+                                    query_context=query_context,
+                                )
+                                news_intel_prefetched = True
+                except Exception as e:
+                    logger.warning(f"[{code}] Agent mode news intelligence prefetch failed: {e}")
 
             # Agent path: inject social sentiment as news_context so both
             # executor (_build_user_message) and orchestrator (ctx.set_data)
@@ -1273,8 +1327,12 @@ class StockAnalysisPipeline:
             resolved_stock_name = result.name if result and result.name else stock_name
 
             # 保存新闻情报到数据库（Agent 工具结果仅用于 LLM 上下文，未持久化，Fixes #396）
-            # 使用 search_stock_news（与 Agent 工具调用逻辑一致），仅 1 次 API 调用，无额外延迟
-            if self.search_service is not None and self.search_service.is_available:
+            # 若分析前多维度情报已落库，则避免重复查询；否则保留单次 latest_news 兜底。
+            if (
+                not news_intel_prefetched
+                and self.search_service is not None
+                and self.search_service.is_available
+            ):
                 try:
                     news_response = self.search_service.search_stock_news(
                         stock_code=code,
@@ -1304,6 +1362,7 @@ class StockAnalysisPipeline:
                             "stock_name": resolved_stock_name,
                         },
                         news_content=initial_context.get("news_context"),
+                        news_result_count=news_result_count,
                         realtime_quote=realtime_quote,
                         chip_data=chip_data,
                         analysis_context_pack_overview=analysis_context_pack_overview,
@@ -2319,7 +2378,7 @@ class StockAnalysisPipeline:
             chip_data=initial_context.get("chip_distribution"),
             fundamental_context=fundamental_context,
             news_context=initial_context.get("news_context"),
-            news_result_count=None,
+            news_result_count=initial_context.get("news_result_count"),
             metadata={
                 "query_id": query_id,
                 "trigger_source": self.query_source,

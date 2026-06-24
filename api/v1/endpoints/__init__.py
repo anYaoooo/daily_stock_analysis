@@ -21,6 +21,7 @@ from api.v1.endpoints import (
     portfolio,
     alerts,
     decision_signals,
+    crypto_trading,
 )
 __all__ = [
     "health",
@@ -35,4 +36,5 @@ __all__ = [
     "portfolio",
     "alerts",
     "decision_signals",
+    "crypto_trading",
 ]

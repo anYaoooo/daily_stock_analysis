@@ -17,6 +17,7 @@ ensure_litellm_stub()
 from src.analyzer import AnalysisResult
 from src.core.pipeline import StockAnalysisPipeline
 from src.enums import ReportType
+from src.search_service import SearchResponse, SearchResult
 from src.services.run_diagnostics import activate_run_diagnostic_context, current_diagnostic_snapshot, reset_run_diagnostic_context
 
 
@@ -500,6 +501,100 @@ class PipelineMarketPhaseContextTestCase(unittest.TestCase):
         self.assertNotIn(
             "items",
             str(save_kwargs["context_snapshot"]["analysis_context_pack_overview"]),
+        )
+
+    def test_agent_prefetches_news_context_before_btc_analysis(self):
+        pipeline = _make_pipeline(agent_mode=True, save_context_snapshot=True)
+        pipeline._ensure_agent_history = MagicMock()
+        pipeline.db.get_analysis_context.return_value = {
+            "code": "BTC",
+            "stock_name": "Bitcoin",
+            "date": "2026-06-02",
+            "today": {"date": "2026-06-02", "close": 68000.0, "volume": 1000.0},
+            "yesterday": {"date": "2026-06-01", "close": 67000.0, "volume": 900.0},
+        }
+        pipeline.search_service.is_available = True
+        latest_news = SearchResponse(
+            query="Bitcoin BTC latest news",
+            results=[
+                SearchResult(
+                    title="Bitcoin ETF inflows lift BTC sentiment",
+                    snippet="BTC liquidity improved after ETF inflows.",
+                    url="https://example.com/btc-etf",
+                    source="CryptoPanic",
+                    published_date="2026-06-02",
+                )
+            ],
+            provider="CryptoPanicChroma",
+        )
+        pipeline.search_service.search_comprehensive_intel.return_value = {
+            "latest_news": latest_news,
+        }
+        pipeline.search_service.format_intel_report.return_value = (
+            "BTC news context from CryptoPanic cache"
+        )
+
+        from src.agent.executor import AgentResult
+
+        executor = MagicMock()
+        executor.run.return_value = AgentResult(
+            success=True,
+            content="{}",
+            dashboard={
+                "stock_name": "Bitcoin",
+                "sentiment_score": 66,
+                "trend_prediction": "震荡",
+                "operation_advice": "持有",
+                "decision_type": "hold",
+            },
+            provider="test",
+        )
+
+        with patch("src.agent.factory.build_agent_executor", return_value=executor):
+            result = pipeline._analyze_with_agent(
+                code="BTC",
+                report_type=ReportType.SIMPLE,
+                query_id="q-agent-btc-news",
+                stock_name="Bitcoin",
+                realtime_quote=None,
+                chip_data=None,
+                fundamental_context={"market": "crypto"},
+                trend_result=None,
+                market_phase_context={**_phase_payload(), "market": "crypto"},
+            )
+
+        self.assertIsNotNone(result)
+        pipeline.search_service.search_comprehensive_intel.assert_called_once_with(
+            stock_code="BTC",
+            stock_name="Bitcoin",
+            max_searches=5,
+        )
+        pipeline.search_service.search_stock_news.assert_not_called()
+        pipeline.db.save_news_intel.assert_called_once()
+
+        run_context = executor.run.call_args.kwargs["context"]
+        self.assertEqual(
+            run_context["news_context"],
+            "BTC news context from CryptoPanic cache",
+        )
+        self.assertEqual(run_context["news_result_count"], 1)
+        self.assertIn("新闻: available", run_context["analysis_context_pack_summary"])
+        self.assertNotIn("news_context_missing", run_context["analysis_context_pack_summary"])
+
+        save_kwargs = pipeline.db.save_analysis_history.call_args.kwargs
+        snapshot = save_kwargs["context_snapshot"]
+        self.assertEqual(snapshot["news_content"], "BTC news context from CryptoPanic cache")
+        self.assertEqual(snapshot["news_result_count"], 1)
+        news_block = next(
+            block
+            for block in snapshot["analysis_context_pack_overview"]["blocks"]
+            if block["key"] == "news"
+        )
+        self.assertEqual(news_block["status"], "available")
+        self.assertEqual(news_block["missing_reasons"], [])
+        self.assertEqual(
+            snapshot["analysis_context_pack_overview"]["metadata"]["news_result_count"],
+            1,
         )
 
     def test_agent_pack_summary_uses_db_daily_context_after_history_prefetch(self):

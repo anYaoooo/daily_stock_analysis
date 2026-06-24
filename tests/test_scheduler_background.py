@@ -12,15 +12,26 @@ class _FakeJob:
         self._schedule_module = schedule_module
         self.next_run = datetime(2026, 1, 1, 18, 0, 0)
         self.at_time = None
+        self.period = None
 
     @property
     def day(self):
+        self.period = "day"
+        return self
+
+    @property
+    def hour(self):
+        self.period = "hour"
         return self
 
     def at(self, value):
         self.at_time = value
-        hour, minute = [int(part) for part in value.split(":")]
-        self.next_run = datetime(2026, 1, 1, hour, minute, 0)
+        if value.startswith(":"):
+            minute = int(value[1:])
+            self.next_run = datetime(2026, 1, 1, 18, minute, 0)
+        else:
+            hour, minute = [int(part) for part in value.split(":")]
+            self.next_run = datetime(2026, 1, 1, hour, minute, 0)
         return self
 
     def do(self, fn):
@@ -88,9 +99,10 @@ class SchedulerBackgroundTaskTestCase(unittest.TestCase):
             order = []
 
             class FakeScheduler:
-                def __init__(self, schedule_time="18:00", schedule_time_provider=None):
+                def __init__(self, schedule_time="18:00", schedule_time_provider=None, schedule_mode="daily"):
                     order.append(("init", schedule_time))
                     order.append(("provider", callable(schedule_time_provider)))
+                    order.append(("mode", schedule_mode))
 
                 def add_background_task(self, **kwargs):
                     order.append(("background", kwargs["name"]))
@@ -113,7 +125,38 @@ class SchedulerBackgroundTaskTestCase(unittest.TestCase):
                     }],
                 )
 
-        self.assertEqual(order[:4], [("init", "18:00"), ("provider", False), ("background", "event_monitor"), ("daily", True)])
+        self.assertEqual(order[:5], [("init", "18:00"), ("provider", False), ("mode", "daily"), ("background", "event_monitor"), ("daily", True)])
+
+    def test_scheduler_hourly_mode_registers_top_of_hour_job(self):
+        fake_schedule = _FakeScheduleModule()
+        with patch.dict(sys.modules, {"schedule": fake_schedule}):
+            from src.scheduler import Scheduler
+
+            scheduler = Scheduler(schedule_time="18:00", schedule_mode="hourly")
+            scheduler.set_daily_task(lambda: None, run_immediately=False)
+
+        self.assertEqual(len(fake_schedule.jobs), 1)
+        self.assertEqual(fake_schedule.jobs[0].period, "hour")
+        self.assertEqual(fake_schedule.jobs[0].at_time, ":00")
+
+    def test_scheduler_hourly_mode_ignores_schedule_time_provider(self):
+        fake_schedule = _FakeScheduleModule()
+        with patch.dict(sys.modules, {"schedule": fake_schedule}):
+            from src.scheduler import Scheduler
+
+            provider = MagicMock(return_value="09:30")
+            scheduler = Scheduler(
+                schedule_time="18:00",
+                schedule_time_provider=provider,
+                schedule_mode="hourly",
+            )
+            scheduler.set_daily_task(lambda: None, run_immediately=False)
+            scheduler._refresh_daily_schedule_if_needed()
+
+        provider.assert_not_called()
+        self.assertEqual(len(fake_schedule.jobs), 1)
+        self.assertEqual(fake_schedule.jobs[0].period, "hour")
+        self.assertEqual(fake_schedule.jobs[0].at_time, ":00")
 
     def test_scheduler_reloads_daily_job_when_schedule_time_changes(self):
         fake_schedule = _FakeScheduleModule()

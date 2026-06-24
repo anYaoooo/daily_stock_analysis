@@ -3,6 +3,7 @@ import { toCamelCase } from './utils';
 import type {
   BacktestRunRequest,
   BacktestRunResponse,
+  BacktestDeleteResponse,
   BacktestResultsResponse,
   BacktestResultItem,
   PerformanceMetrics,
@@ -28,6 +29,17 @@ export const backtestApi = {
       requestData,
     );
     return toCamelCase<BacktestRunResponse>(response.data);
+  },
+
+  /**
+   * Delete one backtest result for the current engine version
+   */
+  deleteResult: async (analysisHistoryId: number, evalWindowDays: number): Promise<BacktestDeleteResponse> => {
+    const response = await apiClient.delete<Record<string, unknown>>(
+      `/api/v1/backtest/results/${analysisHistoryId}`,
+      { params: { eval_window_days: evalWindowDays } },
+    );
+    return toCamelCase<BacktestDeleteResponse>(response.data);
   },
 
   /**

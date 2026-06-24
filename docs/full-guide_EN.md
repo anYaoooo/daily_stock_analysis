@@ -303,8 +303,8 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | `NEWS_MAX_AGE_DAYS` | Maximum news age in days for strict latest-news filtering | Default `3` |
 | `CRYPTOPANIC_CHROMA_PATH` | ChromaDB directory used to write/read BTC CryptoPanic news; empty uses the local Hermes historical directory by default | Optional |
 | `CRYPTOPANIC_CHROMA_COLLECTION` | ChromaDB collection name for BTC news | Default `cryptopanic_news` |
-| `CRYPTOPANIC_OPENCLI_PATH` | opencli executable path; empty auto-tries `%APPDATA%\npm\opencli.cmd` and PATH | Optional |
-| `CRYPTOPANIC_REFRESH_INTERVAL_SECONDS` | CryptoPanic fetch throttle interval; within the interval the app reads ChromaDB cache directly | Default `900` |
+| `CRYPTOPANIC_OPENCLI_PATH` | Deprecated: BTC news runtime no longer fetches through OpenCLI and only reads the ChromaDB cache | Optional |
+| `CRYPTOPANIC_REFRESH_INTERVAL_SECONDS` | Deprecated: BTC news runtime no longer triggers fetch throttling and only reads the ChromaDB cache | Default `900` |
 | `CRYPTOPANIC_MAX_AGE_HOURS` | Maximum usable age for cached ChromaDB news | Default `24` |
 
 > Behavior note: Search and social sentiment are optional enhancement services. If either service fails to initialize, the system logs a warning and degrades gracefully by skipping that stage without blocking the core analysis flow.
@@ -1024,10 +1024,16 @@ System defaults to AkShare (free), also supports other data sources:
 - Supports US/HK stock data
 - US stock historical and real-time data both use YFinance exclusively to avoid technical indicator errors from akshare's US stock adjustment issues
 
-### Binance Crypto
-- Free, no configuration needed; uses Binance public market-data endpoints
+### CCXT / Binance Crypto
+- Free, no configuration needed; uses CCXT to access Binance public market-data endpoints
 - Currently supports Bitcoin symbols: `BTC`, `BTCUSDT`, `BTC-USD`, `BTC/USD`
 - Provides real-time quotes and daily K-line data, and routes crypto symbols separately so they are not mistaken for US tickers
+
+### CCXT Private Trading API
+- Select the exchange with `CRYPTO_TRADING_EXCHANGE=okx|bybit`; the default is `okx`. Trading APIs are not wired into automatic analysis execution. Endpoints live under `/api/v1/crypto-trading/*` and support balance, positions, open orders, single-order lookup, explicit order creation/cancelation, leverage, and margin mode settings.
+- For OKX, optionally configure `OKX_API_KEY`, `OKX_SECRET`, and `OKX_PASSWORD`. `OKX_PASSWORD` is the OKX API key passphrase, not the login password. The default symbol is `BTC/USDT:USDT`, with `OKX_DEFAULT_TYPE=swap` and `OKX_TD_MODE=cross`; set `OKX_SANDBOX=true` to use the OKX sandbox.
+- Bybit currently uses exchange-provided Demo Trading only: set `CRYPTO_TRADING_EXCHANGE=bybit`, `BYBIT_API_KEY`, `BYBIT_SECRET`, and `BYBIT_DEMO_TRADING=true`. Futures default to `BYBIT_DEFAULT_TYPE=swap`, `BYBIT_DEFAULT_SETTLE=USDT`, `BYBIT_MARGIN_MODE=isolated`, and `BYBIT_DEFAULT_LEVERAGE=2`; order params automatically include `position_idx=0`. For spot, set `BYBIT_DEFAULT_TYPE=spot` and use spot symbols such as `BTC/USDT`.
+- Mutating calls have two safeguards: `CRYPTO_TRADING_ENABLED=false` blocks real trading, and `CRYPTO_TRADING_DRY_RUN=true` returns a preview without calling exchange write APIs. Real write calls require both `CRYPTO_TRADING_ENABLED=true` and `CRYPTO_TRADING_DRY_RUN=false`. Bybit Demo Trading is an exchange-side simulated account mode, not local dry-run.
 
 ### Longbridge
 - Optional fallback for US/HK stocks, mainly used to supplement fields that YFinance may miss
@@ -1212,10 +1218,21 @@ Set the following variables in `.env` (all optional, have defaults):
 | `BACKTEST_MIN_AGE_DAYS` | `14` | Only backtest records older than N days to avoid incomplete data |
 | `BACKTEST_ENGINE_VERSION` | `v1` | Engine version, used to distinguish results when logic is updated |
 | `BACKTEST_NEUTRAL_BAND_PCT` | `2.0` | Neutral band threshold (%), ±2% treated as range-bound |
+| `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | BTC plan-level backtest minimum age; defaults to 24 hours after report creation |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v2` | BTC plan-level backtest engine version |
+| `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | BTC plan-level neutral band threshold (%) |
+| `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | Initial equity for BTC trading backtests, used for equity curve, net return, and sizing |
+| `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | Maximum account risk per trade; position size is derived from stop distance |
+| `CRYPTO_BACKTEST_MAX_NOTIONAL_PCT` | `100.0` | Maximum notional position size as a percentage of account equity |
+| `CRYPTO_BACKTEST_LEVERAGE` | `1.0` | Notional leverage multiplier |
+| `CRYPTO_BACKTEST_FEE_RATE_BPS` | `5.0` | One-way fee rate in bps |
+| `CRYPTO_BACKTEST_SLIPPAGE_BPS` | `2.0` | One-way slippage in bps |
 
 ### Auto-run
 
-Backtesting triggers automatically after the daily analysis flow completes (non-blocking; failures do not affect notifications). It can also be triggered manually via API.
+Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, a background worker also checks eligible BTC history every hour. BTC plan-level backtesting extracts `daily_long`, `daily_short`, and `intraday` plans from `analysis_history.raw_result`, simulates trade execution with entry triggers, SL/TP exits, fees, slippage, risk budget, and notional caps, stores results in `crypto_backtest_results`, and rolls up accuracy, win rate, equity curve, and risk/return metrics in `crypto_backtest_summaries`. `btc-plan-v2` also stores kline source/period/fetch time/bar range/hash, lookahead-bias guard diagnostics, per-trade R multiple, and marks summaries as low confidence when fewer than 30 entries were triggered. Results can be triggered manually or deleted one row at a time via API; summaries are recomputed after deletion.
+
+After a single-symbol BTC analysis completes, full report notifications use the BTC-specific template instead of the generic stock decision dashboard. The notification body keeps only directional advice, the daily long plan, the daily short plan, the hourly intraday plan, and technical analysis.
 
 ### Evaluation Metrics
 
@@ -1225,6 +1242,12 @@ Backtesting triggers automatically after the daily analysis flow completes (non-
 | `win_rate_pct` | Win rate (wins / (wins + losses), excludes neutral) |
 | `avg_stock_return_pct` | Average stock return percentage |
 | `avg_simulated_return_pct` | Average simulated execution return (including SL/TP exits) |
+| `risk_metrics.total_return_pct` | Account total return for BTC trading backtests |
+| `risk_metrics.max_drawdown_pct` | Maximum drawdown of the equity curve |
+| `risk_metrics.profit_factor` | Gross profit / absolute gross loss |
+| `risk_metrics.total_net_pnl` | Cumulative net PnL after fees and slippage |
+| `risk_metrics.avg_r_multiple` | Average R multiple for BTC backtests |
+| `equity_curve` | Account equity curve ordered by simulated trades |
 | `stop_loss_trigger_rate` | Stop-loss trigger rate (only counts records with SL configured) |
 | `take_profit_trigger_rate` | Take-profit trigger rate (only counts records with TP configured) |
 

@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 # Keep this test runnable when optional LLM runtime deps are not installed.
 try:
@@ -199,6 +200,50 @@ class AnalysisHistoryTestCase(unittest.TestCase):
             self.assertEqual(row.secondary_buy, 120.0)
             self.assertEqual(row.stop_loss, 110.0)
             self.assertEqual(row.take_profit, 150.0)
+
+    def test_resolve_and_get_news_falls_back_to_btc_chroma_cache(self) -> None:
+        """BTC 历史报告没有 news_intel 落库时，从 ChromaDB 新闻缓存补充资讯动态。"""
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=62,
+            trend_prediction="震荡",
+            operation_advice="观望",
+            analysis_summary="BTC test",
+        )
+        query_id = "query_btc_chroma_news_fallback"
+        saved = self.db.save_analysis_history(
+            result=result,
+            query_id=query_id,
+            report_type="simple",
+            news_content=None,
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.assertGreater(saved, 0)
+
+        fake_service = MagicMock()
+        fake_service.get_latest_news.return_value = SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    title="Bitcoin ETF flows improve",
+                    source="CryptoPanic",
+                    time_ago="12min",
+                )
+            ]
+        )
+
+        with patch(
+            "src.services.cryptopanic_news_service.build_cryptopanic_news_service_from_env",
+            return_value=fake_service,
+        ):
+            items = HistoryService(self.db).resolve_and_get_news(str(saved), limit=3)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["title"], "Bitcoin ETF flows improve")
+        self.assertEqual(items[0]["snippet"], "CryptoPanic | 12min")
+        self.assertEqual(items[0]["url"], "")
+        fake_service.get_latest_news.assert_called_once_with(coin="BTC", limit=3)
 
     def test_save_analysis_history_persists_sniper_columns_via_shared_parser(self) -> None:
         """迁出 sniper parser 后历史狙击点位列仍按原规则保存。"""

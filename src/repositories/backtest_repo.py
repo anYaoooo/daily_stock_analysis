@@ -109,6 +109,30 @@ class BacktestRepository:
                 logger.error(f"批量保存回测结果失败: {exc}")
                 raise
 
+    def delete_result(
+        self,
+        *,
+        analysis_history_id: int,
+        eval_window_days: int,
+        engine_version: str,
+    ) -> Tuple[int, Optional[str]]:
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(BacktestResult).where(
+                    and_(
+                        BacktestResult.analysis_history_id == int(analysis_history_id),
+                        BacktestResult.eval_window_days == int(eval_window_days),
+                        BacktestResult.engine_version == engine_version,
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return 0, None
+            code = row.code
+            session.delete(row)
+            session.commit()
+            return 1, code
+
     def get_results_paginated(
         self,
         *,

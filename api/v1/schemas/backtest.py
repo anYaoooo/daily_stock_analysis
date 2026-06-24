@@ -27,6 +27,14 @@ class BacktestRunResponse(BaseModel):
     errors: int = Field(..., description="错误数")
 
 
+class CryptoBacktestRunResponse(BacktestRunResponse):
+    skipped: int = Field(0, description="跳过数")
+
+
+class BacktestDeleteResponse(BaseModel):
+    deleted: int = Field(..., description="删除的回测结果数量")
+
+
 class BacktestResultItem(BaseModel):
     analysis_history_id: int
     code: str
@@ -66,11 +74,47 @@ class BacktestResultItem(BaseModel):
     simulated_return_pct: Optional[float] = None
 
 
+class CryptoBacktestResultItem(BaseModel):
+    analysis_history_id: int
+    code: str
+    analysis_created_at: Optional[str] = None
+    evaluated_at: Optional[str] = None
+    plan_type: str
+    horizon: str
+    direction: str
+    engine_version: str
+    eval_status: str
+    evaluation_start: Optional[str] = None
+    evaluation_end: Optional[str] = None
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    entry_triggered: Optional[bool] = None
+    entry_triggered_at: Optional[str] = None
+    direction_correct: Optional[bool] = None
+    outcome: Optional[str] = None
+    hit_stop_loss: Optional[bool] = None
+    hit_take_profit: Optional[bool] = None
+    first_hit: Optional[str] = None
+    first_hit_at: Optional[str] = None
+    simulated_return_pct: Optional[float] = None
+    trade: Dict[str, Any] = Field(default_factory=dict)
+    execution: Dict[str, Any] = Field(default_factory=dict)
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
+
+
 class BacktestResultsResponse(BaseModel):
     total: int
     page: int
     limit: int
     items: List[BacktestResultItem] = Field(default_factory=list)
+
+
+class CryptoBacktestResultsResponse(BaseModel):
+    total: int
+    page: int
+    limit: int
+    items: List[CryptoBacktestResultItem] = Field(default_factory=list)
 
 
 class PerformanceMetrics(BaseModel):
@@ -101,4 +145,29 @@ class PerformanceMetrics(BaseModel):
     avg_days_to_first_hit: Optional[float] = None
 
     advice_breakdown: Dict[str, Any] = Field(default_factory=dict)
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CryptoBacktestMetrics(BaseModel):
+    scope: str
+    code: Optional[str] = None
+    horizon: Optional[str] = None
+    plan_type: Optional[str] = None
+    engine_version: str
+    computed_at: Optional[str] = None
+    total_evaluations: int
+    completed_count: int
+    triggered_count: int
+    no_entry_count: int
+    skipped_count: int
+    insufficient_count: int
+    win_count: int
+    loss_count: int
+    neutral_count: int
+    direction_accuracy_pct: Optional[float] = None
+    win_rate_pct: Optional[float] = None
+    avg_simulated_return_pct: Optional[float] = None
+    plan_type_breakdown: Dict[str, Any] = Field(default_factory=dict)
+    risk_metrics: Dict[str, Any] = Field(default_factory=dict)
+    equity_curve: List[Dict[str, Any]] = Field(default_factory=list)
     diagnostics: Dict[str, Any] = Field(default_factory=dict)

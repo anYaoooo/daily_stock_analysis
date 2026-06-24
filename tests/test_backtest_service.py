@@ -185,6 +185,47 @@ class BacktestServiceTestCase(unittest.TestCase):
         self.assertEqual(stats3["saved"], 1)
         self.assertEqual(self._count_results(), 1)
 
+    def test_delete_result_removes_row_and_recomputes_summaries(self) -> None:
+        service = BacktestService(self.db)
+        service.run_backtest(code="600519", force=False, eval_window_days=3, min_age_days=0, limit=10)
+        with self.db.get_session() as session:
+            row = session.query(BacktestResult).one()
+            analysis_history_id = row.analysis_history_id
+            self.assertEqual(
+                session.query(BacktestSummary)
+                .filter(BacktestSummary.scope == "overall", BacktestSummary.code == OVERALL_SENTINEL_CODE)
+                .one()
+                .total_evaluations,
+                1,
+            )
+
+        result = service.delete_result(
+            analysis_history_id=analysis_history_id,
+            eval_window_days=3,
+        )
+
+        self.assertEqual(result, {"deleted": 1})
+        with self.db.get_session() as session:
+            self.assertEqual(session.query(BacktestResult).count(), 0)
+            overall = (
+                session.query(BacktestSummary)
+                .filter(BacktestSummary.scope == "overall", BacktestSummary.code == OVERALL_SENTINEL_CODE)
+                .one()
+            )
+            stock = (
+                session.query(BacktestSummary)
+                .filter(BacktestSummary.scope == "stock", BacktestSummary.code == "600519")
+                .one()
+            )
+            self.assertEqual(overall.total_evaluations, 0)
+            self.assertEqual(stock.total_evaluations, 0)
+
+    def test_delete_result_returns_zero_for_missing_row(self) -> None:
+        service = BacktestService(self.db)
+        result = service.delete_result(analysis_history_id=999, eval_window_days=3)
+        self.assertEqual(result, {"deleted": 0})
+        self.assertEqual(self._count_results(), 0)
+
     def _run_and_get_result(self) -> BacktestResult:
         """Helper: run backtest and return the single BacktestResult row."""
         service = BacktestService(self.db)

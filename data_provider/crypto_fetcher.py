@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Cryptocurrency market data fetcher.
-
-The first implementation uses Binance public market-data endpoints because
-they require no API key and expose both ticker and candlestick data.
-"""
+"""Cryptocurrency market data fetcher backed by CCXT."""
 
 from __future__ import annotations
 
@@ -19,10 +15,16 @@ from .realtime_types import RealtimeSource, UnifiedRealtimeQuote, safe_float, sa
 
 logger = logging.getLogger(__name__)
 
-_BINANCE_BASE_URL = "https://api.binance.com"
 _HTTP_TIMEOUT_SECONDS = 10
 
-_BINANCE_INTERVAL_BY_PERIOD = {
+_CCXT_EXCHANGE_ID = "binance"
+_BINANCE_REST_BASE_URLS = (
+    "https://api.binance.com",
+    "https://api1.binance.com",
+    "https://data-api.binance.vision",
+    "https://api.binance.us",
+)
+_CCXT_TIMEFRAME_BY_PERIOD = {
     "hourly": "1h",
     "four_hour": "4h",
     "daily": "1d",
@@ -41,7 +43,7 @@ _QUOTE_ALIASES = {
 
 
 def normalize_crypto_symbol(code: str) -> Optional[str]:
-    """Normalize common BTC symbols to Binance spot symbols."""
+    """Normalize common BTC symbols to the canonical compact symbol."""
     raw = (code or "").strip().upper()
     if not raw:
         return None
@@ -58,6 +60,16 @@ def normalize_crypto_symbol(code: str) -> Optional[str]:
     return None
 
 
+def normalize_crypto_market_symbol(code: str) -> Optional[str]:
+    """Normalize common BTC symbols to the CCXT market symbol format."""
+    symbol = normalize_crypto_symbol(code)
+    if not symbol:
+        return None
+    if symbol.endswith("USDT"):
+        return f"{symbol[:-4]}/USDT"
+    return symbol
+
+
 def is_crypto_code(code: str) -> bool:
     return normalize_crypto_symbol(code) is not None
 
@@ -69,7 +81,7 @@ def crypto_display_name(code: str) -> str:
 
 
 class CryptoFetcher(BaseFetcher):
-    """Fetch BTC market data from Binance public endpoints."""
+    """Fetch BTC market data through CCXT public market-data methods."""
 
     name = "CryptoFetcher"
     priority = 1
@@ -78,37 +90,36 @@ class CryptoFetcher(BaseFetcher):
         return self._fetch_kline_rows(stock_code, start_date, end_date, period="daily")
 
     def _fetch_kline_rows(self, stock_code: str, start_date: str, end_date: str, *, period: str) -> pd.DataFrame:
-        symbol = normalize_crypto_symbol(stock_code)
-        if not symbol:
+        market_symbol = normalize_crypto_market_symbol(stock_code)
+        if not market_symbol:
             raise DataFetchError(f"CryptoFetcher unsupported symbol: {stock_code}")
-        interval = _BINANCE_INTERVAL_BY_PERIOD.get(period)
-        if interval is None:
-            supported = ", ".join(sorted(_BINANCE_INTERVAL_BY_PERIOD))
+        timeframe = _CCXT_TIMEFRAME_BY_PERIOD.get(period)
+        if timeframe is None:
+            supported = ", ".join(sorted(_CCXT_TIMEFRAME_BY_PERIOD))
             raise DataFetchError(f"CryptoFetcher unsupported period: {period}; supported: {supported}")
 
         try:
             start_ms = _date_to_millis(start_date)
-            # Binance endTime is inclusive in practice; use the end-of-day boundary.
             end_ms = _date_to_millis(end_date, end_of_day=True)
         except ValueError as exc:
             raise DataFetchError(f"Invalid date range: {start_date} ~ {end_date}") from exc
 
-        response = requests.get(
-            f"{_BINANCE_BASE_URL}/api/v3/klines",
-            params={
-                "symbol": symbol,
-                "interval": interval,
-                "startTime": start_ms,
-                "endTime": end_ms,
-                "limit": 1000,
-            },
-            timeout=_HTTP_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        rows = response.json()
+        exchange = self._create_exchange()
+        try:
+            rows = exchange.fetch_ohlcv(
+                market_symbol,
+                timeframe=timeframe,
+                since=start_ms,
+                limit=1000,
+            )
+        except Exception as exc:
+            raise DataFetchError(f"CCXT {_CCXT_EXCHANGE_ID} returned kline error for {market_symbol}: {exc}") from exc
         if not isinstance(rows, list) or not rows:
-            raise DataFetchError(f"Binance returned empty kline data for {symbol}")
-        raw_df = pd.DataFrame(rows)
+            raise DataFetchError(f"CCXT {_CCXT_EXCHANGE_ID} returned empty kline data for {market_symbol}")
+        filtered_rows = [row for row in rows if row and row[0] <= end_ms]
+        if not filtered_rows:
+            raise DataFetchError(f"CCXT {_CCXT_EXCHANGE_ID} returned no kline data in range for {market_symbol}")
+        raw_df = pd.DataFrame(filtered_rows)
         raw_df.attrs["period"] = period
         return raw_df
 
@@ -131,7 +142,7 @@ class CryptoFetcher(BaseFetcher):
                 "low": df.iloc[:, 3],
                 "close": df.iloc[:, 4],
                 "volume": df.iloc[:, 5],
-                "amount": df.iloc[:, 7],
+                "amount": pd.to_numeric(df.iloc[:, 4], errors="coerce") * pd.to_numeric(df.iloc[:, 5], errors="coerce"),
             }
         )
         for column in ("open", "high", "low", "close", "volume", "amount"):
@@ -140,9 +151,9 @@ class CryptoFetcher(BaseFetcher):
         return normalized
 
     def get_kline_data(self, stock_code: str, period: str = "daily", days: int = 30) -> pd.DataFrame:
-        """Fetch native Binance candlesticks for BTC supported periods."""
-        if period not in _BINANCE_INTERVAL_BY_PERIOD:
-            supported = ", ".join(sorted(_BINANCE_INTERVAL_BY_PERIOD))
+        """Fetch native exchange candlesticks for BTC supported periods."""
+        if period not in _CCXT_TIMEFRAME_BY_PERIOD:
+            supported = ", ".join(sorted(_CCXT_TIMEFRAME_BY_PERIOD))
             raise DataFetchError(f"CryptoFetcher unsupported period: {period}; supported: {supported}")
 
         end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -154,42 +165,111 @@ class CryptoFetcher(BaseFetcher):
 
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         symbol = normalize_crypto_symbol(stock_code)
-        if not symbol:
+        market_symbol = normalize_crypto_market_symbol(stock_code)
+        if not symbol or not market_symbol:
             return None
 
-        response = requests.get(
-            f"{_BINANCE_BASE_URL}/api/v3/ticker/24hr",
-            params={"symbol": symbol},
-            timeout=_HTTP_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            exchange = self._create_exchange()
+            payload = exchange.fetch_ticker(market_symbol)
+        except Exception as exc:
+            logger.warning(
+                "CCXT %s 获取 %s 实时行情失败，尝试 Binance REST 兜底: %s",
+                _CCXT_EXCHANGE_ID,
+                market_symbol,
+                exc,
+            )
+            payload = self._fetch_rest_ticker(symbol, exc)
         if not isinstance(payload, dict):
-            raise DataFetchError(f"Binance returned invalid ticker payload for {symbol}")
+            raise DataFetchError(f"CCXT {_CCXT_EXCHANGE_ID} returned invalid ticker payload for {market_symbol}")
 
-        price = safe_float(payload.get("lastPrice"))
+        info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+        price = (
+            safe_float(payload.get("last"))
+            or safe_float(payload.get("lastPrice"))
+            or safe_float(info.get("lastPrice"))
+        )
         if price is None or price <= 0:
             return None
 
-        provider_timestamp = _millis_to_iso(payload.get("closeTime"))
+        provider_timestamp = _millis_to_iso(
+            payload.get("timestamp")
+            or payload.get("closeTime")
+            or info.get("closeTime")
+        )
         return UnifiedRealtimeQuote(
             code=symbol,
             name=crypto_display_name(symbol),
             source=RealtimeSource.BINANCE,
             provider_timestamp=provider_timestamp,
             price=price,
-            change_pct=safe_float(payload.get("priceChangePercent")),
-            change_amount=safe_float(payload.get("priceChange")),
-            volume=safe_int(payload.get("volume")),
-            amount=safe_float(payload.get("quoteVolume")),
-            open_price=safe_float(payload.get("openPrice")),
-            high=safe_float(payload.get("highPrice")),
-            low=safe_float(payload.get("lowPrice")),
-            pre_close=safe_float(payload.get("prevClosePrice")),
+            change_pct=(
+                safe_float(payload.get("percentage"))
+                or safe_float(payload.get("priceChangePercent"))
+                or safe_float(info.get("priceChangePercent"))
+            ),
+            change_amount=(
+                safe_float(payload.get("change"))
+                or safe_float(payload.get("priceChange"))
+                or safe_float(info.get("priceChange"))
+            ),
+            volume=safe_int(payload.get("baseVolume") or payload.get("volume") or info.get("volume")),
+            amount=safe_float(payload.get("quoteVolume") or info.get("quoteVolume")),
+            open_price=safe_float(payload.get("open") or payload.get("openPrice") or info.get("openPrice")),
+            high=safe_float(payload.get("high") or payload.get("highPrice") or info.get("highPrice")),
+            low=safe_float(payload.get("low") or payload.get("lowPrice") or info.get("lowPrice")),
+            pre_close=safe_float(
+                payload.get("previousClose")
+                or payload.get("prevClosePrice")
+                or info.get("prevClosePrice")
+            ),
         )
 
     def get_stock_name(self, stock_code: str) -> str:
         return crypto_display_name(stock_code)
+
+    @staticmethod
+    def _fetch_rest_ticker(symbol: str, original_error: Exception) -> dict:
+        errors = []
+        for base_url in _BINANCE_REST_BASE_URLS:
+            url = f"{base_url}/api/v3/ticker/24hr"
+            try:
+                response = requests.get(
+                    url,
+                    params={"symbol": symbol},
+                    timeout=_HTTP_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if isinstance(payload, dict):
+                    logger.info("Binance REST 兜底获取 %s 实时行情成功: endpoint=%s", symbol, base_url)
+                    return payload
+                errors.append(f"{base_url}: invalid payload")
+            except Exception as exc:
+                errors.append(f"{base_url}: {exc}")
+
+        error_summary = "; ".join(errors)
+        raise DataFetchError(
+            f"CCXT {_CCXT_EXCHANGE_ID} returned ticker error for {symbol}: {original_error}; "
+            f"Binance REST fallback failed: {error_summary}"
+        ) from original_error
+
+    @staticmethod
+    def _create_exchange() -> Any:
+        try:
+            import ccxt
+        except ImportError as exc:
+            raise DataFetchError("ccxt 未安装，请运行 pip install ccxt") from exc
+
+        exchange_class = getattr(ccxt, _CCXT_EXCHANGE_ID, None)
+        if exchange_class is None:
+            raise DataFetchError(f"ccxt 不支持交易所: {_CCXT_EXCHANGE_ID}")
+        return exchange_class(
+            {
+                "enableRateLimit": True,
+                "timeout": _HTTP_TIMEOUT_SECONDS * 1000,
+            }
+        )
 
 
 def _date_to_millis(date_text: str, *, end_of_day: bool = False) -> int:

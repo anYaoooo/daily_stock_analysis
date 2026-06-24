@@ -876,6 +876,15 @@ class Config:
     backtest_min_age_days: int = 14
     backtest_engine_version: str = "v1"
     backtest_neutral_band_pct: float = 2.0
+    crypto_backtest_min_age_hours: int = 24
+    crypto_backtest_engine_version: str = "btc-plan-v2"
+    crypto_backtest_neutral_band_pct: float = 0.2
+    crypto_backtest_initial_equity: float = 10000.0
+    crypto_backtest_risk_per_trade_pct: float = 1.0
+    crypto_backtest_max_notional_pct: float = 100.0
+    crypto_backtest_leverage: float = 1.0
+    crypto_backtest_fee_rate_bps: float = 5.0
+    crypto_backtest_slippage_bps: float = 2.0
     
     # === 日志配置 ===
     log_dir: str = "./logs"  # 日志文件目录
@@ -909,12 +918,32 @@ class Config:
     enable_chip_distribution: bool = True
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
-    # BTC-only 模式固定使用 CryptoFetcher/Binance。
+    # BTC-only 模式固定使用 CryptoFetcher；底层通过 CCXT 对接 Binance 公共行情。
     realtime_source_priority: str = "crypto"
     # 实时行情缓存时间（秒）
     realtime_cache_ttl: int = 600
     # 熔断器冷却时间（秒）
     circuit_breaker_cooldown: int = 300
+
+    # === Crypto trading (CCXT private API) ===
+    crypto_trading_exchange: str = "okx"
+    crypto_trading_enabled: bool = False
+    crypto_trading_dry_run: bool = True
+    crypto_trading_default_symbol: str = "BTC/USDT:USDT"
+    crypto_trading_timeout_ms: int = 10000
+    okx_api_key: str = ""
+    okx_secret: str = ""
+    okx_password: str = ""  # OKX API passphrase, not login password.
+    okx_sandbox: bool = False
+    okx_default_type: str = "swap"
+    okx_td_mode: str = "cross"
+    bybit_api_key: str = ""
+    bybit_secret: str = ""
+    bybit_demo_trading: bool = False
+    bybit_default_type: str = "swap"
+    bybit_default_settle: str = "USDT"
+    bybit_margin_mode: str = "isolated"
+    bybit_default_leverage: int = 2
 
     # === 基本面聚合开关与降级保护 ===
     # 全局总开关；关闭时返回 not_supported 并保持主流程无变化
@@ -1661,6 +1690,55 @@ class Config:
                 field_name='BACKTEST_NEUTRAL_BAND_PCT',
                 minimum=0.0,
             ),
+            crypto_backtest_min_age_hours=parse_env_int(
+                os.getenv('CRYPTO_BACKTEST_MIN_AGE_HOURS'),
+                24,
+                field_name='CRYPTO_BACKTEST_MIN_AGE_HOURS',
+                minimum=1,
+            ),
+            crypto_backtest_engine_version=os.getenv('CRYPTO_BACKTEST_ENGINE_VERSION', 'btc-plan-v2'),
+            crypto_backtest_neutral_band_pct=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_NEUTRAL_BAND_PCT'),
+                0.2,
+                field_name='CRYPTO_BACKTEST_NEUTRAL_BAND_PCT',
+                minimum=0.0,
+            ),
+            crypto_backtest_initial_equity=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_INITIAL_EQUITY'),
+                10000.0,
+                field_name='CRYPTO_BACKTEST_INITIAL_EQUITY',
+                minimum=0.0,
+            ),
+            crypto_backtest_risk_per_trade_pct=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_RISK_PER_TRADE_PCT'),
+                1.0,
+                field_name='CRYPTO_BACKTEST_RISK_PER_TRADE_PCT',
+                minimum=0.0,
+            ),
+            crypto_backtest_max_notional_pct=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_MAX_NOTIONAL_PCT'),
+                100.0,
+                field_name='CRYPTO_BACKTEST_MAX_NOTIONAL_PCT',
+                minimum=0.0,
+            ),
+            crypto_backtest_leverage=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_LEVERAGE'),
+                1.0,
+                field_name='CRYPTO_BACKTEST_LEVERAGE',
+                minimum=0.0,
+            ),
+            crypto_backtest_fee_rate_bps=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_FEE_RATE_BPS'),
+                5.0,
+                field_name='CRYPTO_BACKTEST_FEE_RATE_BPS',
+                minimum=0.0,
+            ),
+            crypto_backtest_slippage_bps=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_SLIPPAGE_BPS'),
+                2.0,
+                field_name='CRYPTO_BACKTEST_SLIPPAGE_BPS',
+                minimum=0.0,
+            ),
             log_dir=os.getenv('LOG_DIR', './logs'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
             max_workers=parse_env_int(os.getenv('MAX_WORKERS'), 3, field_name='MAX_WORKERS', minimum=1),
@@ -1722,6 +1800,34 @@ class Config:
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=parse_env_int(os.getenv('REALTIME_CACHE_TTL'), 600, field_name='REALTIME_CACHE_TTL', minimum=0),
             circuit_breaker_cooldown=parse_env_int(os.getenv('CIRCUIT_BREAKER_COOLDOWN'), 300, field_name='CIRCUIT_BREAKER_COOLDOWN', minimum=0),
+            crypto_trading_enabled=parse_env_bool(os.getenv('CRYPTO_TRADING_ENABLED'), False),
+            crypto_trading_dry_run=parse_env_bool(os.getenv('CRYPTO_TRADING_DRY_RUN'), True),
+            crypto_trading_exchange=os.getenv('CRYPTO_TRADING_EXCHANGE', 'okx'),
+            crypto_trading_default_symbol=os.getenv('CRYPTO_TRADING_DEFAULT_SYMBOL', 'BTC/USDT:USDT'),
+            crypto_trading_timeout_ms=parse_env_int(
+                os.getenv('CRYPTO_TRADING_TIMEOUT_MS'),
+                10000,
+                field_name='CRYPTO_TRADING_TIMEOUT_MS',
+                minimum=1000,
+            ),
+            okx_api_key=os.getenv('OKX_API_KEY', ''),
+            okx_secret=os.getenv('OKX_SECRET', ''),
+            okx_password=os.getenv('OKX_PASSWORD', ''),
+            okx_sandbox=parse_env_bool(os.getenv('OKX_SANDBOX'), False),
+            okx_default_type=os.getenv('OKX_DEFAULT_TYPE', 'swap'),
+            okx_td_mode=os.getenv('OKX_TD_MODE', 'cross'),
+            bybit_api_key=os.getenv('BYBIT_API_KEY', ''),
+            bybit_secret=os.getenv('BYBIT_SECRET', ''),
+            bybit_demo_trading=parse_env_bool(os.getenv('BYBIT_DEMO_TRADING'), False),
+            bybit_default_type=os.getenv('BYBIT_DEFAULT_TYPE', 'swap'),
+            bybit_default_settle=os.getenv('BYBIT_DEFAULT_SETTLE', 'USDT'),
+            bybit_margin_mode=os.getenv('BYBIT_MARGIN_MODE', 'isolated'),
+            bybit_default_leverage=parse_env_int(
+                os.getenv('BYBIT_DEFAULT_LEVERAGE'),
+                2,
+                field_name='BYBIT_DEFAULT_LEVERAGE',
+                minimum=1,
+            ),
             enable_fundamental_pipeline=os.getenv('ENABLE_FUNDAMENTAL_PIPELINE', 'true').lower() == 'true',
             fundamental_stage_timeout_seconds=parse_env_float(
                 os.getenv('FUNDAMENTAL_STAGE_TIMEOUT_SECONDS'),

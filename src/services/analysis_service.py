@@ -234,6 +234,7 @@ class AnalysisService:
                 "take_profit": sniper_points.get("take_profit"),
                 "long_plan": directional_plans.get("long_plan"),
                 "short_plan": directional_plans.get("short_plan"),
+                "intraday_plan": directional_plans.get("intraday_plan"),
             },
             "details": {
                 "news_summary": result.news_summary,

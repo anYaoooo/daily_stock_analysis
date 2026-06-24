@@ -11,14 +11,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_database_manager
 from api.v1.schemas.backtest import (
+    BacktestDeleteResponse,
     BacktestRunRequest,
     BacktestRunResponse,
+    CryptoBacktestMetrics,
+    CryptoBacktestResultsResponse,
+    CryptoBacktestResultItem,
+    CryptoBacktestRunResponse,
     BacktestResultItem,
     BacktestResultsResponse,
     PerformanceMetrics,
 )
 from api.v1.schemas.common import ErrorResponse
 from src.services.backtest_service import BacktestService
+from src.services.crypto_backtest_service import CryptoBacktestService
 from src.storage import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -74,6 +80,40 @@ def run_backtest(
         )
 
 
+@router.post(
+    "/crypto/run",
+    response_model=CryptoBacktestRunResponse,
+    responses={
+        200: {"description": "BTC 计划回测执行完成"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="触发 BTC 计划回测",
+    description="从 analysis_history 中提取 BTC 日线多/空计划与小时线日内计划，写入 crypto_backtest_results",
+)
+def run_crypto_backtest(
+    request: BacktestRunRequest,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> CryptoBacktestRunResponse:
+    try:
+        service = CryptoBacktestService(db_manager)
+        min_age_hours = None
+        if request.min_age_days is not None:
+            min_age_hours = int(request.min_age_days) * 24
+        stats = service.run_backtest(
+            code=request.code,
+            force=request.force,
+            min_age_hours=min_age_hours,
+            limit=request.limit,
+        )
+        return CryptoBacktestRunResponse(**stats)
+    except Exception as exc:
+        logger.error(f"BTC 回测执行失败: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"BTC 回测执行失败: {str(exc)}"},
+        )
+
+
 @router.get(
     "/results",
     response_model=BacktestResultsResponse,
@@ -126,6 +166,148 @@ def get_backtest_results(
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "message": f"查询回测结果失败: {str(exc)}"},
+        )
+
+
+@router.delete(
+    "/results/{analysis_history_id}",
+    response_model=BacktestDeleteResponse,
+    responses={
+        200: {"description": "回测结果已删除"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="删除单条回测结果",
+    description="删除当前普通回测 engine_version 下指定历史记录与评估窗口的回测结果，并重算汇总",
+)
+def delete_backtest_result(
+    analysis_history_id: int,
+    eval_window_days: int = Query(..., ge=1, le=120, description="评估窗口"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> BacktestDeleteResponse:
+    try:
+        service = BacktestService(db_manager)
+        result = service.delete_result(
+            analysis_history_id=analysis_history_id,
+            eval_window_days=eval_window_days,
+        )
+        return BacktestDeleteResponse(**result)
+    except Exception as exc:
+        logger.error(f"删除回测结果失败: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"删除回测结果失败: {str(exc)}"},
+        )
+
+
+@router.get(
+    "/crypto/results",
+    response_model=CryptoBacktestResultsResponse,
+    responses={
+        200: {"description": "BTC 计划回测结果列表"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取 BTC 计划回测结果",
+)
+def get_crypto_backtest_results(
+    code: Optional[str] = Query(None, description="BTC 代码筛选"),
+    horizon: Optional[Literal["daily", "intraday"]] = Query(None, description="周期过滤：daily/intraday"),
+    plan_type: Optional[Literal["daily_long", "daily_short", "intraday"]] = Query(None, description="计划类型过滤"),
+    page: int = Query(1, ge=1, description="页码"),
+    limit: int = Query(20, ge=1, le=200, description="每页数量"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> CryptoBacktestResultsResponse:
+    try:
+        service = CryptoBacktestService(db_manager)
+        data = service.get_recent_evaluations(
+            code=code,
+            horizon=horizon,
+            plan_type=plan_type,
+            page=page,
+            limit=limit,
+        )
+        items = [CryptoBacktestResultItem(**item) for item in data.get("items", [])]
+        return CryptoBacktestResultsResponse(
+            total=int(data.get("total", 0)),
+            page=page,
+            limit=limit,
+            items=items,
+        )
+    except Exception as exc:
+        logger.error(f"查询 BTC 回测结果失败: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"查询 BTC 回测结果失败: {str(exc)}"},
+        )
+
+
+@router.delete(
+    "/crypto/results/{analysis_history_id}",
+    response_model=BacktestDeleteResponse,
+    responses={
+        200: {"description": "BTC 回测结果已删除"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="删除单条 BTC 计划回测结果",
+    description="删除当前 BTC 回测 engine_version 下指定历史记录与计划类型的回测结果，并重算汇总",
+)
+def delete_crypto_backtest_result(
+    analysis_history_id: int,
+    plan_type: Literal["daily_long", "daily_short", "intraday"] = Query(..., description="计划类型"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> BacktestDeleteResponse:
+    try:
+        service = CryptoBacktestService(db_manager)
+        result = service.delete_result(
+            analysis_history_id=analysis_history_id,
+            plan_type=plan_type,
+        )
+        return BacktestDeleteResponse(**result)
+    except Exception as exc:
+        logger.error(f"删除 BTC 回测结果失败: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"删除 BTC 回测结果失败: {str(exc)}"},
+        )
+
+
+@router.get(
+    "/crypto/performance",
+    response_model=CryptoBacktestMetrics,
+    responses={
+        200: {"description": "BTC 计划回测表现"},
+        404: {"description": "无回测汇总", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取 BTC 计划回测正确率",
+)
+def get_crypto_backtest_performance(
+    scope: Literal["overall", "code", "horizon", "plan_type"] = Query("overall", description="汇总范围"),
+    code: Optional[str] = Query(None, description="scope=code 时使用"),
+    horizon: Optional[Literal["daily", "intraday"]] = Query(None, description="scope=horizon 时使用"),
+    plan_type: Optional[Literal["daily_long", "daily_short", "intraday"]] = Query(None, description="scope=plan_type 时使用"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> CryptoBacktestMetrics:
+    try:
+        service = CryptoBacktestService(db_manager)
+        summary = service.get_summary(
+            scope=scope,
+            code=code,
+            horizon=horizon,
+            plan_type=plan_type,
+        )
+        if summary is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "未找到 BTC 回测汇总"},
+            )
+        return CryptoBacktestMetrics(**summary)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"查询 BTC 回测表现失败: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"查询 BTC 回测表现失败: {str(exc)}"},
         )
 
 

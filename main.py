@@ -304,7 +304,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--schedule',
         action='store_true',
-        help='启用定时任务模式，每日定时执行'
+        help='启用定时任务模式，每小时整点执行 BTC 分析'
     )
 
     parser.add_argument(
@@ -895,10 +895,9 @@ def run_full_analysis(
             logger.error(f"飞书文档生成失败: {e}")
 
         # === Auto backtest ===
-        try:
-            if getattr(config, 'backtest_enabled', False):
+        if getattr(config, 'backtest_enabled', False):
+            try:
                 from src.services.backtest_service import BacktestService
-
                 logger.info("开始自动回测...")
                 service = BacktestService()
                 stats = service.run_backtest(
@@ -911,8 +910,25 @@ def run_full_analysis(
                     f"自动回测完成: processed={stats.get('processed')} saved={stats.get('saved')} "
                     f"completed={stats.get('completed')} insufficient={stats.get('insufficient')} errors={stats.get('errors')}"
                 )
-        except Exception as e:
-            logger.warning(f"自动回测失败（已忽略）: {e}")
+            except Exception as e:
+                logger.warning(f"自动回测失败（已忽略）: {e}")
+
+            try:
+                from src.services.crypto_backtest_service import CryptoBacktestService
+
+                crypto_service = CryptoBacktestService()
+                crypto_stats = crypto_service.run_backtest(
+                    force=False,
+                    min_age_hours=getattr(config, 'crypto_backtest_min_age_hours', 24),
+                    limit=200,
+                )
+                logger.info(
+                    f"BTC 计划回测完成: processed={crypto_stats.get('processed')} saved={crypto_stats.get('saved')} "
+                    f"completed={crypto_stats.get('completed')} insufficient={crypto_stats.get('insufficient')} "
+                    f"skipped={crypto_stats.get('skipped')} errors={crypto_stats.get('errors')}"
+                )
+            except Exception as e:
+                logger.warning(f"BTC 计划回测失败（已忽略）: {e}")
 
     except Exception as e:
         logger.exception(f"分析流程执行失败: {e}")
@@ -1156,17 +1172,34 @@ def main() -> int:
         # 模式0: 回测
         if getattr(args, 'backtest', False):
             logger.info("模式: 回测")
-            from src.services.backtest_service import BacktestService
+            try:
+                from src.services.backtest_service import BacktestService
 
-            service = BacktestService()
-            stats = service.run_backtest(
+                service = BacktestService()
+                stats = service.run_backtest(
+                    code=getattr(args, 'backtest_code', None),
+                    force=getattr(args, 'backtest_force', False),
+                    eval_window_days=getattr(args, 'backtest_days', None),
+                )
+                logger.info(
+                    f"回测完成: processed={stats.get('processed')} saved={stats.get('saved')} "
+                    f"completed={stats.get('completed')} insufficient={stats.get('insufficient')} errors={stats.get('errors')}"
+                )
+            except Exception as e:
+                logger.warning(f"回测失败（继续尝试 BTC 计划回测）: {e}")
+
+            from src.services.crypto_backtest_service import CryptoBacktestService
+
+            crypto_service = CryptoBacktestService()
+            crypto_stats = crypto_service.run_backtest(
                 code=getattr(args, 'backtest_code', None),
                 force=getattr(args, 'backtest_force', False),
-                eval_window_days=getattr(args, 'backtest_days', None),
+                limit=200,
             )
             logger.info(
-                f"回测完成: processed={stats.get('processed')} saved={stats.get('saved')} "
-                f"completed={stats.get('completed')} insufficient={stats.get('insufficient')} errors={stats.get('errors')}"
+                f"BTC 计划回测完成: processed={crypto_stats.get('processed')} saved={crypto_stats.get('saved')} "
+                f"completed={crypto_stats.get('completed')} insufficient={crypto_stats.get('insufficient')} "
+                f"skipped={crypto_stats.get('skipped')} errors={crypto_stats.get('errors')}"
             )
             return 0
 
@@ -1177,7 +1210,7 @@ def main() -> int:
         # 模式2: 定时任务模式
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
-            logger.info(f"每日执行时间: {config.schedule_time}")
+            logger.info("BTC 分析执行频率: 每小时整点")
 
             # Determine whether to run immediately:
             # Command line arg --no-run-immediately overrides config if present.
@@ -1216,12 +1249,43 @@ def main() -> int:
                     "name": "agent_event_monitor",
                 })
 
+            if getattr(config, 'backtest_enabled', False):
+                def crypto_backtest_task():
+                    runtime_config = _reload_runtime_config()
+                    if not getattr(runtime_config, 'backtest_enabled', False):
+                        return
+                    from src.services.crypto_backtest_service import CryptoBacktestService
+
+                    service = CryptoBacktestService()
+                    stats = service.run_backtest(
+                        force=False,
+                        min_age_hours=getattr(runtime_config, 'crypto_backtest_min_age_hours', 24),
+                        limit=200,
+                    )
+                    logger.info(
+                        "[BTCBacktest] processed=%s saved=%s completed=%s insufficient=%s skipped=%s errors=%s",
+                        stats.get("processed"),
+                        stats.get("saved"),
+                        stats.get("completed"),
+                        stats.get("insufficient"),
+                        stats.get("skipped"),
+                        stats.get("errors"),
+                    )
+
+                background_tasks.append({
+                    "task": crypto_backtest_task,
+                    "interval_seconds": 60 * 60,
+                    "run_immediately": False,
+                    "name": "btc_plan_backtest",
+                })
+
             run_with_schedule(
                 task=scheduled_task,
                 schedule_time=config.schedule_time,
                 run_immediately=should_run_immediately,
                 background_tasks=background_tasks,
                 schedule_time_provider=schedule_time_provider,
+                schedule_mode="hourly",
             )
             return 0
 

@@ -18,6 +18,7 @@ from api.v1.endpoints import (
     auth,
     backtest,
     decision_signals,
+    crypto_trading,
     health,
     history,
     portfolio,
@@ -94,6 +95,12 @@ router.include_router(
     decision_signals.router,
     prefix="/decision-signals",
     tags=["DecisionSignals"]
+)
+
+router.include_router(
+    crypto_trading.router,
+    prefix="/crypto-trading",
+    tags=["CryptoTrading"]
 )
 
 router.include_router(

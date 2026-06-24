@@ -594,6 +594,120 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertIn("600519", out)
 
     @mock.patch("src.notification.get_config")
+    def test_generate_btc_single_stock_report_only_shows_strategy_and_technicals(
+        self,
+        mock_get_config: mock.MagicMock,
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=61,
+            trend_prediction="震荡偏多",
+            operation_advice="等待突破后做多，跌破支撑转空",
+            analysis_summary="综合结论不应出现在 BTC 推送正文",
+            technical_analysis="日线站上 MA20，MACD 动能修复",
+            ma_analysis="MA5 上穿 MA20",
+            volume_analysis="量能温和放大",
+            news_summary="新闻摘要不应出现在 BTC 推送正文",
+            fundamental_analysis="基本面不应出现在 BTC 推送正文",
+            dashboard={
+                "core_conclusion": {
+                    "position_advice": {
+                        "no_position": "不应展示持仓建议",
+                    },
+                },
+                "battle_plan": {
+                    "long_plan": {
+                        "entry_price": "突破 65000",
+                        "stop_loss": "跌破 63200",
+                        "take_profit": "68000",
+                        "trigger_condition": "放量突破",
+                        "invalidation": "跌回区间",
+                        "reason": "趋势修复",
+                    },
+                    "short_plan": {
+                        "entry_price": "跌破 62000",
+                        "stop_loss": "站回 63200",
+                        "take_profit": "60000",
+                        "trigger_condition": "跌破支撑",
+                        "invalidation": "重新站回支撑",
+                        "reason": "空头延续",
+                    },
+                    "intraday_plan": {
+                        "direction": "long",
+                        "entry_price": "64800",
+                        "stop_loss": "64100",
+                        "take_profit": "66000",
+                        "trigger_condition": "小时线收复均线",
+                    },
+                },
+            },
+        )
+
+        out = service.generate_single_stock_report(result)
+
+        self.assertIn("### 多空建议", out)
+        self.assertIn("#### 日线多单计划", out)
+        self.assertIn("#### 日线空单计划", out)
+        self.assertIn("#### 小时线日内计划", out)
+        self.assertIn("### 技术分析", out)
+        self.assertIn("日线站上 MA20", out)
+        self.assertNotIn("新闻摘要不应出现在", out)
+        self.assertNotIn("基本面不应出现在", out)
+        self.assertNotIn("不应展示持仓建议", out)
+        self.assertNotIn("综合结论不应出现在", out)
+
+    @mock.patch("src.notification.get_config")
+    def test_generate_dashboard_report_uses_btc_template(
+        self,
+        mock_get_config: mock.MagicMock,
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=True)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=61,
+            trend_prediction="震荡偏多",
+            operation_advice="等待突破后做多，跌破支撑转空",
+            analysis_summary="综合结论不应出现在 BTC 完整推送正文",
+            news_summary="新闻摘要不应出现在 BTC 完整推送正文",
+            dashboard={
+                "intelligence": {
+                    "latest_news": "最新动态不应出现在 BTC 完整推送正文",
+                },
+                "battle_plan": {
+                    "long_plan": {
+                        "entry_price": "突破 65000",
+                        "stop_loss": "跌破 63200",
+                        "take_profit": "68000",
+                    },
+                    "short_plan": {
+                        "entry_price": "跌破 62000",
+                        "stop_loss": "站回 63200",
+                        "take_profit": "60000",
+                    },
+                },
+            },
+        )
+
+        with mock.patch("src.services.report_renderer.render") as mock_render:
+            out = service.generate_dashboard_report([result], report_date="2026-06-24")
+            aggregate = service.generate_aggregate_report([result], "simple", report_date="2026-06-24")
+
+        mock_render.assert_not_called()
+        self.assertEqual(aggregate, out)
+        self.assertIn("### 多空建议", out)
+        self.assertIn("#### 日线多单计划", out)
+        self.assertIn("#### 日线空单计划", out)
+        self.assertNotIn("决策仪表盘", out)
+        self.assertNotIn("重要信息速览", out)
+        self.assertNotIn("最新动态不应出现在", out)
+        self.assertNotIn("综合结论不应出现在", out)
+
+    @mock.patch("src.notification.get_config")
     def test_generate_brief_report_shows_model_by_default(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False)
         service = NotificationService()

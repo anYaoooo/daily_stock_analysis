@@ -9,11 +9,13 @@ const {
   mockGetOverallPerformance,
   mockGetStockPerformance,
   mockRun,
+  mockDeleteResult,
 } = vi.hoisted(() => ({
   mockGetResults: vi.fn(),
   mockGetOverallPerformance: vi.fn(),
   mockGetStockPerformance: vi.fn(),
   mockRun: vi.fn(),
+  mockDeleteResult: vi.fn(),
 }));
 
 vi.mock('../../api/backtest', () => ({
@@ -22,6 +24,7 @@ vi.mock('../../api/backtest', () => ({
     getOverallPerformance: mockGetOverallPerformance,
     getStockPerformance: mockGetStockPerformance,
     run: mockRun,
+    deleteResult: mockDeleteResult,
   },
 }));
 
@@ -88,6 +91,7 @@ beforeEach(() => {
     insufficient: 0,
     errors: 0,
   });
+  mockDeleteResult.mockResolvedValue({ deleted: 1 });
 });
 
 describe('BacktestPage', () => {
@@ -296,6 +300,34 @@ describe('BacktestPage', () => {
 
     expect(await screen.findByText('已处理:')).toBeInTheDocument();
     expect(screen.getByText('已保存:')).toBeInTheDocument();
+  });
+
+  it('deletes a backtest result and refreshes the current result set', async () => {
+    render(<BacktestPage />);
+
+    const deleteButton = await screen.findByRole('button', { name: '删除 600519 回测结果' });
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => {
+      expect(mockDeleteResult).toHaveBeenCalledWith(101, 10);
+    });
+    await waitFor(() => {
+      expect(mockGetResults).toHaveBeenLastCalledWith({
+        code: undefined,
+        evalWindowDays: 10,
+        analysisDateFrom: undefined,
+        analysisDateTo: undefined,
+        analysisPhase: undefined,
+        page: 1,
+        limit: 20,
+      });
+    });
+    expect(mockGetOverallPerformance).toHaveBeenLastCalledWith({
+      evalWindowDays: 10,
+      analysisDateFrom: undefined,
+      analysisDateTo: undefined,
+      analysisPhase: undefined,
+    });
   });
 
   it('switches to next-day validation with the 1D shortcut', async () => {

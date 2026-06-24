@@ -402,6 +402,27 @@ class BacktestService:
         normalized["strategy_id"] = strategy_id
         return normalized
 
+    def delete_result(
+        self,
+        *,
+        analysis_history_id: int,
+        eval_window_days: int,
+    ) -> Dict[str, int]:
+        config = get_config()
+        engine_version = str(getattr(config, "backtest_engine_version", "v1"))
+        deleted, code = self.repo.delete_result(
+            analysis_history_id=int(analysis_history_id),
+            eval_window_days=int(eval_window_days),
+            engine_version=engine_version,
+        )
+        if deleted and code:
+            self._recompute_summaries(
+                touched_codes=[code],
+                eval_window_days=int(eval_window_days),
+                engine_version=engine_version,
+            )
+        return {"deleted": int(deleted)}
+
     def _infer_eval_window_for_query(
         self,
         *,

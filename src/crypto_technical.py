@@ -161,3 +161,97 @@ def build_crypto_technical_context(
             "structure": ema_structure,
         },
     }
+
+
+def _infer_bias(context: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(context, dict):
+        return "neutral"
+
+    ema_structure = ((context.get("ema") or {}).get("structure") or "").strip().lower()
+    vwap_position = ((context.get("vwap") or {}).get("price_position") or "").strip().lower()
+    price_action = ((context.get("price_action") or {}).get("state") or "").strip().lower()
+
+    bullish_score = 0
+    bearish_score = 0
+    if ema_structure == "bullish":
+        bullish_score += 2
+    elif ema_structure == "bearish":
+        bearish_score += 2
+
+    if vwap_position == "above":
+        bullish_score += 1
+    elif vwap_position == "below":
+        bearish_score += 1
+
+    if price_action in {"breakout", "bullish_push"}:
+        bullish_score += 1
+    elif price_action in {"breakdown", "bearish_push"}:
+        bearish_score += 1
+
+    if bullish_score > bearish_score:
+        return "long"
+    if bearish_score > bullish_score:
+        return "short"
+    return "neutral"
+
+
+def _alignment(daily_bias: str, hourly_bias: str) -> str:
+    if daily_bias in {"long", "short"} and hourly_bias == daily_bias:
+        return f"aligned_{daily_bias}"
+    if daily_bias in {"long", "short"} and hourly_bias in {"long", "short"}:
+        return "conflict"
+    if daily_bias in {"long", "short"}:
+        return f"wait_for_{daily_bias}_trigger"
+    if hourly_bias in {"long", "short"}:
+        return "hourly_only_wait_daily_confirmation"
+    return "neutral"
+
+
+def _opportunity_text(alignment: str) -> str:
+    if alignment == "aligned_long":
+        return "小时线与日线偏多共振，可寻找顺日线的日内多单触发；止损与仓位必须受日线失效位约束。"
+    if alignment == "aligned_short":
+        return "小时线与日线偏空共振，可寻找顺日线的日内空单触发；止损与仓位必须受日线失效位约束。"
+    if alignment == "conflict":
+        return "小时线与日线冲突，日内交易应等待重新同向确认，避免逆日线方向主动开仓。"
+    if alignment == "hourly_only_wait_daily_confirmation":
+        return "小时线有短线信号但缺少日线方向确认，只能作为观察，不直接升级为交易建议。"
+    if alignment.startswith("wait_for_"):
+        return "日线方向存在，但小时线尚未给出同向触发，等待小时线回踩/突破/跌破确认。"
+    return "多空证据不足，日内以等待或区间观察为主。"
+
+
+def build_crypto_multi_timeframe_context(
+    daily_df: pd.DataFrame,
+    hourly_df: Optional[pd.DataFrame],
+    code: str,
+) -> Optional[Dict[str, Any]]:
+    """Build a BTC context where the hourly layer follows the daily framework."""
+    daily_context = build_crypto_technical_context(daily_df, code)
+    if not daily_context:
+        return None
+
+    hourly_context = build_crypto_technical_context(hourly_df, code, lookback=72) if hourly_df is not None else None
+    result = dict(daily_context)
+    result["timeframes"] = {"daily": daily_context}
+
+    daily_bias = _infer_bias(daily_context)
+    hourly_bias = _infer_bias(hourly_context)
+    alignment = _alignment(daily_bias, hourly_bias)
+
+    if hourly_context:
+        result["timeframes"]["hourly"] = hourly_context
+
+    result["intraday"] = {
+        "timeframe": "1h",
+        "rule": "小时线只作为日内执行层，必须服从日线方向、关键位和失效条件。",
+        "daily_bias": daily_bias,
+        "hourly_bias": hourly_bias,
+        "alignment": alignment,
+        "opportunity": _opportunity_text(alignment),
+        "notes": [
+            "顺日线方向寻找小时线触发，冲突时等待确认。",
+            "小时线入场、加减仓与止损必须围绕日线关键支撑/阻力和失效条件制定。",
+        ],
+    }
+    return result

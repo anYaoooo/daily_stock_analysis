@@ -17,6 +17,17 @@ STRATEGY_PLAN_KEYS = (
     "invalidation",
     "reason",
 )
+INTRADAY_PLAN_KEYS = (
+    "enabled",
+    "direction",
+    "entry_price",
+    "stop_loss",
+    "take_profit",
+    "trigger_condition",
+    "invalidation",
+    "daily_constraint",
+    "reason",
+)
 
 
 def parse_sniper_value(value: Any) -> Optional[float]:
@@ -118,6 +129,9 @@ def extract_directional_strategy_plans(source: Any) -> Dict[str, Optional[Dict[s
                 "short_plan": _normalize_strategy_plan(
                     source.get("short_plan") or source.get("shortPlan")
                 ),
+                "intraday_plan": _normalize_intraday_plan(
+                    source.get("intraday_plan") or source.get("intradayPlan")
+                ),
             }
         candidate = source.get("dashboard")
         if isinstance(candidate, Mapping):
@@ -127,7 +141,7 @@ def extract_directional_strategy_plans(source: Any) -> Dict[str, Optional[Dict[s
 
     battle_plan = dashboard.get("battle_plan") if isinstance(dashboard, Mapping) else None
     if not isinstance(battle_plan, Mapping):
-        return {"long_plan": None, "short_plan": None}
+        return {"long_plan": None, "short_plan": None, "intraday_plan": None}
 
     return {
         "long_plan": _normalize_strategy_plan(
@@ -135,6 +149,9 @@ def extract_directional_strategy_plans(source: Any) -> Dict[str, Optional[Dict[s
         ),
         "short_plan": _normalize_strategy_plan(
             battle_plan.get("short_plan") or battle_plan.get("shortPlan")
+        ),
+        "intraday_plan": _normalize_intraday_plan(
+            battle_plan.get("intraday_plan") or battle_plan.get("intradayPlan")
         ),
     }
 
@@ -152,6 +169,30 @@ def _normalize_strategy_plan(value: Any) -> Optional[Dict[str, str]]:
             )
             raw_value = value.get(camel_key)
         if raw_value is None:
+            continue
+        text = str(raw_value).strip()
+        if text:
+            normalized[key] = text
+
+    return normalized or None
+
+
+def _normalize_intraday_plan(value: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        return None
+
+    normalized: Dict[str, Any] = {}
+    for key in INTRADAY_PLAN_KEYS:
+        raw_value = value.get(key)
+        if raw_value is None and "_" in key:
+            camel_key = key.split("_", 1)[0] + "".join(
+                part.capitalize() for part in key.split("_")[1:]
+            )
+            raw_value = value.get(camel_key)
+        if raw_value is None:
+            continue
+        if key == "enabled" and isinstance(raw_value, bool):
+            normalized[key] = raw_value
             continue
         text = str(raw_value).strip()
         if text:

@@ -343,8 +343,8 @@ daily_stock_analysis/
 | `NEWS_MAX_AGE_DAYS` | 新闻最大时效（天），搜索时限制结果在近期内 | 默认 `3` |
 | `CRYPTOPANIC_CHROMA_PATH` | BTC CryptoPanic 新闻写入/读取的 ChromaDB 目录；留空默认使用本机 Hermes 历史目录 | 可选 |
 | `CRYPTOPANIC_CHROMA_COLLECTION` | BTC 新闻 ChromaDB collection 名称 | 默认 `cryptopanic_news` |
-| `CRYPTOPANIC_OPENCLI_PATH` | opencli 可执行文件路径；留空自动尝试 `%APPDATA%\npm\opencli.cmd` 与 PATH | 可选 |
-| `CRYPTOPANIC_REFRESH_INTERVAL_SECONDS` | CryptoPanic 抓取节流间隔；间隔内直接读取 ChromaDB 缓存 | 默认 `900` |
+| `CRYPTOPANIC_OPENCLI_PATH` | 已废弃：BTC 新闻运行时不再通过 OpenCLI 抓取，只读取 ChromaDB 缓存 | 可选 |
+| `CRYPTOPANIC_REFRESH_INTERVAL_SECONDS` | 已废弃：BTC 新闻运行时不再触发抓取节流，只读取 ChromaDB 缓存 | 默认 `900` |
 | `CRYPTOPANIC_MAX_AGE_HOURS` | ChromaDB 缓存新闻最大可用时长 | 默认 `24` |
 | `BIAS_THRESHOLD` | 乖离率阈值（%），超过提示不追高；强势趋势股自动放宽到 1.5 倍 | 默认 `5.0` |
 
@@ -1159,10 +1159,16 @@ PUSHOVER_API_TOKEN=your_api_token
 - 支持美股/港股数据
 - 美股历史数据与实时行情均统一使用 YFinance，以避免 akshare 美股复权异常导致的技术指标错误
 
-### Binance Crypto
-- 免费，无需配置，使用 Binance 公共行情接口
+### CCXT / Binance Crypto
+- 免费，无需配置，通过 CCXT 对接 Binance 公共行情接口
 - 当前支持比特币标的：`BTC`、`BTCUSDT`、`BTC-USD`、`BTC/USD`
 - 提供实时行情与日 K 数据，并在数据源路由中独立识别为加密货币，避免被误判为美股 ticker
+
+### CCXT 私有交易接口
+- 通过 `CRYPTO_TRADING_EXCHANGE=okx|bybit` 选择交易所，默认 `okx`；交易接口不会接入分析流程自动执行。API 位于 `/api/v1/crypto-trading/*`，支持查询余额、持仓、挂单、单个订单，以及显式下单、撤单、设置杠杆和保证金模式。
+- OKX 可选配置 `OKX_API_KEY`、`OKX_SECRET`、`OKX_PASSWORD`；`OKX_PASSWORD` 是创建 OKX API Key 时设置的 Passphrase，不是登录密码。默认交易标的为 `BTC/USDT:USDT`，默认 `OKX_DEFAULT_TYPE=swap`、`OKX_TD_MODE=cross`；如需 sandbox，可设置 `OKX_SANDBOX=true`。
+- Bybit 当前仅接入交易所 Demo Trading：设置 `CRYPTO_TRADING_EXCHANGE=bybit`、`BYBIT_API_KEY`、`BYBIT_SECRET`、`BYBIT_DEMO_TRADING=true`。期货模式默认 `BYBIT_DEFAULT_TYPE=swap`、`BYBIT_DEFAULT_SETTLE=USDT`、`BYBIT_MARGIN_MODE=isolated`、`BYBIT_DEFAULT_LEVERAGE=2`，CCXT 下单参数会自动补 `position_idx=0`；现货模式可设 `BYBIT_DEFAULT_TYPE=spot` 并使用 `BTC/USDT` 这类现货 symbol。
+- 写接口受双重保护：`CRYPTO_TRADING_ENABLED=false` 时禁止真实交易；`CRYPTO_TRADING_DRY_RUN=true` 时只返回预览，不会请求交易所写接口。只有同时设置 `CRYPTO_TRADING_ENABLED=true` 且 `CRYPTO_TRADING_DRY_RUN=false` 才会真实调用所选交易所下单/撤单等写接口。Bybit Demo Trading 是交易所模拟账户模式，不等同于本地 dry-run。
 
 ### Longbridge（长桥）
 - 美股/港股数据兜底，补充 YFinance 缺失的量比、换手率、PE 等字段
@@ -1381,10 +1387,21 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 | `BACKTEST_MIN_AGE_DAYS` | `14` | 仅回测 N 天前的记录，避免数据不完整 |
 | `BACKTEST_ENGINE_VERSION` | `v1` | 引擎版本号，升级逻辑时用于区分结果 |
 | `BACKTEST_NEUTRAL_BAND_PCT` | `2.0` | 中性区间阈值（%），±2% 内视为震荡 |
+| `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | BTC 计划级回测等待时长；默认报告生成 24 小时后评估 |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v2` | BTC 计划级回测引擎版本 |
+| `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | BTC 计划级回测中性区间阈值（%） |
+| `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | BTC 正式交易回测初始权益，用于资金曲线、净收益率和仓位测算 |
+| `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | 单笔最大风险占账户权益百分比，用止损距离推导仓位 |
+| `CRYPTO_BACKTEST_MAX_NOTIONAL_PCT` | `100.0` | 单笔最大名义仓位占账户权益百分比 |
+| `CRYPTO_BACKTEST_LEVERAGE` | `1.0` | 名义杠杆倍数 |
+| `CRYPTO_BACKTEST_FEE_RATE_BPS` | `5.0` | 单边手续费，单位 bps |
+| `CRYPTO_BACKTEST_SLIPPAGE_BPS` | `2.0` | 单边滑点，单位 bps |
 
 ### 自动运行
 
-回测在每日分析流程完成后自动触发（非阻塞，失败不影响通知推送）。也可通过 API 手动触发。
+回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式还会每小时后台检查一次够龄的 BTC 历史报告。BTC 计划级回测会从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，按入场触发、止盈止损、手续费、滑点、风险预算和名义仓位模拟交易，分别写入 `crypto_backtest_results`，并在 `crypto_backtest_summaries` 汇总正确率、胜率、资金曲线和风险收益指标。`btc-plan-v2` 会额外保存 K 线来源/周期/拉取时间/bar 范围/哈希、前视偏差校验、单笔 R 倍数，并在入场触发样本小于 30 时标记低置信度。也可通过 API 手动触发或删除单条回测结果；删除后会自动重算汇总。
+
+BTC 单标的分析完成后的完整报告推送使用 BTC 专用模板，不再发送通用股票决策仪表盘；正文只保留多空建议、日线多单计划、日线空单计划、小时线日内计划和技术分析。
 
 ### 评估指标
 
@@ -1396,6 +1413,12 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 | `avg_simulated_return_pct` | 平均模拟执行收益率（含止盈止损退出） |
 | `stop_loss_trigger_rate` | 止损触发率（仅统计配置了止损的记录） |
 | `take_profit_trigger_rate` | 止盈触发率（仅统计配置了止盈的记录） |
+| `risk_metrics.total_return_pct` | BTC 正式交易回测账户总收益率 |
+| `risk_metrics.max_drawdown_pct` | 资金曲线最大回撤 |
+| `risk_metrics.profit_factor` | 总盈利 / 总亏损绝对值 |
+| `risk_metrics.total_net_pnl` | 扣除手续费和滑点后的累计净盈亏 |
+| `risk_metrics.avg_r_multiple` | BTC 回测平均 R 倍数 |
+| `equity_curve` | 按回测交易顺序生成的账户权益曲线 |
 
 ---
 

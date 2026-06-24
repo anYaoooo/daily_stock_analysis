@@ -25,6 +25,10 @@ export interface BacktestRunResponse {
   errors: number;
 }
 
+export interface BacktestDeleteResponse {
+  deleted: number;
+}
+
 // ============ Result Item ============
 
 export interface BacktestResultItem {

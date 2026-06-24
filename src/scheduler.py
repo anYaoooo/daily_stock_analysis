@@ -67,12 +67,14 @@ class Scheduler:
         self,
         schedule_time: str = "18:00",
         schedule_time_provider: Optional[Callable[[], str]] = None,
+        schedule_mode: str = "daily",
     ):
         """
         初始化调度器
 
         Args:
             schedule_time: 每日执行时间，格式 "HH:MM"
+            schedule_mode: 调度模式，"daily" 表示每日固定时间，"hourly" 表示每小时整点
         """
         try:
             import schedule
@@ -83,6 +85,7 @@ class Scheduler:
 
         self.schedule_time = schedule_time
         self._schedule_time_provider = schedule_time_provider
+        self.schedule_mode = (schedule_mode or "daily").strip().lower()
         self.shutdown_handler = GracefulShutdown()
         self._task_callback: Optional[Callable] = None
         self._daily_job: Optional[Any] = None
@@ -98,7 +101,7 @@ class Scheduler:
             run_immediately: 是否在设置后立即执行一次
         """
         self._task_callback = task
-        if not self._configure_daily_task(self.schedule_time):
+        if not self._configure_scheduled_task(self.schedule_time):
             raise ValueError(f"无效的定时执行时间: {self.schedule_time!r}")
 
         if run_immediately:
@@ -153,8 +156,26 @@ class Scheduler:
             )
         return True
 
+    def _configure_hourly_task(self) -> bool:
+        """(Re)register the analysis job at every top of the hour."""
+        self._cancel_daily_job()
+        self._daily_job = self.schedule.every().hour.at(":00").do(self._safe_run_task)
+        logger.info("已设置每小时整点定时任务")
+        return True
+
+    def _configure_scheduled_task(self, schedule_time: str) -> bool:
+        """Register the main scheduled job according to the configured mode."""
+        if self.schedule_mode == "hourly":
+            return self._configure_hourly_task()
+        if self.schedule_mode != "daily":
+            logger.warning("未知调度模式 %r，无法注册定时任务", self.schedule_mode)
+            return False
+        return self._configure_daily_task(schedule_time)
+
     def _refresh_daily_schedule_if_needed(self) -> None:
         """Reload daily schedule time from the latest runtime config if needed."""
+        if self.schedule_mode != "daily":
+            return
         if self._task_callback is None or self._schedule_time_provider is None:
             return
 
@@ -311,6 +332,7 @@ def run_with_schedule(
     run_immediately: bool = True,
     background_tasks: Optional[List[Dict[str, Any]]] = None,
     schedule_time_provider: Optional[Callable[[], str]] = None,
+    schedule_mode: str = "daily",
 ):
     """
     便捷函数：使用定时调度运行任务
@@ -324,10 +346,12 @@ def run_with_schedule(
             和 `run_immediately`。`interval_seconds` 单位为秒。
         schedule_time_provider: 可选的时间提供器；调度器每轮检查前会读取，
             当返回值变化时自动重建 daily job。
+        schedule_mode: 调度模式，"daily" 表示每日固定时间，"hourly" 表示每小时整点。
     """
     scheduler = Scheduler(
         schedule_time=schedule_time,
         schedule_time_provider=schedule_time_provider,
+        schedule_mode=schedule_mode,
     )
     for entry in background_tasks or []:
         scheduler.add_background_task(

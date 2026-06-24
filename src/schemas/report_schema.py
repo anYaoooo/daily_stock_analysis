@@ -116,12 +116,27 @@ class DirectionalStrategyPlan(BaseModel):
     reason: Optional[str] = None
 
 
+class IntradayPlan(BaseModel):
+    """Hourly intraday plan that must follow the daily BTC framework."""
+
+    enabled: Optional[bool] = None
+    direction: Optional[str] = None
+    entry_price: Optional[Union[str, int, float]] = None
+    stop_loss: Optional[Union[str, int, float]] = None
+    take_profit: Optional[Union[str, int, float]] = None
+    trigger_condition: Optional[str] = None
+    invalidation: Optional[str] = None
+    daily_constraint: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class BattlePlan(BaseModel):
     """Battle plan block."""
 
     sniper_points: Optional[SniperPoints] = None
     long_plan: Optional[DirectionalStrategyPlan] = None
     short_plan: Optional[DirectionalStrategyPlan] = None
+    intraday_plan: Optional[IntradayPlan] = None
     position_strategy: Optional[PositionStrategy] = None
     action_checklist: Optional[List[str]] = None
 

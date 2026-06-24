@@ -248,6 +248,7 @@ const BacktestPage: React.FC = () => {
   const [totalResults, setTotalResults] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoadingResults, setIsLoadingResults] = useState(false);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const pageSize = 20;
 
   // Performance state
@@ -390,6 +391,24 @@ const BacktestPage: React.FC = () => {
     setCurrentPage(1);
     fetchResults(1, code, 1, analysisDateFrom, analysisDateTo, phaseFilter);
     fetchPerformance(code, 1, analysisDateFrom, analysisDateTo, phaseFilter);
+  };
+
+  const handleDeleteResult = async (row: BacktestResultItem) => {
+    const key = `${row.analysisHistoryId}:${row.evalWindowDays}`;
+    setDeletingKey(key);
+    try {
+      await backtestApi.deleteResult(row.analysisHistoryId, row.evalWindowDays);
+      const code = codeFilter.trim() || undefined;
+      const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
+      const nextPage = results.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage;
+      await fetchResults(nextPage, code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
+      await fetchPerformance(code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
+    } catch (err) {
+      console.error('Failed to delete backtest result:', err);
+      setPageError(getParsedApiError(err));
+    } finally {
+      setDeletingKey(null);
+    }
   };
 
   // Pagination
@@ -585,7 +604,7 @@ const BacktestPage: React.FC = () => {
                 <span className="backtest-table-scroll-hint">{text.scrollHint}</span>
               </div>
               <div className="backtest-table-wrapper">
-                <table className="backtest-table min-w-[900px] w-full text-sm">
+                <table className="backtest-table min-w-[980px] w-full text-sm">
                   <thead className="backtest-table-head">
                     <tr className="text-left">
                       <th className="backtest-table-head-cell">{text.stock}</th>
@@ -600,6 +619,7 @@ const BacktestPage: React.FC = () => {
                       </th>
                       <th className="backtest-table-head-cell">{text.result}</th>
                       <th className="backtest-table-head-cell">{text.status}</th>
+                      <th className="backtest-table-head-cell">{text.actions}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -607,6 +627,7 @@ const BacktestPage: React.FC = () => {
                       const actionLabel = getDecisionActionLabel(row.action, row.actionLabel, null, null, actionLabels);
                       const predictionParts = [actionLabel, row.trendPrediction, row.operationAdvice]
                         .filter((part): part is string => Boolean(part));
+                      const rowKey = `${row.analysisHistoryId}:${row.evalWindowDays}`;
 
                       return (
                         <tr
@@ -663,6 +684,17 @@ const BacktestPage: React.FC = () => {
                           </td>
                           <td className="backtest-table-cell">{outcomeBadge(row.outcome, language)}</td>
                           <td className="backtest-table-cell">{statusBadge(row.evalStatus, language)}</td>
+                          <td className="backtest-table-cell">
+                            <button
+                              type="button"
+                              aria-label={formatUiText(text.deleteResultAria, { code: row.code })}
+                              disabled={deletingKey === rowKey}
+                              onClick={() => handleDeleteResult(row)}
+                              className="text-xs text-danger hover:text-danger/80 disabled:cursor-wait disabled:opacity-60"
+                            >
+                              {deletingKey === rowKey ? text.deletingResult : text.deleteResult}
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
