@@ -66,6 +66,7 @@ const DirectionalPlanCard: React.FC<DirectionalPlanCardProps> = ({
   includeDailyConstraint = false,
 }) => {
   const rows = [
+    { label: text.analysisMode, value: plan.analysisTimeframe },
     { label: text.direction, value: 'direction' in plan ? plan.direction : undefined },
     { label: text.entryPrice, value: plan.entryPrice },
     { label: text.stopLoss, value: plan.stopLoss },
@@ -80,6 +81,7 @@ const DirectionalPlanCard: React.FC<DirectionalPlanCardProps> = ({
     <div className="home-subpanel home-strategy-card p-3" style={{ ['--home-strategy-tone' as string]: `var(${tone})` }}>
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="home-strategy-label text-xs">{title}</span>
+        {plan.analysisTimeframe ? <span className="text-[11px] text-muted-text">{plan.analysisTimeframe}</span> : null}
       </div>
       <div className="space-y-2">
         {rows.map((row) => (

@@ -56,6 +56,7 @@ from src.analysis_context_pack_overview import (
     sanitize_context_snapshot_for_api,
 )
 from src.market_phase_summary import extract_market_phase_summary
+from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
 
 logger = logging.getLogger(__name__)
 
@@ -394,6 +395,10 @@ def get_history_detail(
             result.get("stock_code", ""),
             report_language,
         )
+        analysis_mode = normalize_analysis_mode(
+            raw_result.get("analysis_mode")
+            or (context_snapshot.get("analysis_mode") if isinstance(context_snapshot, dict) else None)
+        )
 
         # 构建响应模型
         meta = ReportMeta(
@@ -408,6 +413,8 @@ def get_history_detail(
             change_pct=change_pct,
             model_used=normalize_model_used(result.get("model_used")),
             market_phase_summary=market_phase_summary,
+            analysis_mode=analysis_mode,
+            analysis_timeframe=analysis_timeframe_label(analysis_mode, report_language),
         )
         
         summary = ReportSummary(
@@ -430,12 +437,13 @@ def get_history_detail(
             )
         )
         
+        directional_plans = extract_directional_strategy_plans(result.get("raw_result"))
         strategy = ReportStrategy(
             ideal_buy=result.get("ideal_buy"),
             secondary_buy=result.get("secondary_buy"),
             stop_loss=result.get("stop_loss"),
             take_profit=result.get("take_profit"),
-            **extract_directional_strategy_plans(result.get("raw_result")),
+            **directional_plans,
         )
         
         fallback_fundamental = db_manager.get_latest_fundamental_snapshot(

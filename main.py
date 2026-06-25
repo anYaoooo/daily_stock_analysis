@@ -304,7 +304,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--schedule',
         action='store_true',
-        help='启用定时任务模式，每小时整点执行 BTC 分析'
+        help='启用定时任务模式：北京时间 08:00 执行 BTC 日线分析，小时线每小时执行'
     )
 
     parser.add_argument(
@@ -587,7 +587,8 @@ def _save_reused_market_review_report(
 def run_full_analysis(
     config: Config,
     args: argparse.Namespace,
-    stock_codes: Optional[List[str]] = None
+    stock_codes: Optional[List[str]] = None,
+    analysis_mode: str = "daily",
 ):
     """
     执行完整的 BTC 分析流程
@@ -600,6 +601,9 @@ def run_full_analysis(
 
     try:
         _refresh_stock_index_cache_for_analysis(config)
+        normalized_analysis_mode = str(analysis_mode or "daily").strip().lower()
+        if normalized_analysis_mode not in {"daily", "hourly"}:
+            normalized_analysis_mode = "daily"
 
         # Issue #529: Hot-reload STOCK_LIST from .env on each scheduled run
         if stock_codes is None:
@@ -670,6 +674,7 @@ def run_full_analysis(
             save_context_snapshot=save_context_snapshot,
             daily_market_context_enabled=should_use_daily_market_context,
             daily_market_context_allow_generate=should_use_daily_market_context,
+            analysis_mode=normalized_analysis_mode,
         )
         if should_use_daily_market_context:
             # Prompt-side context can reuse historical summaries, while full-merge
@@ -1110,12 +1115,17 @@ def main() -> int:
     # 解析 BTC 列表
     stock_codes = None
     if args.stocks:
-        try:
-            stock_codes = [canonical_btc_code(c) for c in args.stocks.split(',') if (c or "").strip()]
-        except ValueError as exc:
-            logger.error("%s", exc)
-            return 1
-        logger.info(f"使用命令行指定的 BTC 列表: {stock_codes}")
+        if args.schedule or config.schedule_enabled:
+            logger.warning(
+                "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照，并在每次运行前重新读取最新的 STOCK_LIST。"
+            )
+        else:
+            try:
+                stock_codes = [canonical_btc_code(c) for c in args.stocks.split(',') if (c or "").strip()]
+            except ValueError as exc:
+                logger.error("%s", exc)
+                return 1
+            logger.info(f"使用命令行指定的 BTC 列表: {stock_codes}")
 
     # === 处理 --webui / --webui-only 参数，映射到 --serve / --serve-only ===
     if args.webui:
@@ -1210,7 +1220,8 @@ def main() -> int:
         # 模式2: 定时任务模式
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
-            logger.info("BTC 分析执行频率: 每小时整点")
+            logger.info("BTC 日线分析执行时间: 北京时间 08:00")
+            logger.info("BTC 小时线分析执行频率: 每小时整点")
 
             # Determine whether to run immediately:
             # Command line arg --no-run-immediately overrides config if present.
@@ -1223,13 +1234,24 @@ def main() -> int:
 
             from src.scheduler import run_with_schedule
             scheduled_stock_codes = _resolve_scheduled_stock_codes(stock_codes)
-            schedule_time_provider = _build_schedule_time_provider(config.schedule_time)
+            btc_daily_schedule_time = "08:00"
+            schedule_time_provider = _build_schedule_time_provider(btc_daily_schedule_time)
 
-            def scheduled_task():
+            def scheduled_daily_task():
                 runtime_config = _reload_runtime_config()
-                run_full_analysis(runtime_config, args, scheduled_stock_codes)
+                run_full_analysis(runtime_config, args, scheduled_stock_codes, analysis_mode="daily")
+
+            def scheduled_hourly_task():
+                runtime_config = _reload_runtime_config()
+                run_full_analysis(runtime_config, args, scheduled_stock_codes, analysis_mode="hourly")
 
             background_tasks = []
+            background_tasks.append({
+                "task": scheduled_hourly_task,
+                "interval_seconds": 60 * 60,
+                "run_immediately": should_run_immediately,
+                "name": "btc_hourly_analysis",
+            })
             if getattr(config, 'agent_event_monitor_enabled', False):
                 from src.services.alert_worker import AlertWorker
 
@@ -1280,12 +1302,12 @@ def main() -> int:
                 })
 
             run_with_schedule(
-                task=scheduled_task,
-                schedule_time=config.schedule_time,
+                task=scheduled_daily_task,
+                schedule_time=btc_daily_schedule_time,
                 run_immediately=should_run_immediately,
                 background_tasks=background_tasks,
                 schedule_time_provider=schedule_time_provider,
-                schedule_mode="hourly",
+                schedule_mode="daily",
             )
             return 0
 

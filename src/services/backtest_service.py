@@ -18,6 +18,7 @@ from src.repositories.stock_repo import StockRepository
 from src.schemas.decision_action import build_action_fields
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager
 from src.utils.data_processing import parse_json_field
+from src.utils.timeframe import analysis_timeframe_label
 
 logger = logging.getLogger(__name__)
 
@@ -677,6 +678,8 @@ class BacktestService:
             "code": row.code,
             "stock_name": stock_name,
             "analysis_date": row.analysis_date.isoformat() if row.analysis_date else None,
+            "analysis_mode": "daily",
+            "analysis_timeframe": analysis_timeframe_label("daily", raw.get("report_language") or "zh"),
             "eval_window_days": row.eval_window_days,
             "engine_version": row.engine_version,
             "eval_status": row.eval_status,

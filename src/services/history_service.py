@@ -40,6 +40,7 @@ from src.utils.data_processing import (
     normalize_model_used,
     parse_json_field,
 )
+from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
 
 if TYPE_CHECKING:
     from src.analyzer import AnalysisResult
@@ -825,6 +826,16 @@ class HistoryService:
             from src.analyzer import AnalysisResult
             # Extract dashboard data if available
             dashboard = raw_result.get("dashboard", {})
+            context_snapshot = parse_json_field(getattr(record, "context_snapshot", None))
+            analysis_mode = normalize_analysis_mode(
+                raw_result.get("analysis_mode")
+                if raw_result.get("analysis_mode") is not None
+                else (context_snapshot.get("analysis_mode") if isinstance(context_snapshot, dict) else None)
+            )
+            analysis_timeframe = analysis_timeframe_label(
+                analysis_mode,
+                normalize_report_language(raw_result.get("report_language")),
+            )
 
             # Build AnalysisResult with available data
             return AnalysisResult(
@@ -836,6 +847,8 @@ class HistoryService:
                 decision_type=raw_result.get("decision_type", "hold"),
                 confidence_level=raw_result.get("confidence_level", "中"),
                 report_language=normalize_report_language(raw_result.get("report_language")),
+                analysis_mode=analysis_mode,
+                analysis_timeframe=analysis_timeframe,
                 action=raw_result.get("action"),
                 action_label=raw_result.get("action_label"),
                 dashboard=dashboard,

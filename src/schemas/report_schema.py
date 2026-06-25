@@ -108,6 +108,8 @@ class PositionStrategy(BaseModel):
 class DirectionalStrategyPlan(BaseModel):
     """Directional long/short plan for BTC and other two-way instruments."""
 
+    timeframe: Optional[str] = None
+    analysis_timeframe: Optional[str] = None
     entry_price: Optional[Union[str, int, float]] = None
     stop_loss: Optional[Union[str, int, float]] = None
     take_profit: Optional[Union[str, int, float]] = None
@@ -117,8 +119,10 @@ class DirectionalStrategyPlan(BaseModel):
 
 
 class IntradayPlan(BaseModel):
-    """Hourly intraday plan that must follow the daily BTC framework."""
+    """Hourly intraday plan."""
 
+    timeframe: Optional[str] = None
+    analysis_timeframe: Optional[str] = None
     enabled: Optional[bool] = None
     direction: Optional[str] = None
     entry_price: Optional[Union[str, int, float]] = None

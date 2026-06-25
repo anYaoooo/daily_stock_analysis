@@ -1399,7 +1399,7 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 
 ### 自动运行
 
-回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式还会每小时后台检查一次够龄的 BTC 历史报告。BTC 计划级回测会从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，按入场触发、止盈止损、手续费、滑点、风险预算和名义仓位模拟交易，分别写入 `crypto_backtest_results`，并在 `crypto_backtest_summaries` 汇总正确率、胜率、资金曲线和风险收益指标。`btc-plan-v2` 会额外保存 K 线来源/周期/拉取时间/bar 范围/哈希、前视偏差校验、单笔 R 倍数，并在入场触发样本小于 30 时标记低置信度。也可通过 API 手动触发或删除单条回测结果；删除后会自动重算汇总。
+回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析保持每小时执行一次，后台回测仍会每小时检查一次够龄的 BTC 历史报告。BTC 计划级回测会从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，按入场触发、止盈止损、手续费、滑点、风险预算和名义仓位模拟交易，分别写入 `crypto_backtest_results`，并在 `crypto_backtest_summaries` 汇总正确率、胜率、资金曲线和风险收益指标。`btc-plan-v2` 会额外保存 K 线来源/周期/拉取时间/bar 范围/哈希、前视偏差校验、单笔 R 倍数，并在入场触发样本小于 30 时标记低置信度。也可通过 API 手动触发或删除单条回测结果；删除后会自动重算汇总。
 
 BTC 单标的分析完成后的完整报告推送使用 BTC 专用模板，不再发送通用股票决策仪表盘；正文只保留多空建议、日线多单计划、日线空单计划、小时线日内计划和技术分析。
 

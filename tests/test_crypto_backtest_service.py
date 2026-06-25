@@ -2,10 +2,12 @@
 """Unit tests for BTC plan-level backtest orchestration helpers."""
 
 import unittest
+import json
 from datetime import datetime, timedelta, timezone
 
 from src.core.crypto_backtest_engine import CryptoPlan
 from src.services.crypto_backtest_service import CryptoBacktestService, _Bar
+from src.storage import AnalysisHistory
 
 
 class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
@@ -105,6 +107,43 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
 
         self.assertEqual(result, {"deleted": 0})
         self.assertEqual(recomputed, [])
+
+    def test_extract_plans_for_hourly_report_only_returns_intraday_plan(self):
+        analysis = AnalysisHistory(
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "long_plan": {
+                                "entry_price": "100000",
+                                "stop_loss": "99000",
+                                "take_profit": "103000",
+                            },
+                            "short_plan": {
+                                "entry_price": "98000",
+                                "stop_loss": "99000",
+                                "take_profit": "95000",
+                            },
+                            "intraday_plan": {
+                                "enabled": True,
+                                "direction": "long",
+                                "entry_price": "100500",
+                                "stop_loss": "100000",
+                                "take_profit": "101500",
+                            },
+                        }
+                    }
+                }
+            ),
+            context_snapshot=json.dumps({"analysis_mode": "hourly"}),
+        )
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+
+        plans = service._extract_plans(analysis)
+
+        self.assertEqual([plan.plan_type for plan in plans], ["intraday"])
+        self.assertEqual(plans[0].direction, "long")
 
 
 if __name__ == "__main__":

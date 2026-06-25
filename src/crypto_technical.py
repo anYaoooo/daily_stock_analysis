@@ -93,19 +93,41 @@ def build_crypto_technical_context(
     if avg_volume and avg_volume > 0 and latest_volume is not None:
         volume_ratio = latest_volume / avg_volume
 
-    recent_high = _safe_float(bars["high"].tail(20).max())
-    recent_low = _safe_float(bars["low"].tail(20).min())
+    prev_close_series = bars["close"].shift(1)
+    true_range = pd.concat(
+        [
+            bars["high"] - bars["low"],
+            (bars["high"] - prev_close_series).abs(),
+            (bars["low"] - prev_close_series).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr14 = _safe_float(true_range.tail(14).mean()) if len(true_range.dropna()) >= 14 else None
+    atr_pct = (atr14 / close * 100) if atr14 is not None and close > 0 else None
+
+    prior_bars = bars.iloc[:-1] if len(bars) > 1 else bars
+    recent_high = _safe_float(prior_bars["high"].tail(20).max())
+    recent_low = _safe_float(prior_bars["low"].tail(20).min())
     body_high = max(_safe_float(latest.get("open")) or close, close)
     body_low = min(_safe_float(latest.get("open")) or close, close)
     close_change_pct = None
     if prev_close and prev_close > 0:
         close_change_pct = (close - prev_close) / prev_close * 100
 
+    high_swept = recent_high is not None and high > recent_high
+    low_swept = recent_low is not None and low < recent_low
+    close_above_resistance = recent_high is not None and close > recent_high
+    close_below_support = recent_low is not None and close < recent_low
+
     price_action = "range"
-    if recent_high is not None and close >= recent_high:
+    if close_above_resistance:
         price_action = "breakout"
-    elif recent_low is not None and close <= recent_low:
+    elif close_below_support:
         price_action = "breakdown"
+    elif high_swept and not close_above_resistance:
+        price_action = "liquidity_sweep_high"
+    elif low_swept and not close_below_support:
+        price_action = "liquidity_sweep_low"
     elif close_change_pct is not None and close_change_pct > 0 and close >= body_high:
         price_action = "bullish_push"
     elif close_change_pct is not None and close_change_pct < 0 and close <= body_low:
@@ -139,6 +161,10 @@ def build_crypto_technical_context(
             "recent_high": _round(recent_high),
             "recent_low": _round(recent_low),
             "close_change_pct": _round(close_change_pct, 2),
+            "high_swept": bool(high_swept),
+            "low_swept": bool(low_swept),
+            "close_above_resistance": bool(close_above_resistance),
+            "close_below_support": bool(close_below_support),
         },
         "fibonacci": {
             "swing_high": _round(swing_high),
@@ -150,6 +176,11 @@ def build_crypto_technical_context(
             "average": _round(avg_volume, 4),
             "ratio": _round(volume_ratio, 2),
             "confirmation": volume_confirmation,
+        },
+        "volatility": {
+            "atr14": _round(atr14),
+            "atr14_pct": _round(atr_pct, 2),
+            "stop_loss_guidance": "止损距离应避开日常 ATR 噪音，除非是明确的超短线计划。",
         },
         "vwap": {
             "rolling_20": _round(vwap),
@@ -198,8 +229,10 @@ def _infer_bias(context: Optional[Dict[str, Any]]) -> str:
 def _alignment(daily_bias: str, hourly_bias: str) -> str:
     if daily_bias in {"long", "short"} and hourly_bias == daily_bias:
         return f"aligned_{daily_bias}"
-    if daily_bias in {"long", "short"} and hourly_bias in {"long", "short"}:
-        return "conflict"
+    if daily_bias == "short" and hourly_bias == "long":
+        return "countertrend_long"
+    if daily_bias == "long" and hourly_bias == "short":
+        return "countertrend_short"
     if daily_bias in {"long", "short"}:
         return f"wait_for_{daily_bias}_trigger"
     if hourly_bias in {"long", "short"}:
@@ -212,10 +245,12 @@ def _opportunity_text(alignment: str) -> str:
         return "小时线与日线偏多共振，可寻找顺日线的日内多单触发；止损与仓位必须受日线失效位约束。"
     if alignment == "aligned_short":
         return "小时线与日线偏空共振，可寻找顺日线的日内空单触发；止损与仓位必须受日线失效位约束。"
-    if alignment == "conflict":
-        return "小时线与日线冲突，日内交易应等待重新同向确认，避免逆日线方向主动开仓。"
+    if alignment == "countertrend_long":
+        return "日线偏空但小时线偏多，可评估逆日线短线多单机会；必须轻仓、严格止损、限定日内有效期，不能升级为日线反转。"
+    if alignment == "countertrend_short":
+        return "日线偏多但小时线偏空，可评估逆日线短线空单机会；必须轻仓、严格止损、限定日内有效期，不能升级为日线反转。"
     if alignment == "hourly_only_wait_daily_confirmation":
-        return "小时线有短线信号但缺少日线方向确认，只能作为观察，不直接升级为交易建议。"
+        return "小时线有短线信号但缺少明确日线方向，可作为独立日内机会评估，需降低仓位并写清触发与失效条件。"
     if alignment.startswith("wait_for_"):
         return "日线方向存在，但小时线尚未给出同向触发，等待小时线回踩/突破/跌破确认。"
     return "多空证据不足，日内以等待或区间观察为主。"
@@ -226,7 +261,7 @@ def build_crypto_multi_timeframe_context(
     hourly_df: Optional[pd.DataFrame],
     code: str,
 ) -> Optional[Dict[str, Any]]:
-    """Build a BTC context where the hourly layer follows the daily framework."""
+    """Build a BTC context where the hourly layer can express independent intraday opportunities."""
     daily_context = build_crypto_technical_context(daily_df, code)
     if not daily_context:
         return None
@@ -244,14 +279,14 @@ def build_crypto_multi_timeframe_context(
 
     result["intraday"] = {
         "timeframe": "1h",
-        "rule": "小时线只作为日内执行层，必须服从日线方向、关键位和失效条件。",
+        "rule": "小时线作为独立日内机会层，日线提供背景、关键位和风险边界，但不一票否决小时线方向。",
         "daily_bias": daily_bias,
         "hourly_bias": hourly_bias,
         "alignment": alignment,
         "opportunity": _opportunity_text(alignment),
         "notes": [
-            "顺日线方向寻找小时线触发，冲突时等待确认。",
-            "小时线入场、加减仓与止损必须围绕日线关键支撑/阻力和失效条件制定。",
+            "顺日线方向的小时线触发优先级更高；逆日线机会只能按短线/日内计划处理。",
+            "小时线入场、加减仓与止损应参考日线关键支撑/阻力和失效条件，但允许给出相反方向短线机会。",
         ],
     }
     return result

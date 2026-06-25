@@ -36,6 +36,8 @@ export interface BacktestResultItem {
   code: string;
   stockName?: string;
   analysisDate?: string;
+  analysisMode?: string;
+  analysisTimeframe?: string;
   evalWindowDays: number;
   engineVersion: string;
   evalStatus: string;
@@ -68,6 +70,37 @@ export interface BacktestResultItem {
   simulatedExitPrice?: number;
   simulatedExitReason?: string;
   simulatedReturnPct?: number;
+}
+
+export interface CryptoBacktestResultItem {
+  analysisHistoryId: number;
+  code: string;
+  analysisCreatedAt?: string;
+  evaluatedAt?: string;
+  planType: string;
+  horizon: string;
+  analysisMode?: string;
+  analysisTimeframe?: string;
+  direction: string;
+  engineVersion: string;
+  evalStatus: string;
+  evaluationStart?: string;
+  evaluationEnd?: string;
+  entryPrice?: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  entryTriggered?: boolean;
+  entryTriggeredAt?: string;
+  directionCorrect?: boolean;
+  outcome?: string;
+  hitStopLoss?: boolean;
+  hitTakeProfit?: boolean;
+  firstHit?: string;
+  firstHitAt?: string;
+  simulatedReturnPct?: number;
+  trade: Record<string, unknown>;
+  execution: Record<string, unknown>;
+  diagnostics: Record<string, unknown>;
 }
 
 export interface BacktestResultsResponse {
@@ -107,5 +140,32 @@ export interface PerformanceMetrics {
   avgDaysToFirstHit?: number;
 
   adviceBreakdown: Record<string, unknown>;
+  diagnostics: Record<string, unknown>;
+}
+
+export interface CryptoBacktestMetrics {
+  scope: string;
+  code?: string;
+  horizon?: string;
+  analysisMode?: string;
+  analysisTimeframe?: string;
+  planType?: string;
+  engineVersion: string;
+  computedAt?: string;
+  totalEvaluations: number;
+  completedCount: number;
+  triggeredCount: number;
+  noEntryCount: number;
+  skippedCount: number;
+  insufficientCount: number;
+  winCount: number;
+  lossCount: number;
+  neutralCount: number;
+  directionAccuracyPct?: number;
+  winRatePct?: number;
+  avgSimulatedReturnPct?: number;
+  planTypeBreakdown: Record<string, unknown>;
+  riskMetrics: Record<string, unknown>;
+  equityCurve: Array<Record<string, unknown>>;
   diagnostics: Record<string, unknown>;
 }

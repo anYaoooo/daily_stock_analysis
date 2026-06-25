@@ -53,6 +53,7 @@ from bot.models import BotMessage
 from src.utils.sanitize import sanitize_diagnostic_text
 from src.utils.data_processing import normalize_model_used
 from src.utils.sniper_points import extract_directional_strategy_plans
+from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
 from src.notification_sender import (
     AstrbotSender,
     CustomWebhookSender,
@@ -281,6 +282,13 @@ class NotificationService(
         report_language = normalize_report_language(language or self._get_report_language(result))
         return self._escape_md(
             get_localized_stock_name(result.name, result.code, report_language)
+        )
+
+    def _get_analysis_timeframe_label(self, result: AnalysisResult, language: Optional[str] = None) -> str:
+        report_language = normalize_report_language(language or self._get_report_language(result))
+        return analysis_timeframe_label(
+            normalize_analysis_mode(getattr(result, "analysis_mode", "daily")),
+            report_language,
         )
 
     def _get_history_compare_context(self, results: List[AnalysisResult]) -> Dict[str, Any]:
@@ -1702,7 +1710,11 @@ class NotificationService(
         lines = [
             f"## {signal_emoji} {stock_name} ({result.code})",
             "",
-            f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+            (
+                f"> {report_date} | {self._get_analysis_timeframe_label(result, report_language)} | "
+                f"{labels['score_label']}: **{result.sentiment_score}** | "
+                f"{localize_trend_prediction(result.trend_prediction, report_language)}"
+            ),
             "",
         ]
 
@@ -1838,7 +1850,11 @@ class NotificationService(
         lines = [
             f"## {signal_emoji} {stock_name} ({result.code})",
             "",
-            f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+            (
+                f"> {report_date} | {self._get_analysis_timeframe_label(result, report_language)} | "
+                f"{labels['score_label']}: **{result.sentiment_score}** | "
+                f"{localize_trend_prediction(result.trend_prediction, report_language)}"
+            ),
             "",
             f"### 多空建议",
             "",

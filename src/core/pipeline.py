@@ -43,6 +43,7 @@ from src.report_language import (
     localize_trend_prediction,
     normalize_report_language,
 )
+from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
 from src.search_service import SearchService
 from src.analysis_context_pack_prompt import format_analysis_context_pack_prompt_section
 from src.analysis_context_pack_overview import render_analysis_context_pack_overview
@@ -116,6 +117,7 @@ class StockAnalysisPipeline:
         progress_callback: Optional[Callable[[int, str], None]] = None,
         analysis_skills: Optional[List[str]] = None,
         analysis_phase: str = "auto",
+        analysis_mode: str = "daily",
         portfolio_context: Optional[Dict[str, Any]] = None,
         daily_market_context_enabled: Optional[bool] = None,
         daily_market_context_allow_generate: bool = True,
@@ -139,6 +141,9 @@ class StockAnalysisPipeline:
         self.progress_callback = progress_callback
         self.analysis_skills = list(analysis_skills) if analysis_skills is not None else None
         self.analysis_phase = analysis_phase or "auto"
+        self.analysis_mode = str(analysis_mode or "daily").strip().lower()
+        if self.analysis_mode not in {"daily", "hourly"}:
+            self.analysis_mode = "daily"
         self.portfolio_context = dict(portfolio_context) if isinstance(portfolio_context, dict) else None
         self.daily_market_context_enabled = (
             bool(getattr(self.config, "daily_market_context_enabled", True))
@@ -806,6 +811,7 @@ class StockAnalysisPipeline:
         """
         enhanced = context.copy()
         enhanced["report_language"] = normalize_report_language(getattr(self.config, "report_language", "zh"))
+        enhanced["analysis_mode"] = getattr(self, "analysis_mode", "daily")
         
         # 添加股票名称
         if stock_name:
@@ -1108,6 +1114,7 @@ class StockAnalysisPipeline:
                 "report_type": report_type.value,
                 "report_language": report_language,
                 "fundamental_context": fundamental_context,
+                "analysis_mode": getattr(self, "analysis_mode", "daily"),
             }
             if isinstance(portfolio_context, dict):
                 initial_context["portfolio_context"] = dict(portfolio_context)
@@ -1545,6 +1552,8 @@ class StockAnalysisPipeline:
         将 AgentResult 转换为 AnalysisResult。
         """
         report_language = normalize_report_language(getattr(self.config, "report_language", "zh"))
+        analysis_mode = normalize_analysis_mode(getattr(self, "analysis_mode", "daily"))
+        analysis_timeframe = analysis_timeframe_label(analysis_mode, report_language)
         dash = None
         result = AnalysisResult(
             code=code,
@@ -1554,6 +1563,8 @@ class StockAnalysisPipeline:
             operation_advice="Watch" if report_language == "en" else "观望",
             confidence_level=localize_confidence_level("medium", report_language),
             report_language=report_language,
+            analysis_mode=analysis_mode,
+            analysis_timeframe=analysis_timeframe,
             success=agent_result.success,
             error_message=agent_result.error or None,
             data_sources=f"agent:{agent_result.provider}",
@@ -1565,6 +1576,8 @@ class StockAnalysisPipeline:
             ai_stock_name = str(dash.get("stock_name", "")).strip()
             if ai_stock_name and self._is_placeholder_stock_name(stock_name, code):
                 result.name = ai_stock_name
+            result.analysis_mode = analysis_mode
+            result.analysis_timeframe = analysis_timeframe
 
             nested_dashboard = dash.get("dashboard") if isinstance(dash, dict) else None
 
@@ -2161,6 +2174,7 @@ class StockAnalysisPipeline:
         构建分析上下文快照
         """
         snapshot = {
+            "analysis_mode": getattr(self, "analysis_mode", "daily"),
             "enhanced_context": self._without_runtime_prompt_context(enhanced_context),
             "news_content": news_content,
             "realtime_quote_raw": self._safe_to_dict(realtime_quote),

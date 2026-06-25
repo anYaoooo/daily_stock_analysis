@@ -192,6 +192,10 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
                     "recent_high": 101000,
                     "recent_low": 95000,
                     "close_change_pct": 2.5,
+                    "high_swept": True,
+                    "close_above_resistance": True,
+                    "low_swept": False,
+                    "close_below_support": False,
                 },
                 "fibonacci": {
                     "swing_high": 101000,
@@ -208,6 +212,7 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
                     "ratio": 1.2,
                     "confirmation": "normal",
                 },
+                "volatility": {"atr14": 1600, "atr14_pct": 1.6},
                 "vwap": {"rolling_20": 98000, "price_position": "above"},
                 "ema": {"ema20": 97000, "ema50": 94000, "structure": "bullish"},
             },
@@ -217,20 +222,45 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
 
         self.assertIn("BTC 交易框架补充", prompt)
         self.assertIn("Price Action", prompt)
+        self.assertIn("扫过前高=True", prompt)
+        self.assertIn("收盘站上阻力=True", prompt)
+        self.assertIn("流动性掠夺/假突破偏空风险", prompt)
         self.assertIn("Fibonacci", prompt)
+        self.assertIn("Volatility / ATR", prompt)
+        self.assertIn("ATR14=1600", prompt)
+        self.assertIn("反弹/回调或短线推进", prompt)
         self.assertIn("VWAP", prompt)
         self.assertIn("EMA20=97000", prompt)
-        self.assertIn("BTC 专项", prompt)
+        self.assertIn("日线 Price Action", prompt)
+        self.assertIn("多空共振", prompt)
         self.assertIn("多单", prompt)
         self.assertIn("空单", prompt)
         self.assertIn("做空开仓", prompt)
         self.assertIn("不得只给多单买入视角", prompt)
-        self.assertIn("`sell` 表示空单开仓", prompt)
+        self.assertIn("`sell` 仅表示 Short", prompt)
+        self.assertIn("`buy` 仅表示 Long", prompt)
+        self.assertIn("Flat / 空仓等待", prompt)
         self.assertIn("long_plan", prompt)
         self.assertIn("short_plan", prompt)
         self.assertIn("intraday_plan", prompt)
+        self.assertIn("BTC 小时线日内交易机会", prompt)
+        self.assertIn("小时线数据缺失", prompt)
+        self.assertIn('direction="wait"', prompt)
         self.assertIn("必须同时输出", prompt)
         self.assertNotIn("是否满足 MA5>MA10>MA20 多头排列", prompt)
+        self.assertIn("加密货币基础信息", prompt)
+        self.assertIn("交易标的", prompt)
+        self.assertIn("标的名称", prompt)
+        self.assertIn("USDT", prompt)
+        self.assertNotIn("股票基础信息", prompt)
+        self.assertNotIn("财报与分红", prompt)
+        self.assertNotIn("实时行情增强数据", prompt)
+        self.assertNotIn("换手率", prompt)
+        self.assertNotIn("市盈率", prompt)
+        self.assertNotIn("市净率", prompt)
+        self.assertNotIn("筹码分布", prompt)
+        self.assertNotIn("主力资金流向", prompt)
+        self.assertNotIn("筹码结构是否支持", prompt)
 
     def test_btc_system_prompt_uses_two_way_default_policy(self) -> None:
         analyzer = GeminiAnalyzer(use_legacy_default_prompt=True)
@@ -258,6 +288,7 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
                 "retracement_levels": {"38.2%": 96798, "50.0%": 95500, "61.8%": 94202},
             },
             "volume": {"latest": 1200, "average": 1000, "ratio": 1.2, "confirmation": "normal"},
+            "volatility": {"atr14": 1600, "atr14_pct": 1.6},
             "vwap": {"rolling_20": 98000, "price_position": "above"},
             "ema": {"ema20": 97000, "ema50": 94000, "structure": "bullish"},
         }
@@ -274,6 +305,7 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
                 "retracement_levels": {"38.2%": 99998, "50.0%": 99750, "61.8%": 99502},
             },
             "volume": {"latest": 120, "average": 100, "ratio": 1.2, "confirmation": "normal"},
+            "volatility": {"atr14": 420, "atr14_pct": 0.42},
             "vwap": {"rolling_20": 99500, "price_position": "above"},
             "ema": {"ema20": 99200, "ema50": 98900, "structure": "bullish"},
         }
@@ -297,12 +329,14 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         prompt = analyzer._format_prompt(context, "Bitcoin", report_language="zh")
 
         self.assertIn("BTC 小时线日内交易机会", prompt)
-        self.assertIn("必须服从日线", prompt)
+        self.assertIn("独立判断", prompt)
         self.assertIn("日线偏向", prompt)
         self.assertIn("小时线偏向", prompt)
         self.assertIn("aligned_long", prompt)
-        self.assertIn("小时线只作为执行层", prompt)
-        self.assertIn("小时线与日线冲突时", prompt)
+        self.assertIn("日线偏空但小时线出现多单机会", prompt)
+        self.assertIn("逆日线短线计划", prompt)
+        self.assertIn("ATR14=420", prompt)
+        self.assertIn("止损不得落在小时线常规 ATR 噪音内", prompt)
         self.assertIn("BTC 小时线日内计划强制结构", prompt)
         self.assertIn("dashboard.battle_plan.intraday_plan", prompt)
         self.assertIn("daily_constraint", prompt)

@@ -49,6 +49,21 @@ function phaseLabel(row: BacktestResultItem, language: UiLanguage): string {
   return (row.marketPhase ? BACKTEST_PHASE_LABELS[language][row.marketPhase] : undefined) || row.marketPhase || '--';
 }
 
+function timeframeLabel(value?: string | null): string {
+  if (!value) return '--';
+  if (value === 'hourly') return '小时线';
+  if (value === 'daily') return '日线';
+  return value;
+}
+
+function analysisTimeframeDisplay(row: BacktestResultItem): string {
+  return timeframeLabel(row.analysisTimeframe || row.analysisMode || 'daily');
+}
+
+function isHourlyAnalysis(row: BacktestResultItem): boolean {
+  return row.analysisMode === 'hourly' || row.analysisTimeframe === '小时线' || row.analysisTimeframe === 'Hourly';
+}
+
 function labelFromMap(value: string | null | undefined, labels: Record<string, string>): string {
   if (!value) return '--';
   return labels[value] ?? value;
@@ -205,6 +220,7 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics; title: string; la
 
 const RunSummary: React.FC<{ data: BacktestRunResponse; language: UiLanguage }> = ({ data, language }) => {
   const text = BACKTEST_TEXT[language];
+  const hasNoCandidates = data.processed === 0 && data.saved === 0 && data.completed === 0 && data.insufficient === 0 && data.errors === 0;
   return (
   <div className="backtest-summary animate-fade-in">
     <span className="label">{text.processed} <span className="value">{data.processed}</span></span>
@@ -213,6 +229,9 @@ const RunSummary: React.FC<{ data: BacktestRunResponse; language: UiLanguage }> 
     <span className="label">{text.insufficient} <span className="value warning">{data.insufficient}</span></span>
     {data.errors > 0 && (
       <span className="label">{text.errors} <span className="value danger">{data.errors}</span></span>
+    )}
+    {hasNoCandidates && (
+      <span className="label basis-full text-muted-text">{text.noBacktestCandidates}</span>
     )}
   </div>
   );
@@ -609,6 +628,7 @@ const BacktestPage: React.FC = () => {
                     <tr className="text-left">
                       <th className="backtest-table-head-cell">{text.stock}</th>
                       <th className="backtest-table-head-cell">{text.analysisDate}</th>
+                      <th className="backtest-table-head-cell">{text.analysisMode}</th>
                       <th className="backtest-table-head-cell">{text.phase}</th>
                       <th className="backtest-table-head-cell">{text.aiPrediction}</th>
                       <th className="backtest-table-head-cell">
@@ -641,6 +661,11 @@ const BacktestPage: React.FC = () => {
                             </div>
                           </td>
                           <td className="backtest-table-cell text-secondary-text">{row.analysisDate || '--'}</td>
+                          <td className="backtest-table-cell">
+                            <Badge variant={isHourlyAnalysis(row) ? 'warning' : 'default'} className="shadow-none">
+                              {analysisTimeframeDisplay(row)}
+                            </Badge>
+                          </td>
                           <td className="backtest-table-cell text-secondary-text">{phaseLabel(row, language)}</td>
                           <td className="backtest-table-cell max-w-[220px] text-foreground">
                             {predictionParts.length ? (

@@ -7,9 +7,13 @@ import re
 from collections.abc import Mapping
 from typing import Any, Dict, Optional
 
+from src.utils.timeframe import analysis_timeframe_label, horizon_to_analysis_mode
+
 
 SNIPER_KEYS = ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")
 STRATEGY_PLAN_KEYS = (
+    "timeframe",
+    "analysis_timeframe",
     "entry_price",
     "stop_loss",
     "take_profit",
@@ -18,6 +22,8 @@ STRATEGY_PLAN_KEYS = (
     "reason",
 )
 INTRADAY_PLAN_KEYS = (
+    "timeframe",
+    "analysis_timeframe",
     "enabled",
     "direction",
     "entry_price",
@@ -174,6 +180,11 @@ def _normalize_strategy_plan(value: Any) -> Optional[Dict[str, str]]:
         if text:
             normalized[key] = text
 
+    if normalized:
+        timeframe = horizon_to_analysis_mode(normalized.get("timeframe") or "daily")
+        normalized.setdefault("timeframe", timeframe)
+        normalized.setdefault("analysis_timeframe", analysis_timeframe_label(timeframe))
+
     return normalized or None
 
 
@@ -197,6 +208,10 @@ def _normalize_intraday_plan(value: Any) -> Optional[Dict[str, Any]]:
         text = str(raw_value).strip()
         if text:
             normalized[key] = text
+
+    if normalized:
+        normalized.setdefault("timeframe", "hourly")
+        normalized.setdefault("analysis_timeframe", analysis_timeframe_label("hourly"))
 
     return normalized or None
 

@@ -132,6 +132,7 @@ describe('BacktestPage', () => {
     expect(screen.getAllByLabelText('是').length).toBeGreaterThan(0);
     expect(screen.getByText('方向准确率')).toBeInTheDocument();
     expect(screen.getByText('平均模拟收益')).toBeInTheDocument();
+    expect(screen.getByText('周期')).toBeInTheDocument();
   });
 
   it('falls back to the taxonomy label when backtest actionLabel is missing', async () => {
@@ -300,6 +301,23 @@ describe('BacktestPage', () => {
 
     expect(await screen.findByText('已处理:')).toBeInTheDocument();
     expect(screen.getByText('已保存:')).toBeInTheDocument();
+  });
+
+  it('shows a clear no-op message when there are no new backtest candidates', async () => {
+    mockRun.mockResolvedValueOnce({
+      processed: 0,
+      saved: 0,
+      completed: 0,
+      insufficient: 0,
+      errors: 0,
+    });
+
+    render(<BacktestPage />);
+
+    await screen.findByPlaceholderText('按股票代码筛选（留空表示全部）');
+    fireEvent.click(screen.getByRole('button', { name: '运行回测' }));
+
+    expect(await screen.findByText('没有新的可回测记录；已存在的结果不会重复计算。如需重算，请启用强制重跑。')).toBeInTheDocument();
   });
 
   it('deletes a backtest result and refreshes the current result set', async () => {

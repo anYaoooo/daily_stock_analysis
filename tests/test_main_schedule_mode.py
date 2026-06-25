@@ -156,10 +156,12 @@ class MainScheduleModeTestCase(unittest.TestCase):
             run_immediately,
             background_tasks=None,
             schedule_time_provider=None,
+            schedule_mode="daily",
         ):
             scheduled_call["schedule_time"] = schedule_time
             scheduled_call["run_immediately"] = run_immediately
             scheduled_call["background_tasks"] = background_tasks or []
+            scheduled_call["schedule_mode"] = schedule_mode
             scheduled_call["resolved_schedule_time"] = (
                 schedule_time_provider() if schedule_time_provider is not None else None
             )
@@ -168,7 +170,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         with patch("main.parse_arguments", return_value=args), \
              patch("main.get_config", return_value=config), \
              patch("main._reload_runtime_config", return_value=config), \
-             patch("main._build_schedule_time_provider", return_value=lambda: "18:00"), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
              patch("main.setup_logging"), \
              patch("main.run_full_analysis") as run_full_analysis, \
              patch("main.logger.warning") as warning_log, \
@@ -179,13 +181,18 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(
             scheduled_call,
             {
-                "schedule_time": "18:00",
+                "schedule_time": "08:00",
                 "run_immediately": True,
-                "background_tasks": [],
-                "resolved_schedule_time": "18:00",
+                "background_tasks": scheduled_call["background_tasks"],
+                "schedule_mode": "daily",
+                "resolved_schedule_time": "08:00",
             },
         )
-        run_full_analysis.assert_called_once_with(config, args, None)
+        self.assertEqual(len(scheduled_call["background_tasks"]), 1)
+        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "btc_hourly_analysis")
+        self.assertEqual(scheduled_call["background_tasks"][0]["interval_seconds"], 60 * 60)
+        self.assertEqual(scheduled_call["background_tasks"][0]["run_immediately"], True)
+        run_full_analysis.assert_called_once_with(config, args, None, analysis_mode="daily")
         warning_log.assert_any_call(
             "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照，并在每次运行前重新读取最新的 STOCK_LIST。"
         )
@@ -202,8 +209,10 @@ class MainScheduleModeTestCase(unittest.TestCase):
             run_immediately,
             background_tasks=None,
             schedule_time_provider=None,
+            schedule_mode="daily",
         ):
             scheduled_call["schedule_time"] = schedule_time
+            scheduled_call["schedule_mode"] = schedule_mode
             scheduled_call["resolved_schedule_time"] = (
                 schedule_time_provider() if schedule_time_provider is not None else None
             )
@@ -212,7 +221,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         with patch("main.parse_arguments", return_value=args), \
              patch("main.get_config", return_value=startup_config), \
              patch("main._reload_runtime_config", return_value=runtime_config), \
-             patch("main._build_schedule_time_provider", return_value=lambda: "09:30"), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
              patch("main.setup_logging"), \
              patch("main.run_full_analysis") as run_full_analysis, \
              patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
@@ -221,9 +230,9 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(
             scheduled_call,
-            {"schedule_time": "18:00", "resolved_schedule_time": "09:30"},
+            {"schedule_time": "08:00", "schedule_mode": "daily", "resolved_schedule_time": "08:00"},
         )
-        run_full_analysis.assert_called_once_with(runtime_config, args, None)
+        run_full_analysis.assert_called_once_with(runtime_config, args, None, analysis_mode="daily")
 
     def test_schedule_mode_registers_event_monitor_background_task(self) -> None:
         args = self._make_args(schedule=True)
@@ -242,10 +251,12 @@ class MainScheduleModeTestCase(unittest.TestCase):
             run_immediately,
             background_tasks=None,
             schedule_time_provider=None,
+            schedule_mode="daily",
         ):
             scheduled_call["schedule_time"] = schedule_time
             scheduled_call["run_immediately"] = run_immediately
             scheduled_call["background_tasks"] = background_tasks or []
+            scheduled_call["schedule_mode"] = schedule_mode
             scheduled_call["resolved_schedule_time"] = (
                 schedule_time_provider() if schedule_time_provider is not None else None
             )
@@ -253,7 +264,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         with patch("main.parse_arguments", return_value=args), \
              patch("main.get_config", return_value=config), \
              patch("main._reload_runtime_config", return_value=config) as reload_config, \
-             patch("main._build_schedule_time_provider", return_value=lambda: "18:00"), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
              patch("main.setup_logging"), \
              patch("main.run_full_analysis") as run_full_analysis, \
              patch("src.services.alert_worker.AlertWorker", return_value=worker) as worker_cls, \
@@ -264,11 +275,13 @@ class MainScheduleModeTestCase(unittest.TestCase):
         worker_cls.assert_called_once()
         self.assertIs(worker_cls.call_args.kwargs["config_provider"], reload_config)
         run_full_analysis.assert_not_called()
-        self.assertEqual(scheduled_call["schedule_time"], "18:00")
+        self.assertEqual(scheduled_call["schedule_time"], "08:00")
         self.assertEqual(scheduled_call["run_immediately"], True)
-        self.assertEqual(scheduled_call["resolved_schedule_time"], "18:00")
-        self.assertEqual(len(scheduled_call["background_tasks"]), 1)
-        background_task = scheduled_call["background_tasks"][0]
+        self.assertEqual(scheduled_call["schedule_mode"], "daily")
+        self.assertEqual(scheduled_call["resolved_schedule_time"], "08:00")
+        self.assertEqual(len(scheduled_call["background_tasks"]), 2)
+        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "btc_hourly_analysis")
+        background_task = scheduled_call["background_tasks"][1]
         self.assertEqual(background_task["name"], "agent_event_monitor")
         self.assertEqual(background_task["interval_seconds"], 7 * 60)
         self.assertEqual(background_task["run_immediately"], True)
@@ -296,13 +309,14 @@ class MainScheduleModeTestCase(unittest.TestCase):
             run_immediately,
             background_tasks=None,
             schedule_time_provider=None,
+            schedule_mode="daily",
         ):
             scheduled_call["background_tasks"] = background_tasks or []
 
         with patch("main.parse_arguments", return_value=args), \
              patch("main.get_config", return_value=config), \
              patch("main._reload_runtime_config", return_value=config), \
-             patch("main._build_schedule_time_provider", return_value=lambda: "18:00"), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
              patch("main.setup_logging"), \
              patch("main.run_full_analysis") as run_full_analysis, \
              patch("src.services.alert_worker.AlertWorker", return_value=worker) as worker_cls, \
@@ -312,8 +326,9 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         worker_cls.assert_called_once()
         run_full_analysis.assert_not_called()
-        self.assertEqual(len(scheduled_call["background_tasks"]), 1)
-        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "agent_event_monitor")
+        self.assertEqual(len(scheduled_call["background_tasks"]), 2)
+        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "btc_hourly_analysis")
+        self.assertEqual(scheduled_call["background_tasks"][1]["name"], "agent_event_monitor")
 
     def test_check_notify_returns_before_other_modes(self) -> None:
         args = self._make_args(check_notify=True, serve=True, schedule=True, market_review=True)
@@ -408,17 +423,19 @@ class MainScheduleModeTestCase(unittest.TestCase):
             run_immediately,
             background_tasks=None,
             schedule_time_provider=None,
+            schedule_mode="daily",
         ):
             scheduled_call["schedule_time"] = schedule_time
             scheduled_call["run_immediately"] = run_immediately
             scheduled_call["background_tasks"] = background_tasks or []
+            scheduled_call["schedule_mode"] = schedule_mode
             task()
 
         with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}, clear=False), \
              patch("main.parse_arguments", return_value=args), \
              patch("main.get_config", return_value=config), \
              patch("main._reload_runtime_config", return_value=config), \
-             patch("main._build_schedule_time_provider", return_value=lambda: "18:00"), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
              patch("main.prepare_webui_frontend_assets", return_value=True), \
              patch("main.start_api_server", side_effect=RuntimeError("port busy")), \
              patch("main.start_bot_stream_clients") as start_bots, \
@@ -429,10 +446,12 @@ class MainScheduleModeTestCase(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         start_bots.assert_not_called()
-        run_full_analysis.assert_called_once_with(config, args, None)
-        self.assertEqual(scheduled_call["schedule_time"], "18:00")
+        run_full_analysis.assert_called_once_with(config, args, None, analysis_mode="daily")
+        self.assertEqual(scheduled_call["schedule_time"], "08:00")
         self.assertEqual(scheduled_call["run_immediately"], True)
-        self.assertEqual(scheduled_call["background_tasks"], [])
+        self.assertEqual(scheduled_call["schedule_mode"], "daily")
+        self.assertEqual(len(scheduled_call["background_tasks"]), 1)
+        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "btc_hourly_analysis")
         error_log.assert_called_once()
 
     def test_reload_runtime_config_preserves_process_env_overrides(self) -> None:

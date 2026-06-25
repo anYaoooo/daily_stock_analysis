@@ -144,6 +144,8 @@ class ReportMeta(BaseModel):
         None,
         description="本次分析市场阶段低敏摘要",
     )
+    analysis_mode: Optional[str] = Field(None, description="分析模式：daily/hourly")
+    analysis_timeframe: Optional[str] = Field(None, description="分析周期展示标签：日线/小时线")
 
 
 class ReportSummary(BaseModel):
@@ -164,6 +166,8 @@ class ReportSummary(BaseModel):
 class DirectionalStrategyPlan(BaseModel):
     """多空方向策略计划"""
 
+    timeframe: Optional[str] = Field(None, description="策略周期：daily/hourly")
+    analysis_timeframe: Optional[str] = Field(None, description="策略周期展示标签：日线/小时线")
     entry_price: Optional[str] = Field(None, description="入场价")
     stop_loss: Optional[str] = Field(None, description="止损价")
     take_profit: Optional[str] = Field(None, description="止盈目标")
@@ -175,6 +179,8 @@ class DirectionalStrategyPlan(BaseModel):
 class IntradayStrategyPlan(BaseModel):
     """小时线日内策略计划"""
 
+    timeframe: Optional[str] = Field(None, description="策略周期：hourly")
+    analysis_timeframe: Optional[str] = Field(None, description="策略周期展示标签：小时线")
     enabled: Optional[bool] = Field(None, description="是否存在可执行日内机会")
     direction: Optional[str] = Field(None, description="日内方向：long/short/wait/none")
     entry_price: Optional[str] = Field(None, description="小时线入场价")

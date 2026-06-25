@@ -37,12 +37,36 @@ def test_build_crypto_technical_context_adds_requested_framework() -> None:
 
     assert context is not None
     assert context["framework"] == "Price Action + Fibonacci + Volume + VWAP + EMA"
-    assert context["price_action"]["state"] in {"breakout", "bullish_push", "range"}
+    assert context["price_action"]["state"] in {
+        "breakout",
+        "bullish_push",
+        "liquidity_sweep_high",
+        "range",
+    }
     assert set(context["fibonacci"]["retracement_levels"]) == {"38.2%", "50.0%", "61.8%"}
     assert context["volume"]["ratio"] is not None
+    assert context["volatility"]["atr14"] is not None
+    assert context["volatility"]["atr14_pct"] is not None
     assert context["vwap"]["rolling_20"] is not None
     assert context["ema"]["ema20"] is not None
     assert context["ema"]["structure"] in {"bullish", "bearish", "mixed"}
+
+
+def test_build_crypto_technical_context_distinguishes_liquidity_sweep_from_breakout() -> None:
+    bars = _btc_bars()
+    prior_high = bars.iloc[:-1]["high"].tail(20).max()
+    last_idx = bars.index[-1]
+    bars.loc[last_idx, "open"] = prior_high - 400
+    bars.loc[last_idx, "high"] = prior_high + 1200
+    bars.loc[last_idx, "low"] = prior_high - 1600
+    bars.loc[last_idx, "close"] = prior_high - 250
+
+    context = build_crypto_technical_context(bars, "BTC")
+
+    assert context is not None
+    assert context["price_action"]["state"] == "liquidity_sweep_high"
+    assert context["price_action"]["high_swept"] is True
+    assert context["price_action"]["close_above_resistance"] is False
 
 
 def test_build_crypto_technical_context_ignores_regular_stocks() -> None:

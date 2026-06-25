@@ -79,6 +79,8 @@ export interface ReportMeta {
   changePct?: number;
   modelUsed?: string;  // Display-only model snapshot from persisted history; not used for runtime model selection
   marketPhaseSummary?: MarketPhaseSummary | null;
+  analysisMode?: 'daily' | 'hourly';
+  analysisTimeframe?: string;
 }
 
 /** Sentiment label */
@@ -109,6 +111,8 @@ export interface ReportSummary {
 
 /** Strategy section */
 export interface DirectionalStrategyPlan {
+  timeframe?: string;
+  analysisTimeframe?: string;
   entryPrice?: string;
   stopLoss?: string;
   takeProfit?: string;
@@ -118,6 +122,8 @@ export interface DirectionalStrategyPlan {
 }
 
 export interface IntradayStrategyPlan extends DirectionalStrategyPlan {
+  timeframe?: 'hourly';
+  analysisTimeframe?: string;
   enabled?: boolean | string;
   direction?: string;
   dailyConstraint?: string;

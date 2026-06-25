@@ -134,6 +134,20 @@ class TestChunkContentByMaxBytes(unittest.TestCase):
         joined = "".join(result).replace(TRUNCATION_SUFFIX, "")
         self.assertEqual(joined, text)
 
+    def test_separator_chunks_are_balanced_instead_of_leaving_tiny_tail(self):
+        part_a = "A" * 140
+        part_b = "B" * 140
+        part_c = "C" * 40
+        text = f"{part_a}\n---\n{part_b}\n---\n{part_c}"
+
+        result = chunk_content_by_max_bytes(text, 300)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual("".join(result), text)
+        chunk_sizes = [len(chunk.encode("utf-8")) for chunk in result]
+        self.assertLess(max(chunk_sizes) - min(chunk_sizes), 120)
+        self.assertGreater(chunk_sizes[-1], 100)
+
     def test_multiple_sections_in_one_chunk_no_double_separator(self):
         # When multiple sections fit in one chunk, they must be concatenated without
         # inserting an extra separator (sections already have separator appended).

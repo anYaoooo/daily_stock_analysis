@@ -40,6 +40,8 @@ class BacktestResultItem(BaseModel):
     code: str
     stock_name: Optional[str] = None
     analysis_date: Optional[str] = None
+    analysis_mode: Optional[str] = None
+    analysis_timeframe: Optional[str] = None
     eval_window_days: int
     engine_version: str
     eval_status: str
@@ -81,6 +83,8 @@ class CryptoBacktestResultItem(BaseModel):
     evaluated_at: Optional[str] = None
     plan_type: str
     horizon: str
+    analysis_mode: Optional[str] = None
+    analysis_timeframe: Optional[str] = None
     direction: str
     engine_version: str
     eval_status: str
@@ -152,6 +156,8 @@ class CryptoBacktestMetrics(BaseModel):
     scope: str
     code: Optional[str] = None
     horizon: Optional[str] = None
+    analysis_mode: Optional[str] = None
+    analysis_timeframe: Optional[str] = None
     plan_type: Optional[str] = None
     engine_version: str
     computed_at: Optional[str] = None

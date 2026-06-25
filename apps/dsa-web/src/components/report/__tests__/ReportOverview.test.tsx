@@ -9,6 +9,8 @@ const baseMeta = {
   reportType: 'detailed' as const,
   reportLanguage: 'zh' as const,
   createdAt: '2026-03-21T08:00:00Z',
+  analysisMode: 'daily' as const,
+  analysisTimeframe: '日线',
 };
 
 const baseSummary = {
@@ -212,5 +214,20 @@ describe('ReportOverview', () => {
     expect(screen.getByText('白酒')).toBeInTheDocument();
     expect(screen.getByText('领跌')).toBeInTheDocument();
     expect(screen.getByText('-2.50%')).toBeInTheDocument();
+  });
+
+  it('renders analysis timeframe badge on the hero row', () => {
+    render(
+      <ReportOverview
+        meta={{
+          ...baseMeta,
+          analysisMode: 'hourly',
+          analysisTimeframe: '小时线',
+        }}
+        summary={baseSummary}
+      />,
+    );
+
+    expect(screen.getByText('小时线')).toBeInTheDocument();
   });
 });

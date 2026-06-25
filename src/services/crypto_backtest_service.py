@@ -28,6 +28,7 @@ from src.storage import (
 )
 from src.utils.data_processing import parse_json_field
 from src.utils.sniper_points import extract_directional_strategy_plans, parse_sniper_value
+from src.utils.timeframe import analysis_timeframe_label, horizon_to_analysis_mode
 
 logger = logging.getLogger(__name__)
 
@@ -261,10 +262,12 @@ class CryptoBacktestService:
             return []
 
         plans = extract_directional_strategy_plans(raw)
+        analysis_mode = self._analysis_mode_from_snapshot(analysis)
+        include_daily_plans = analysis_mode != "hourly"
         extracted: list[CryptoPlan] = []
-        if plans.get("long_plan"):
+        if include_daily_plans and plans.get("long_plan"):
             extracted.append(self._plan_from_payload("daily_long", "daily", "long", plans["long_plan"]))
-        if plans.get("short_plan"):
+        if include_daily_plans and plans.get("short_plan"):
             extracted.append(self._plan_from_payload("daily_short", "daily", "short", plans["short_plan"]))
         if plans.get("intraday_plan"):
             intraday_plan = plans["intraday_plan"] or {}
@@ -274,6 +277,19 @@ class CryptoBacktestService:
                 direction = direction if direction in {"long", "short"} else "wait"
             extracted.append(self._plan_from_payload("intraday", "intraday", direction, intraday_plan))
         return extracted
+
+    @staticmethod
+    def _analysis_mode_from_snapshot(analysis: AnalysisHistory) -> str:
+        snapshot = parse_json_field(getattr(analysis, "context_snapshot", None))
+        if not isinstance(snapshot, dict):
+            return "daily"
+        mode = snapshot.get("analysis_mode")
+        if not mode:
+            enhanced_context = snapshot.get("enhanced_context")
+            if isinstance(enhanced_context, dict):
+                mode = enhanced_context.get("analysis_mode")
+        normalized = str(mode or "daily").strip().lower()
+        return normalized if normalized in {"daily", "hourly"} else "daily"
 
     @staticmethod
     def _plan_from_payload(plan_type: str, horizon: str, direction: str, payload: dict[str, Any]) -> CryptoPlan:
@@ -572,6 +588,7 @@ class CryptoBacktestService:
     @staticmethod
     def _result_to_dict(row: CryptoBacktestResult) -> dict[str, Any]:
         diagnostics = parse_json_field(row.diagnostics_json) or {}
+        analysis_mode = horizon_to_analysis_mode(row.horizon)
         return {
             "analysis_history_id": row.analysis_history_id,
             "code": row.code,
@@ -579,6 +596,8 @@ class CryptoBacktestService:
             "evaluated_at": row.evaluated_at.isoformat() if row.evaluated_at else None,
             "plan_type": row.plan_type,
             "horizon": row.horizon,
+            "analysis_mode": analysis_mode,
+            "analysis_timeframe": analysis_timeframe_label(analysis_mode),
             "direction": row.direction,
             "engine_version": row.engine_version,
             "eval_status": row.eval_status,
@@ -604,10 +623,13 @@ class CryptoBacktestService:
     @staticmethod
     def _summary_to_dict(row: CryptoBacktestSummary) -> dict[str, Any]:
         diagnostics = parse_json_field(row.diagnostics_json) or {}
+        analysis_mode = horizon_to_analysis_mode(row.horizon) if row.horizon else None
         return {
             "scope": row.scope,
             "code": row.code,
             "horizon": row.horizon,
+            "analysis_mode": analysis_mode,
+            "analysis_timeframe": analysis_timeframe_label(analysis_mode) if analysis_mode else None,
             "plan_type": row.plan_type,
             "engine_version": row.engine_version,
             "computed_at": row.computed_at.isoformat() if row.computed_at else None,

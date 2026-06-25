@@ -67,6 +67,7 @@ from src.core.trading_calendar import get_market_for_stock
 from src.market_context import get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
 from src.market_phase_prompt import format_market_phase_prompt_section
+from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
 
 logger = logging.getLogger(__name__)
 
@@ -1515,6 +1516,8 @@ class AnalysisResult:
     decision_type: str = "hold"  # 决策类型：buy/hold/sell（用于统计）
     confidence_level: str = "中"  # 置信度：高/中/低
     report_language: str = "zh"  # 报告输出语言：zh/en
+    analysis_mode: str = "daily"  # 分析模式：daily/hourly
+    analysis_timeframe: str = "日线"  # 分析周期展示标签：日线/小时线
     action: Optional[str] = None  # 建议动作 taxonomy：buy/add/hold/reduce/sell/watch/avoid/alert
     action_label: Optional[str] = None  # 本地化建议动作标签
 
@@ -1580,6 +1583,8 @@ class AnalysisResult:
             'decision_type': self.decision_type,
             'confidence_level': self.confidence_level,
             'report_language': self.report_language,
+            'analysis_mode': self.analysis_mode,
+            'analysis_timeframe': self.analysis_timeframe,
             'action': self.action,
             'action_label': self.action_label,
             'dashboard': self.dashboard,  # 决策仪表盘数据
@@ -2811,6 +2816,8 @@ class GeminiAnalyzer:
         code = context.get('code', 'Unknown')
         config = self._get_runtime_config()
         report_language = normalize_report_language(getattr(config, "report_language", "zh"))
+        analysis_mode = normalize_analysis_mode(context.get("analysis_mode"))
+        analysis_timeframe = analysis_timeframe_label(analysis_mode, report_language)
         system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code)
         
         # 请求前增加延时（防止连续请求触发限流）
@@ -2845,6 +2852,8 @@ class GeminiAnalyzer:
                 error_message='LLM API key is not configured' if report_language == "en" else 'LLM API Key 未配置',
                 model_used=None,
                 report_language=report_language,
+                analysis_mode=analysis_mode,
+                analysis_timeframe=analysis_timeframe,
             )
         
         try:
@@ -2928,6 +2937,8 @@ class GeminiAnalyzer:
                 result.market_snapshot = self._build_market_snapshot(context)
                 result.model_used = model_used
                 result.report_language = report_language
+                result.analysis_mode = analysis_mode
+                result.analysis_timeframe = analysis_timeframe
                 normalize_chip_structure_availability(result, context.get("chip"))
 
                 # 内容完整性校验（可选）
@@ -2987,6 +2998,8 @@ class GeminiAnalyzer:
                 error_message=str(e),
                 model_used=None,
                 report_language=report_language,
+                analysis_mode=analysis_mode,
+                analysis_timeframe=analysis_timeframe,
             )
     
     def _format_prompt(
@@ -3028,27 +3041,35 @@ class GeminiAnalyzer:
         unknown_text = get_unknown_text(report_language)
         no_data_text = get_no_data_text(report_language)
         quote_section_title, close_price_label = _phase_aware_quote_labels(context)
+        subject_type = "加密货币" if is_crypto_context else "股票"
+        subject_code_label = "交易标的" if is_crypto_context else "股票代码"
+        subject_name_label = "标的名称" if is_crypto_context else "股票名称"
+        price_unit = "USDT" if is_crypto_context else "元"
+        amount_unit = "USDT" if is_crypto_context else "元"
+        quantity_unit = "枚" if is_crypto_context else "股"
+        if is_crypto_context:
+            quote_section_title = "最新行情"
         hide_regular_session_ohlc = _should_hide_regular_session_ohlc(context)
         realtime_overlay_quote = hide_regular_session_ohlc and _today_has_realtime_overlay(today)
         pct_chg_label = "实时涨跌幅" if realtime_overlay_quote else "涨跌幅"
         volume_label = "实时成交量" if realtime_overlay_quote else "成交量"
         amount_label = "实时成交额" if realtime_overlay_quote else "成交额"
         quote_rows = [
-            f"| {close_price_label} | {today.get('close', 'N/A')} 元 |",
+            f"| {close_price_label} | {today.get('close', 'N/A')} {price_unit} |",
         ]
         if not hide_regular_session_ohlc:
             quote_rows.extend(
                 [
-                    f"| 开盘价 | {today.get('open', 'N/A')} 元 |",
-                    f"| 最高价 | {today.get('high', 'N/A')} 元 |",
-                    f"| 最低价 | {today.get('low', 'N/A')} 元 |",
+                    f"| 开盘价 | {today.get('open', 'N/A')} {price_unit} |",
+                    f"| 最高价 | {today.get('high', 'N/A')} {price_unit} |",
+                    f"| 最低价 | {today.get('low', 'N/A')} {price_unit} |",
                 ]
             )
         quote_rows.extend(
             [
                 f"| {pct_chg_label} | {today.get('pct_chg', 'N/A')}% |",
-                f"| {volume_label} | {self._format_volume(today.get('volume'))} |",
-                f"| {amount_label} | {self._format_amount(today.get('amount'))} |",
+                f"| {volume_label} | {self._format_volume(today.get('volume'), unit=quantity_unit)} |",
+                f"| {amount_label} | {self._format_amount(today.get('amount'), unit=amount_unit)} |",
             ]
         )
         quote_rows_text = "\n".join(quote_rows)
@@ -3056,11 +3077,11 @@ class GeminiAnalyzer:
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
 
-## 📊 股票基础信息
+## 📊 {subject_type}基础信息
 | 项目 | 数据 |
 |------|------|
-| 股票代码 | **{code}** |
-| 股票名称 | **{stock_name}** |
+| {subject_code_label} | **{code}** |
+| {subject_name_label} | **{stock_name}** |
 | 分析日期 | {context.get('date', unknown_text)} |
 
 ---
@@ -3095,8 +3116,8 @@ class GeminiAnalyzer:
 | 均线形态 | {context.get('ma_status', unknown_text)} | 多头/空头/缠绕 |
 """
         
-        # 添加实时行情数据（量比、换手率等）
-        if 'realtime' in context:
+        # 添加实时行情数据（量比、换手率等）；BTC/crypto 使用专用交易框架，跳过股票专属字段。
+        if 'realtime' in context and not is_crypto_context:
             rt = context['realtime']
             prompt += f"""
 ### 实时行情增强数据
@@ -3134,7 +3155,7 @@ class GeminiAnalyzer:
             if isinstance(earnings_data, dict)
             else {}
         )
-        if isinstance(financial_report, dict) or isinstance(dividend_metrics, dict):
+        if not is_crypto_context and (isinstance(financial_report, dict) or isinstance(dividend_metrics, dict)):
             financial_report = financial_report if isinstance(financial_report, dict) else {}
             dividend_metrics = dividend_metrics if isinstance(dividend_metrics, dict) else {}
             ttm_yield = dividend_metrics.get("ttm_dividend_yield_pct", "N/A")
@@ -3184,7 +3205,7 @@ class GeminiAnalyzer:
             isinstance(sector_flow, dict)
             and (sector_flow.get("top") or sector_flow.get("bottom"))
         )
-        if has_capital_flow:
+        if has_capital_flow and not is_crypto_context:
             top_sectors = sector_flow.get("top", []) if isinstance(sector_flow, dict) else []
             bottom_sectors = sector_flow.get("bottom", []) if isinstance(sector_flow, dict) else []
             top_sector_text = "、".join(
@@ -3210,8 +3231,8 @@ class GeminiAnalyzer:
 > 资金流向只能作为价格位置的过滤器：接近压力且主力流出时不得追买；接近支撑且未放量跌破时，优先判断为持有观察、震荡或洗盘观察。
 """
 
-        # 添加筹码分布数据
-        if 'chip' in context:
+        # 添加筹码分布数据；BTC/crypto 不使用 A 股筹码口径。
+        if 'chip' in context and not is_crypto_context:
             chip = context['chip']
             profit_ratio = chip.get('profit_ratio', 0)
             prompt += f"""
@@ -3224,7 +3245,7 @@ class GeminiAnalyzer:
 | 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
 | 筹码状态 | {chip.get('chip_status', unknown_text)} | |
 """
-        else:
+        elif not is_crypto_context:
             chip_unavailable_text = get_chip_unavailable_text(report_language)
             chip_instruction = (
                 "Do not fabricate profit ratio, average cost, or concentration. Mention chip data "
@@ -3307,6 +3328,7 @@ class GeminiAnalyzer:
 """
 
         crypto_technical = context.get("crypto_technical") if isinstance(context, dict) else None
+        analysis_mode = str(context.get("analysis_mode") or "daily").strip().lower() if isinstance(context, dict) else "daily"
         if isinstance(crypto_technical, dict):
             timeframes = crypto_technical.get("timeframes") or {}
             daily_crypto = timeframes.get("daily") if isinstance(timeframes.get("daily"), dict) else crypto_technical
@@ -3316,42 +3338,57 @@ class GeminiAnalyzer:
             fib = daily_crypto.get("fibonacci") or {}
             fib_levels = fib.get("retracement_levels") or {}
             volume = daily_crypto.get("volume") or {}
+            volatility = daily_crypto.get("volatility") or {}
             vwap = daily_crypto.get("vwap") or {}
             ema = daily_crypto.get("ema") or {}
+            mode_instruction = (
+                "本轮是 BTC 小时线分析：日线只作为背景和风险边界，重点刷新 `intraday_plan`。"
+                "小时线允许出现与日线方向相反的短线机会，但必须明确写成“逆日线短线/日内机会”，"
+                "给出更严格止损、较短有效期和失效条件；不要把小时线机会升级为日线主方向反转。"
+                if analysis_mode == "hourly"
+                else "本轮是 BTC 日线主分析：需要完整评估日线级 `long_plan`、`short_plan`，并结合小时线给出独立的日内执行机会。"
+            )
             prompt += f"""
 ### BTC 交易框架补充（日线，必须纳入结论）
 | 维度 | 当前读数 | 分析要求 |
 |------|----------|----------|
-| Price Action（价格行为） | 状态={price_action.get('state', unknown_text)}；近20根高点={price_action.get('recent_high', 'N/A')}；近20根低点={price_action.get('recent_low', 'N/A')}；最新涨跌={price_action.get('close_change_pct', 'N/A')}% | 直接判断当前是突破、跌破、推进还是区间震荡；不要只复述指标 |
+| Price Action（价格行为） | 状态={price_action.get('state', unknown_text)}；前20根高点/阻力={price_action.get('recent_high', 'N/A')}；前20根低点/支撑={price_action.get('recent_low', 'N/A')}；最新涨跌={price_action.get('close_change_pct', 'N/A')}%；扫过前高={price_action.get('high_swept', 'N/A')}；收盘站上阻力={price_action.get('close_above_resistance', 'N/A')}；扫过前低={price_action.get('low_swept', 'N/A')}；收盘跌破支撑={price_action.get('close_below_support', 'N/A')} | 必须区分实体收盘突破/跌破与插针扫高扫低；只有收盘站上阻力才是真突破，插针扫过前高但收不住应视为流动性掠夺/假突破风险 |
 | Fibonacci（斐波那契回调） | swing high={fib.get('swing_high', 'N/A')}；swing low={fib.get('swing_low', 'N/A')}；38.2%={fib_levels.get('38.2%', 'N/A')}；50%={fib_levels.get('50.0%', 'N/A')}；61.8%={fib_levels.get('61.8%', 'N/A')} | 将这些位置作为潜在支撑/阻力，给出回踩和失守观察点 |
 | Volume（成交量） | 最新={volume.get('latest', 'N/A')}；均量={volume.get('average', 'N/A')}；量比={volume.get('ratio', 'N/A')}；确认={volume.get('confirmation', 'N/A')} | 判断突破/跌破是否有成交量确认，低量突破必须降权 |
+| Volatility / ATR（波动率） | ATR14={volatility.get('atr14', 'N/A')}；ATR14%={volatility.get('atr14_pct', 'N/A')}% | 止损与目标价必须参考 ATR，避免把止损放在日常波动噪音内；若 ATR 缺失，明确说明波动率数据不足 |
 | VWAP（成交量加权均价） | rolling20 VWAP={vwap.get('rolling_20', 'N/A')}；价格位置={vwap.get('price_position', 'N/A')} | 价格在 VWAP 上方偏多头强势，下方偏空头压制；日线数据下按 rolling VWAP 解读 |
 | EMA（指数移动平均） | EMA20={ema.get('ema20', 'N/A')}；EMA50={ema.get('ema50', 'N/A')}；结构={ema.get('structure', 'N/A')} | 判断短中期趋势延续或反转，必须和 MA/MACD/RSI 交叉验证 |
 
-> BTC 日线特别要求：日线是主方向和风险边界，最终操作建议必须同时引用 Price Action、Fibonacci、Volume、VWAP、EMA 中至少三个维度；若这些维度互相冲突，优先输出“等待确认/区间策略”，不要给激进追涨、抄底或盲目开空建议。
+> BTC 日线特别要求：日线是主方向和风险边界，最终操作建议必须同时引用 Price Action、Fibonacci、Volume、VWAP、EMA、ATR 中至少三个维度；若这些维度互相冲突，优先输出“等待确认/区间策略”，不要给激进追涨、抄底或盲目开空建议。
+> BTC 突破判定规则：真突破必须满足实体收盘站上前高/阻力，不能仅因最高价扫过前高就判定突破；若 `high_swept=true` 但 `close_above_resistance=false`，必须按“流动性掠夺/假突破偏空风险”处理，并降低多单置信度。跌破同理：真跌破必须收盘跌破支撑；若只插针扫低后收回，优先按流动性掠夺/假跌破反弹风险处理。
+> BTC 冲突判定规则：当短线 Price Action 与中线 EMA/VWAP 冲突时，定义为“反弹/回调或短线推进”，不得直接升级为趋势反转；只有 Price Action、VWAP、EMA、Volume 至少三项同向确认，才可称为趋势延续或反转。
+> BTC 本轮分析模式：{mode_instruction}
 > BTC 双向交易要求：BTC 支持多单和空单，分析时必须同时评估 Long/多单与 Short/空单，不得只给多单买入视角。若多头条件更强，给出多单入场、止损、目标和失效条件；若空头条件更强，给出空单入场/做空开仓、止损、目标和失效条件；若多空都不满足，明确“不做多也不做空，等待确认”。
 > BTC 日线策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 只承载日线级主策略，必须同时输出，分别包含 `entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件，不要省略该方向。
 > BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `enabled`、`direction`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`daily_constraint`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件。
 > BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。
-> BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；其中 `buy` 表示多单开仓/加多，`sell` 表示空单开仓/加空或多单风控退出，`hold` 表示等待/区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”。
+> BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；为避免合约语义歧义，`buy` 仅表示 Long / 多单开仓或加多，`sell` 仅表示 Short / 空单开仓、加空或多单风控退出，`hold` 表示 Flat / 空仓等待、持仓观望或区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”；若是平空或平多，必须在文字中明确写“平空/平多”，不要只依赖 `buy`/`sell`。
 """
-            if hourly_crypto:
-                hourly_price_action = hourly_crypto.get("price_action") or {}
-                hourly_volume = hourly_crypto.get("volume") or {}
-                hourly_vwap = hourly_crypto.get("vwap") or {}
-                hourly_ema = hourly_crypto.get("ema") or {}
-                prompt += f"""
-### BTC 小时线日内交易机会（必须服从日线）
+            hourly_price_action = hourly_crypto.get("price_action") if isinstance(hourly_crypto, dict) else {}
+            hourly_volume = hourly_crypto.get("volume") if isinstance(hourly_crypto, dict) else {}
+            hourly_volatility = hourly_crypto.get("volatility") if isinstance(hourly_crypto, dict) else {}
+            hourly_vwap = hourly_crypto.get("vwap") if isinstance(hourly_crypto, dict) else {}
+            hourly_ema = hourly_crypto.get("ema") if isinstance(hourly_crypto, dict) else {}
+            hourly_opportunity = intraday.get("opportunity", "N/A")
+            if not hourly_crypto:
+                hourly_opportunity = "小时线数据缺失，日内交易计划必须设为 enabled=false、direction=\"wait\"，等待小时线数据恢复或新的日内触发。"
+            prompt += f"""
+### BTC 小时线日内交易机会（独立判断）
 | 维度 | 当前读数 | 分析要求 |
 |------|----------|----------|
-| 日线偏向 | {intraday.get('daily_bias', 'N/A')} | 作为主方向、仓位和止损边界，不得被小时线单独推翻 |
+| 日线偏向 | {intraday.get('daily_bias', 'N/A')} | 作为背景、仓位和风险边界；不得直接否决小时线相反方向的短线机会 |
 | 小时线偏向 | {intraday.get('hourly_bias', 'N/A')} | 只用于入场、加减仓和日内触发判断 |
-| 对齐状态 | {intraday.get('alignment', 'N/A')} | aligned_long/short 才能优先寻找同向交易；conflict 时等待确认 |
-| 小时线 Price Action | 状态={hourly_price_action.get('state', unknown_text)}；近20根高点={hourly_price_action.get('recent_high', 'N/A')}；近20根低点={hourly_price_action.get('recent_low', 'N/A')}；最新涨跌={hourly_price_action.get('close_change_pct', 'N/A')}% | 判断日内突破、跌破、反抽或回踩是否构成触发 |
-| 小时线 Volume/VWAP/EMA | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')} | 判断日内触发是否有量价和均线确认 |
-| 日内机会 | {intraday.get('opportunity', 'N/A')} | 必须写清是否有日内交易机会；没有机会时说明等待什么小时线条件 |
+| 对齐状态 | {intraday.get('alignment', 'N/A')} | aligned_long/short 表示顺日线机会；conflict/countertrend 表示逆日线短线机会，需要更严格风控 |
+| 小时线 Price Action | 状态={hourly_price_action.get('state', unknown_text)}；前20根高点/阻力={hourly_price_action.get('recent_high', 'N/A')}；前20根低点/支撑={hourly_price_action.get('recent_low', 'N/A')}；最新涨跌={hourly_price_action.get('close_change_pct', 'N/A')}%；扫过前高={hourly_price_action.get('high_swept', 'N/A')}；收盘站上阻力={hourly_price_action.get('close_above_resistance', 'N/A')} | 日内触发必须区分真突破与插针扫高；扫高回落不得作为多单突破触发 |
+| 小时线 Volume/VWAP/EMA/ATR | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')}；ATR14={hourly_volatility.get('atr14', 'N/A')}；ATR14%={hourly_volatility.get('atr14_pct', 'N/A')}% | 判断日内触发是否有量价、均线和波动率确认；止损不得落在小时线常规 ATR 噪音内 |
+| 日内机会 | {hourly_opportunity} | 必须写清是否有日内交易机会；没有机会时说明等待什么小时线条件 |
 
-> BTC 小时线约束：小时线只作为执行层，必须服从日线方向、日线关键支撑/阻力和日线失效条件。小时线与日线冲突时，不得给出逆日线主动开仓建议；只能输出等待确认、减仓风控或区间观察。若给出日内多单/空单，必须写入 `dashboard.battle_plan.intraday_plan`，同时说明小时线触发价、止损、目标，以及对应的日线依据。
+> BTC 小时线约束：小时线是独立的日内机会层，不再强制服从日线方向。日线偏空但小时线出现多单机会、或日线偏多但小时线出现空单机会时，可以给出逆日线短线计划，但必须明确这是日内/短线机会，止损更严格、仓位更轻、有效期更短，并写清触发价、止损、目标、失效条件和 `daily_constraint`。必须写入 `dashboard.battle_plan.intraday_plan`；若小时线数据缺失或没有日内机会，`enabled=false`、`direction="wait"`，并说明等待条件。
 """
         
         # 添加昨日对比数据
@@ -3391,7 +3428,23 @@ class GeminiAnalyzer:
 ## 📰 舆情情报
 """
         if news_context:
-            prompt += f"""
+            if is_crypto_context:
+                prompt += f"""
+以下是 **{stock_name}({code})** 近{news_window_days}日的加密市场信息，请重点提取：
+1. 🚨 **风险警报**：监管、交易所风险、链上异常、流动性收缩、宏观风险
+2. 🎯 **利好催化**：ETF/机构资金流、链上活跃度改善、流动性改善、宏观风险偏好回升
+3. 📊 **市场驱动**：美元指数、利率预期、美股风险偏好、稳定币流动性、衍生品杠杆与资金费率
+4. 🕒 **时间规则（强制）**：
+   - 输出到 `risk_alerts` / `positive_catalysts` / `latest_news` 的每一条都必须带具体日期（YYYY-MM-DD）
+   - 超出近{news_window_days}日窗口的新闻一律忽略
+   - 时间未知、无法确定发布日期的新闻一律忽略
+
+```
+{news_context}
+```
+"""
+            else:
+                prompt += f"""
 以下是 **{stock_name}({code})** 近{news_window_days}日的新闻搜索结果，请重点提取：
 1. 🚨 **风险警报**：减持、处罚、利空
 2. 🎯 **利好催化**：业绩、合同、政策
@@ -3406,8 +3459,9 @@ class GeminiAnalyzer:
 ```
 """
         else:
-            prompt += """
-未搜索到该股票近期的相关新闻。请主要依据技术面数据进行分析。
+            no_news_subject = "该加密货币近期的市场新闻" if is_crypto_context else "该股票近期的相关新闻"
+            prompt += f"""
+未搜索到{no_news_subject}。请主要依据技术面数据进行分析。
 """
 
         # 注入缺失数据警告
@@ -3436,7 +3490,14 @@ class GeminiAnalyzer:
 > - `risk_alerts` 中不得出现基金管理人相关的公司经营风险
 
 """
-        prompt += f"""
+        if is_crypto_context:
+            prompt += f"""
+### ⚠️ 重要：输出正确的标的名称格式
+正确的标的名称格式为“标的名称（交易标的）”，例如“Bitcoin（BTC）”。
+如果上方显示的标的名称不正确，请在分析开头**明确输出该标的的正确名称**。
+"""
+        else:
+            prompt += f"""
 ### ⚠️ 重要：输出正确的股票名称格式
 正确的股票名称格式为“股票名称（股票代码）”，例如“贵州茅台（600519）”。
 如果上方显示的股票名称为"股票{code}"或不正确，请在分析开头**明确输出该股票的正确中文全称**。
@@ -3451,6 +3512,16 @@ class GeminiAnalyzer:
 4. ❓ 筹码结构是否健康？
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
 """
+        elif is_crypto_context:
+            prompt += f"""
+
+### 重点关注（必须明确回答）：
+1. ❓ 日线 Price Action、Fibonacci、Volume、VWAP、EMA 是否形成多空共振？
+2. ❓ 当前价格相对关键支撑/阻力、VWAP、EMA 的风险回报是否合理？若不合理，请明确等待条件
+3. ❓ 成交量、波动结构与小时线执行层是否支持当前结论？
+4. ❓ 消息面/宏观/链上或流动性信息是否与技术结论冲突？
+5. ❓ 多单与空单各自的触发价、止损价、目标价、确认条件和失效条件是什么？
+"""
         else:
             prompt += f"""
 
@@ -3461,11 +3532,25 @@ class GeminiAnalyzer:
 4. ❓ 消息面有无重大利空或与技能结论冲突的信息？
 5. ❓ 若结论成立，具体触发条件、止损位、观察点分别是什么？
 """
-        if isinstance(crypto_technical, dict):
+        if isinstance(crypto_technical, dict) and not is_crypto_context:
             prompt += """
 6. ❓ BTC 专项：Price Action、Fibonacci、Volume、VWAP、EMA 对多单与空单分别是否形成共振？多单/空单各自的触发价、止损价、目标价、确认条件和失效条件是什么？
 """
-        prompt += f"""
+        if is_crypto_context:
+            prompt += f"""
+
+### 决策仪表盘要求：
+- **标的名称**：必须输出正确名称（如"Bitcoin"或"比特币"，不要输出"股票BTC"）
+- **核心结论**：一句话说清当前应做多、做空、减仓风控还是等待
+- **仓位分类建议**：空仓者怎么做 vs 已持有多单/空单者怎么做
+- **具体交易计划**：必须同时输出日线级 `long_plan` 与 `short_plan` 两套策略，且每套都包含入场价、止损价、目标价、触发条件、失效条件和依据；若存在小时线数据，必须额外输出 `intraday_plan`，单独描述 1 小时线执行机会，不能与日线主策略混写
+- **检查清单**：每项用 ✅/⚠️/❌ 标记
+- **消息面时间合规**：`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息
+- **技术面一致性**：严禁把互斥结论同时当作有效依据；若消息面/宏观/链上信息与技术面冲突，必须明确写“事件先行、技术待确认”或“消息面偏多/偏空，但技术面尚未确认”
+ 
+请输出完整的 JSON 格式决策仪表盘。"""
+        else:
+            prompt += f"""
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
@@ -3501,21 +3586,27 @@ class GeminiAnalyzer:
         
         return prompt
     
-    def _format_volume(self, volume: Optional[float]) -> str:
+    def _format_volume(self, volume: Optional[float], *, unit: str = "股") -> str:
         """格式化成交量显示"""
         if volume is None:
             return 'N/A'
         if volume >= 1e8:
-            return f"{volume / 1e8:.2f} 亿股"
+            return f"{volume / 1e8:.2f} 亿{unit}"
         elif volume >= 1e4:
-            return f"{volume / 1e4:.2f} 万股"
+            return f"{volume / 1e4:.2f} 万{unit}"
         else:
-            return f"{volume:.0f} 股"
+            return f"{volume:.0f} {unit}"
     
-    def _format_amount(self, amount: Optional[float]) -> str:
+    def _format_amount(self, amount: Optional[float], *, unit: str = "元") -> str:
         """格式化成交额显示"""
         if amount is None:
             return 'N/A'
+        if unit != "元":
+            if amount >= 1e8:
+                return f"{amount / 1e8:.2f} 亿 {unit}"
+            elif amount >= 1e4:
+                return f"{amount / 1e4:.2f} 万 {unit}"
+            return f"{amount:.0f} {unit}"
         if amount >= 1e8:
             return f"{amount / 1e8:.2f} 亿元"
         elif amount >= 1e4:
@@ -3703,6 +3794,8 @@ class GeminiAnalyzer:
             report_language = normalize_report_language(
                 getattr(self._get_runtime_config(), "report_language", "zh")
             )
+            analysis_mode = "daily"
+            analysis_timeframe = analysis_timeframe_label(analysis_mode, report_language)
             # 清理响应文本：移除 markdown 代码块标记
             cleaned_text = response_text
             if '```json' in cleaned_text:
@@ -3763,6 +3856,8 @@ class GeminiAnalyzer:
                         report_language,
                     ),
                     report_language=report_language,
+                    analysis_mode=analysis_mode,
+                    analysis_timeframe=analysis_timeframe,
                     # 决策仪表盘
                     dashboard=dashboard,
                     # 走势分析
@@ -3860,6 +3955,8 @@ class GeminiAnalyzer:
         report_language = normalize_report_language(
             getattr(self._get_runtime_config(), "report_language", "zh")
         )
+        analysis_mode = "daily"
+        analysis_timeframe = analysis_timeframe_label(analysis_mode, report_language)
         # 尝试识别关键词来判断情绪
         sentiment_score = 50
         trend = 'Sideways' if report_language == "en" else '震荡'
@@ -3905,6 +4002,8 @@ class GeminiAnalyzer:
             success=False,
             error_message='LLM response is not valid JSON; analysis result will not be persisted',
             report_language=report_language,
+            analysis_mode=analysis_mode,
+            analysis_timeframe=analysis_timeframe,
         )
         return populate_decision_action_fields(result)
     

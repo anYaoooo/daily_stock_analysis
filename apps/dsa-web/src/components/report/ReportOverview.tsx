@@ -90,6 +90,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   const { t } = useUiLanguage();
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
   const text = getReportText(reportLanguage);
+  const analysisModeLabel = meta.analysisTimeframe || (meta.analysisMode === 'hourly' ? '小时线' : '日线');
   const marketPhaseLabel = getMarketPhaseSummaryLabel(meta.marketPhaseSummary, reportLanguage);
   const partialBarLabel = meta.marketPhaseSummary?.isPartialBar === true
     ? getPartialBarLabel(reportLanguage)
@@ -172,6 +173,11 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   {partialBarLabel ? (
                     <Badge variant="warning" className="shrink-0 shadow-none" aria-label={partialBarLabel}>
                       {partialBarLabel}
+                    </Badge>
+                  ) : null}
+                  {analysisModeLabel ? (
+                    <Badge variant="default" className="shrink-0 shadow-none">
+                      {analysisModeLabel}
                     </Badge>
                   ) : null}
                   <span className="text-xs text-muted-text flex items-center gap-1">

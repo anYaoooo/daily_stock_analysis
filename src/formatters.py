@@ -602,6 +602,77 @@ def chunk_content_by_max_bytes(content: str, max_bytes: int, add_page_marker: bo
     Returns:
         分割后的区块列表
     """
+    def _pack_atoms_balanced(atoms: List[str], max_bytes: int) -> List[str]:
+        """Pack ordered content atoms into the fewest balanced chunks possible."""
+        if not atoms:
+            return [""]
+        if len(atoms) == 1:
+            return atoms
+
+        atom_bytes = [_bytes(atom) for atom in atoms]
+        total_bytes = sum(atom_bytes)
+        min_chunk_count = max(1, (total_bytes + max_bytes - 1) // max_bytes)
+
+        def _pack_for_count(target_count: int) -> List[str]:
+            chunks: List[str] = []
+            index = 0
+            remaining_bytes = total_bytes
+
+            while index < len(atoms):
+                remaining_chunks = target_count - len(chunks)
+                if remaining_chunks <= 1:
+                    chunks.append("".join(atoms[index:]))
+                    break
+
+                target_bytes = (remaining_bytes + remaining_chunks - 1) // remaining_chunks
+                current: List[str] = []
+                current_bytes = 0
+
+                while index < len(atoms):
+                    next_bytes = atom_bytes[index]
+                    next_total = current_bytes + next_bytes
+
+                    if current and next_total > max_bytes:
+                        break
+
+                    if current:
+                        atoms_left_after_next = len(atoms) - (index + 1)
+                        if atoms_left_after_next < remaining_chunks - 1:
+                            break
+
+                        current_distance = abs(current_bytes - target_bytes)
+                        next_distance = abs(next_total - target_bytes)
+                        if current_bytes >= target_bytes or next_distance > current_distance:
+                            break
+
+                    current.append(atoms[index])
+                    current_bytes = next_total
+                    index += 1
+
+                chunks.append("".join(current))
+                remaining_bytes -= current_bytes
+
+            return chunks
+
+        for chunk_count in range(min_chunk_count, len(atoms) + 1):
+            chunks = _pack_for_count(chunk_count)
+            if all(_bytes(chunk) <= max_bytes for chunk in chunks):
+                return chunks
+
+        chunks: List[str] = []
+        current: List[str] = []
+        current_bytes = 0
+        for atom, atom_size in zip(atoms, atom_bytes):
+            if current and current_bytes + atom_size > max_bytes:
+                chunks.append("".join(current))
+                current = []
+                current_bytes = 0
+            current.append(atom)
+            current_bytes += atom_size
+        if current:
+            chunks.append("".join(current))
+        return chunks
+
     def _chunk(content: str, max_bytes: int) -> List[str]:
         # 优先按分隔线/标题分割，保证分页自然
         if max_bytes < MIN_MAX_BYTES:
@@ -615,55 +686,28 @@ def chunk_content_by_max_bytes(content: str, max_bytes: int, add_page_marker: bo
             # 无法智能分割，则强制按字数分割
             return _chunk_by_max_bytes(content, max_bytes)
         
-        chunks: List[str] = []
-        current_chunk: List[str] = []
-        current_bytes = 0
         separator_bytes = _bytes(separator) if separator else 0
         effective_max_bytes = max_bytes - separator_bytes
+        atoms: List[str] = []
 
-        for section in sections:
-            section += separator
+        for index, section in enumerate(sections):
+            section = section + (separator if index < len(sections) - 1 else "")
             section_bytes = _bytes(section)
             
             # 如果单个 section 就超长，需要强制截断
-            if section_bytes > effective_max_bytes:
-                # 先保存当前积累的内容
-                if current_chunk:
-                    chunks.append("".join(current_chunk))
-                    current_chunk = []
-                    current_bytes = 0
-
+            if section_bytes > max_bytes:
                 # 强制按字节截断，避免整段被截断丢失
-                section_chunks = _chunk(
-                    section[:-separator_bytes], effective_max_bytes
-                )
-                section_chunks[-1] = section_chunks[-1] + separator
-                chunks.extend(section_chunks)
+                if separator and index < len(sections) - 1:
+                    section_chunks = _chunk(section[:-separator_bytes], effective_max_bytes)
+                    section_chunks[-1] = section_chunks[-1] + separator
+                else:
+                    section_chunks = _chunk(section, max_bytes)
+                atoms.extend(section_chunks)
                 continue
 
-            # 检查加入后是否超长
-            if current_bytes + section_bytes > effective_max_bytes:
-                # 保存当前块，开始新块
-                if current_chunk:
-                    chunks.append("".join(current_chunk))
-                current_chunk = [section]
-                current_bytes = section_bytes
-            else:
-                current_chunk.append(section)
-                current_bytes += section_bytes
-                
-        # 添加最后一块
-        if current_chunk:
-            chunks.append("".join(current_chunk))
-            
-        # 移除最后一个块的分割符
-        if (chunks and 
-            len(chunks[-1]) > separator_bytes and 
-            chunks[-1][-separator_bytes:] == separator
-        ):
-            chunks[-1] = chunks[-1][:-separator_bytes]
-        
-        return chunks
+            atoms.append(section)
+
+        return _pack_atoms_balanced(atoms, max_bytes)
     
     if add_page_marker:
         max_bytes = max_bytes - PAGE_MARKER_SAFE_BYTES
