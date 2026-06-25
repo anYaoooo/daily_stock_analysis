@@ -36,9 +36,13 @@ export interface BacktestResultItem {
   code: string;
   stockName?: string;
   analysisDate?: string;
+  analysisCreatedAt?: string;
   analysisMode?: string;
   analysisTimeframe?: string;
-  evalWindowDays: number;
+  evalWindowDays?: number;
+  planType?: string;
+  horizon?: string;
+  direction?: string;
   engineVersion: string;
   evalStatus: string;
   evaluatedAt?: string;
@@ -115,15 +119,22 @@ export interface BacktestResultsResponse {
 export interface PerformanceMetrics {
   scope: string;
   code?: string;
-  evalWindowDays: number;
+  evalWindowDays?: number;
+  horizon?: string;
+  analysisMode?: string;
+  analysisTimeframe?: string;
+  planType?: string;
   engineVersion: string;
   computedAt?: string;
 
   totalEvaluations: number;
   completedCount: number;
-  insufficientCount: number;
-  longCount: number;
-  cashCount: number;
+  insufficientCount?: number;
+  triggeredCount?: number;
+  noEntryCount?: number;
+  skippedCount?: number;
+  longCount?: number;
+  cashCount?: number;
   winCount: number;
   lossCount: number;
   neutralCount: number;
@@ -139,7 +150,10 @@ export interface PerformanceMetrics {
   ambiguousRate?: number;
   avgDaysToFirstHit?: number;
 
-  adviceBreakdown: Record<string, unknown>;
+  adviceBreakdown?: Record<string, unknown>;
+  planTypeBreakdown?: Record<string, unknown>;
+  riskMetrics?: Record<string, unknown>;
+  equityCurve?: Array<Record<string, unknown>>;
   diagnostics: Record<string, unknown>;
 }
 

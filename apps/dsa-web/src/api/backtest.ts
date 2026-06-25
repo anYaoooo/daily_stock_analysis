@@ -25,7 +25,7 @@ export const backtestApi = {
     if (params.limit) requestData.limit = params.limit;
 
     const response = await apiClient.post<Record<string, unknown>>(
-      '/api/v1/backtest/run',
+      '/api/v1/backtest/crypto/run',
       requestData,
     );
     return toCamelCase<BacktestRunResponse>(response.data);
@@ -34,10 +34,18 @@ export const backtestApi = {
   /**
    * Delete one backtest result for the current engine version
    */
-  deleteResult: async (analysisHistoryId: number, evalWindowDays: number): Promise<BacktestDeleteResponse> => {
+  deleteResult: async (analysisHistoryId: number, evalWindowDays?: number, planType?: string): Promise<BacktestDeleteResponse> => {
+    const params: Record<string, string | number> = {};
+    if (planType) {
+      params.plan_type = planType;
+    } else if (evalWindowDays != null) {
+      params.eval_window_days = evalWindowDays;
+    }
     const response = await apiClient.delete<Record<string, unknown>>(
-      `/api/v1/backtest/results/${analysisHistoryId}`,
-      { params: { eval_window_days: evalWindowDays } },
+      planType
+        ? `/api/v1/backtest/crypto/results/${analysisHistoryId}`
+        : `/api/v1/backtest/results/${analysisHistoryId}`,
+      { params },
     );
     return toCamelCase<BacktestDeleteResponse>(response.data);
   },
@@ -54,17 +62,13 @@ export const backtestApi = {
     page?: number;
     limit?: number;
   } = {}): Promise<BacktestResultsResponse> => {
-    const { code, evalWindowDays, analysisDateFrom, analysisDateTo, analysisPhase, page = 1, limit = 20 } = params;
+    const { code, page = 1, limit = 20 } = params;
 
     const queryParams: Record<string, string | number> = { page, limit };
     if (code) queryParams.code = code;
-    if (evalWindowDays) queryParams.eval_window_days = evalWindowDays;
-    if (analysisDateFrom) queryParams.analysis_date_from = analysisDateFrom;
-    if (analysisDateTo) queryParams.analysis_date_to = analysisDateTo;
-    if (analysisPhase && analysisPhase !== 'all') queryParams.analysis_phase = analysisPhase;
 
     const response = await apiClient.get<Record<string, unknown>>(
-      '/api/v1/backtest/results',
+      '/api/v1/backtest/crypto/results',
       { params: queryParams },
     );
 
@@ -88,12 +92,8 @@ export const backtestApi = {
   } = {}): Promise<PerformanceMetrics | null> => {
     try {
       const queryParams: Record<string, string | number> = {};
-      if (params.evalWindowDays) queryParams.eval_window_days = params.evalWindowDays;
-      if (params.analysisDateFrom) queryParams.analysis_date_from = params.analysisDateFrom;
-      if (params.analysisDateTo) queryParams.analysis_date_to = params.analysisDateTo;
-      if (params.analysisPhase && params.analysisPhase !== 'all') queryParams.analysis_phase = params.analysisPhase;
       const response = await apiClient.get<Record<string, unknown>>(
-        '/api/v1/backtest/performance',
+        '/api/v1/backtest/crypto/performance',
         { params: queryParams },
       );
       return toCamelCase<PerformanceMetrics>(response.data);
@@ -117,12 +117,10 @@ export const backtestApi = {
   } = {}): Promise<PerformanceMetrics | null> => {
     try {
       const queryParams: Record<string, string | number> = {};
-      if (params.evalWindowDays) queryParams.eval_window_days = params.evalWindowDays;
-      if (params.analysisDateFrom) queryParams.analysis_date_from = params.analysisDateFrom;
-      if (params.analysisDateTo) queryParams.analysis_date_to = params.analysisDateTo;
-      if (params.analysisPhase && params.analysisPhase !== 'all') queryParams.analysis_phase = params.analysisPhase;
+      queryParams.scope = 'code';
+      queryParams.code = code;
       const response = await apiClient.get<Record<string, unknown>>(
-        `/api/v1/backtest/performance/${encodeURIComponent(code)}`,
+        '/api/v1/backtest/crypto/performance',
         { params: queryParams },
       );
       return toCamelCase<PerformanceMetrics>(response.data);

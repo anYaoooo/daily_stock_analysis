@@ -58,6 +58,11 @@ const baseResultItem = {
   code: '600519',
   stockName: '贵州茅台',
   analysisDate: '2026-03-20',
+  analysisMode: 'daily',
+  analysisTimeframe: '日线',
+  planType: 'daily_long',
+  horizon: 'daily',
+  direction: 'long',
   evalWindowDays: 10,
   engineVersion: 'test-engine',
   evalStatus: 'completed',
@@ -133,6 +138,45 @@ describe('BacktestPage', () => {
     expect(screen.getByText('方向准确率')).toBeInTheDocument();
     expect(screen.getByText('平均模拟收益')).toBeInTheDocument();
     expect(screen.getByText('周期')).toBeInTheDocument();
+    expect(screen.getByText('计划类型')).toBeInTheDocument();
+    expect(rowScope.getByText('日线多单')).toBeInTheDocument();
+  });
+
+  it('renders BTC hourly intraday backtest plan type distinctly', async () => {
+    mockGetResults.mockResolvedValueOnce({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [
+        {
+          ...baseResultItem,
+          analysisHistoryId: 202,
+          code: 'BTC',
+          stockName: undefined,
+          analysisDate: undefined,
+          analysisCreatedAt: '2026-06-25T10:00:00',
+          analysisMode: 'hourly',
+          analysisTimeframe: '小时线',
+          planType: 'intraday',
+          horizon: 'intraday',
+          direction: 'short',
+          actualReturnPct: undefined,
+          simulatedReturnPct: 1.7,
+          directionExpected: undefined,
+        },
+      ],
+    });
+
+    render(<BacktestPage />);
+
+    const codeCell = await screen.findByText('BTC');
+    const resultRow = codeCell.closest('tr');
+    expect(resultRow).not.toBeNull();
+    const rowScope = within(resultRow as HTMLElement);
+    expect(rowScope.getByText('小时线')).toBeInTheDocument();
+    expect(rowScope.getByText('小时线日内')).toBeInTheDocument();
+    expect(rowScope.getByText('看跌')).toBeInTheDocument();
+    expect(rowScope.getByText('1.7%')).toBeInTheDocument();
   });
 
   it('falls back to the taxonomy label when backtest actionLabel is missing', async () => {
@@ -327,7 +371,7 @@ describe('BacktestPage', () => {
     fireEvent.click(deleteButton);
 
     await waitFor(() => {
-      expect(mockDeleteResult).toHaveBeenCalledWith(101, 10);
+      expect(mockDeleteResult).toHaveBeenCalledWith(101, 10, 'daily_long');
     });
     await waitFor(() => {
       expect(mockGetResults).toHaveBeenLastCalledWith({

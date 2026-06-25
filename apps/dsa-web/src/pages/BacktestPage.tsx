@@ -57,11 +57,32 @@ function timeframeLabel(value?: string | null): string {
 }
 
 function analysisTimeframeDisplay(row: BacktestResultItem): string {
-  return timeframeLabel(row.analysisTimeframe || row.analysisMode || 'daily');
+  return timeframeLabel(row.analysisTimeframe || row.analysisMode || row.horizon || 'daily');
 }
 
 function isHourlyAnalysis(row: BacktestResultItem): boolean {
-  return row.analysisMode === 'hourly' || row.analysisTimeframe === '小时线' || row.analysisTimeframe === 'Hourly';
+  return row.analysisMode === 'hourly'
+    || row.horizon === 'intraday'
+    || row.planType === 'intraday'
+    || row.analysisTimeframe === '小时线'
+    || row.analysisTimeframe === 'Hourly';
+}
+
+function planTypeLabel(value: string | null | undefined, language: UiLanguage): string {
+  const labels = {
+    zh: {
+      daily_long: '日线多单',
+      daily_short: '日线空单',
+      intraday: '小时线日内',
+    },
+    en: {
+      daily_long: 'Daily long',
+      daily_short: 'Daily short',
+      intraday: 'Hourly intraday',
+    },
+  } as const;
+  if (!value) return '--';
+  return labels[language][value as keyof typeof labels.zh] ?? value;
 }
 
 function labelFromMap(value: string | null | undefined, labels: Record<string, string>): string {
@@ -413,10 +434,10 @@ const BacktestPage: React.FC = () => {
   };
 
   const handleDeleteResult = async (row: BacktestResultItem) => {
-    const key = `${row.analysisHistoryId}:${row.evalWindowDays}`;
+    const key = `${row.analysisHistoryId}:${row.planType || row.evalWindowDays || 'result'}`;
     setDeletingKey(key);
     try {
-      await backtestApi.deleteResult(row.analysisHistoryId, row.evalWindowDays);
+      await backtestApi.deleteResult(row.analysisHistoryId, row.evalWindowDays, row.planType);
       const code = codeFilter.trim() || undefined;
       const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
       const nextPage = results.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage;
@@ -623,12 +644,13 @@ const BacktestPage: React.FC = () => {
                 <span className="backtest-table-scroll-hint">{text.scrollHint}</span>
               </div>
               <div className="backtest-table-wrapper">
-                <table className="backtest-table min-w-[980px] w-full text-sm">
+                <table className="backtest-table min-w-[1060px] w-full text-sm">
                   <thead className="backtest-table-head">
                     <tr className="text-left">
                       <th className="backtest-table-head-cell">{text.stock}</th>
                       <th className="backtest-table-head-cell">{text.analysisDate}</th>
                       <th className="backtest-table-head-cell">{text.analysisMode}</th>
+                      <th className="backtest-table-head-cell">{text.planType}</th>
                       <th className="backtest-table-head-cell">{text.phase}</th>
                       <th className="backtest-table-head-cell">{text.aiPrediction}</th>
                       <th className="backtest-table-head-cell">
@@ -645,9 +667,12 @@ const BacktestPage: React.FC = () => {
                   <tbody>
                     {results.map((row) => {
                       const actionLabel = getDecisionActionLabel(row.action, row.actionLabel, null, null, actionLabels);
-                      const predictionParts = [actionLabel, row.trendPrediction, row.operationAdvice]
+                      const planLabel = planTypeLabel(row.planType, language);
+                      const predictionParts = [actionLabel, row.trendPrediction, row.operationAdvice, planLabel !== '--' ? planLabel : undefined]
                         .filter((part): part is string => Boolean(part));
-                      const rowKey = `${row.analysisHistoryId}:${row.evalWindowDays}`;
+                      const rowKey = `${row.analysisHistoryId}:${row.planType || row.evalWindowDays || 'result'}`;
+                      const displayReturnPct = row.actualReturnPct ?? row.simulatedReturnPct;
+                      const expectedDirection = row.directionExpected ?? row.direction;
 
                       return (
                         <tr
@@ -660,10 +685,15 @@ const BacktestPage: React.FC = () => {
                               <span className="text-xs text-muted-text">{row.stockName || '--'}</span>
                             </div>
                           </td>
-                          <td className="backtest-table-cell text-secondary-text">{row.analysisDate || '--'}</td>
+                          <td className="backtest-table-cell text-secondary-text">{row.analysisDate || row.analysisCreatedAt || '--'}</td>
                           <td className="backtest-table-cell">
                             <Badge variant={isHourlyAnalysis(row) ? 'warning' : 'default'} className="shadow-none">
                               {analysisTimeframeDisplay(row)}
+                            </Badge>
+                          </td>
+                          <td className="backtest-table-cell">
+                            <Badge variant={isHourlyAnalysis(row) ? 'warning' : 'default'} className="shadow-none">
+                              {planTypeLabel(row.planType, language)}
                             </Badge>
                           </td>
                           <td className="backtest-table-cell text-secondary-text">{phaseLabel(row, language)}</td>
@@ -691,11 +721,11 @@ const BacktestPage: React.FC = () => {
                             <div className="flex items-center gap-2">
                               {actualMovementBadge(row.actualMovement, language)}
                               <span className={
-                                row.actualReturnPct != null
-                                  ? row.actualReturnPct > 0 ? 'text-success' : row.actualReturnPct < 0 ? 'text-danger' : 'text-secondary-text'
+                                displayReturnPct != null
+                                  ? displayReturnPct > 0 ? 'text-success' : displayReturnPct < 0 ? 'text-danger' : 'text-secondary-text'
                                   : 'text-muted-text'
                               }>
-                                {pct(row.actualReturnPct)}
+                                {pct(displayReturnPct)}
                               </span>
                             </div>
                           </td>
@@ -703,7 +733,7 @@ const BacktestPage: React.FC = () => {
                             <span className="flex items-center gap-2">
                               {boolIcon(row.directionCorrect, text)}
                               <span className="text-muted-text">
-                                {row.directionExpected ? labelFromMap(row.directionExpected, BACKTEST_DIRECTION_EXPECTED_LABELS[language]) : ''}
+                                {expectedDirection ? labelFromMap(expectedDirection, BACKTEST_DIRECTION_EXPECTED_LABELS[language]) : ''}
                               </span>
                             </span>
                           </td>
