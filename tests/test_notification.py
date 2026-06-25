@@ -660,6 +660,90 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("综合结论不应出现在", out)
 
     @mock.patch("src.notification.get_config")
+    def test_generate_btc_hourly_report_uses_hourly_schedule_template(
+        self,
+        mock_get_config: mock.MagicMock,
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=64,
+            trend_prediction="震荡",
+            operation_advice="等待小时线突破",
+            analysis_summary="小时线摘要",
+            analysis_mode="hourly",
+            dashboard={
+                "battle_plan": {
+                    "long_plan": {
+                        "entry_price": "突破 65000",
+                    },
+                    "short_plan": {
+                        "entry_price": "跌破 62000",
+                    },
+                    "intraday_plan": {
+                        "direction": "long",
+                        "entry_price": "64800",
+                        "stop_loss": "64100",
+                        "take_profit": "66000",
+                        "trigger_condition": "小时线收复均线",
+                    },
+                },
+            },
+        )
+
+        out = service.generate_single_stock_report(result)
+
+        self.assertIn("Bitcoin (BTC) 小时线分析", out)
+        self.assertIn("### 日内建议", out)
+        self.assertIn("#### 小时线日内计划（整点更新）", out)
+        self.assertIn("- 方向: long", out)
+        self.assertNotIn("#### 日线多单计划", out)
+        self.assertNotIn("#### 日线空单计划", out)
+        self.assertNotIn("### 多空建议", out)
+
+    @mock.patch("src.notification.get_config")
+    def test_generate_btc_daily_report_uses_daily_schedule_template(
+        self,
+        mock_get_config: mock.MagicMock,
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=66,
+            trend_prediction="震荡偏多",
+            operation_advice="等待日线突破",
+            analysis_summary="日线摘要",
+            analysis_mode="daily",
+            dashboard={
+                "battle_plan": {
+                    "long_plan": {
+                        "entry_price": "突破 65000",
+                    },
+                    "short_plan": {
+                        "entry_price": "跌破 62000",
+                    },
+                    "intraday_plan": {
+                        "direction": "wait",
+                        "trigger_condition": "等待小时线重新放量",
+                    },
+                },
+            },
+        )
+
+        out = service.generate_single_stock_report(result)
+
+        self.assertIn("Bitcoin (BTC) 日线分析", out)
+        self.assertIn("### 多空建议", out)
+        self.assertIn("#### 日线多单计划（08:00 后更新）", out)
+        self.assertIn("#### 日线空单计划（08:00 后更新）", out)
+        self.assertIn("#### 小时线日内计划", out)
+        self.assertNotIn("#### 小时线日内计划（整点更新）", out)
+
+    @mock.patch("src.notification.get_config")
     def test_generate_dashboard_report_uses_btc_template(
         self,
         mock_get_config: mock.MagicMock,
@@ -700,8 +784,8 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         mock_render.assert_not_called()
         self.assertEqual(aggregate, out)
         self.assertIn("### 多空建议", out)
-        self.assertIn("#### 日线多单计划", out)
-        self.assertIn("#### 日线空单计划", out)
+        self.assertIn("#### 日线多单计划（08:00 后更新）", out)
+        self.assertIn("#### 日线空单计划（08:00 后更新）", out)
         self.assertNotIn("决策仪表盘", out)
         self.assertNotIn("重要信息速览", out)
         self.assertNotIn("最新动态不应出现在", out)

@@ -466,7 +466,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
             {
                 "ENV_FILE": str(self.env_path),
                 "OPENAI_API_KEY": "runtime-secret",
-                "SCHEDULE_TIME": "18:00",
+                "SCHEDULE_TIME": "8:00",
             },
             clear=False,
         ), patch.object(

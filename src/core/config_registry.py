@@ -2354,7 +2354,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "display_order": 10,
         "help_key": "settings.system.schedule",
         "examples": [
-            "SCHEDULE_TIME=18:00",
+            "SCHEDULE_TIME=8:00",
             "SCHEDULE_ENABLED=true",
             "SCHEDULE_RUN_IMMEDIATELY=false",
         ],
@@ -2606,7 +2606,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "help_key": "settings.system.schedule",
         "examples": [
             "SCHEDULE_ENABLED=true",
-            "SCHEDULE_TIME=18:00",
+            "SCHEDULE_TIME=8:00",
             "SCHEDULE_RUN_IMMEDIATELY=false",
         ],
         "docs": [

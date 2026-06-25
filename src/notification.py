@@ -1846,26 +1846,33 @@ class NotificationService(
         signal_text, signal_emoji, _ = self._get_signal_level(result)
         stock_name = self._get_display_name(result, report_language)
         plans = extract_directional_strategy_plans(result)
+        analysis_mode = normalize_analysis_mode(getattr(result, "analysis_mode", "daily"))
+        timeframe_label = self._get_analysis_timeframe_label(result, report_language)
+        is_hourly = analysis_mode == "hourly"
+        strategy_heading = "日内建议" if is_hourly else "多空建议"
 
         lines = [
-            f"## {signal_emoji} {stock_name} ({result.code})",
+            f"## {signal_emoji} {stock_name} ({result.code}) {timeframe_label}分析",
             "",
             (
-                f"> {report_date} | {self._get_analysis_timeframe_label(result, report_language)} | "
+                f"> {report_date} | {timeframe_label} | "
                 f"{labels['score_label']}: **{result.sentiment_score}** | "
                 f"{localize_trend_prediction(result.trend_prediction, report_language)}"
             ),
             "",
-            f"### 多空建议",
+            f"### {strategy_heading}",
             "",
             f"**{signal_text}**: {localize_operation_advice(result.operation_advice, report_language)}",
             "",
         ]
 
-        self._append_btc_plan(lines, "日线多单计划", plans.get("long_plan"))
-        self._append_btc_plan(lines, "日线空单计划", plans.get("short_plan"))
         intraday = plans.get("intraday_plan")
-        if intraday:
+        if is_hourly:
+            self._append_btc_plan(lines, "小时线日内计划（整点更新）", intraday)
+        else:
+            self._append_btc_plan(lines, "日线多单计划（08:00 后更新）", plans.get("long_plan"))
+            self._append_btc_plan(lines, "日线空单计划（08:00 后更新）", plans.get("short_plan"))
+        if intraday and not is_hourly:
             self._append_btc_plan(lines, "小时线日内计划", intraday)
 
         technical_lines = []
@@ -1903,7 +1910,7 @@ class NotificationService(
             ("失效", plan.get("invalidation")),
             ("依据", plan.get("reason")),
         ]
-        if title == "小时线日内计划" and plan.get("direction"):
+        if title.startswith("小时线日内计划") and plan.get("direction"):
             rows.insert(0, ("方向", plan.get("direction")))
         rows = [(label, str(value).strip()) for label, value in rows if value is not None and str(value).strip()]
         if not rows:
