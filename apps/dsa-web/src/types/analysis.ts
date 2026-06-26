@@ -111,17 +111,26 @@ export interface ReportSummary {
 
 /** Strategy section */
 export interface DirectionalStrategyPlan {
+  planType?: string;
   timeframe?: string;
   analysisTimeframe?: string;
+  direction?: string;
   entryPrice?: string;
+  entryZone?: string;
   stopLoss?: string;
   takeProfit?: string;
   triggerCondition?: string;
   invalidation?: string;
+  invalidCondition?: string;
+  riskReward?: string;
+  positionHint?: string;
+  confidence?: string;
+  noTradeReason?: string;
   reason?: string;
 }
 
 export interface IntradayStrategyPlan extends DirectionalStrategyPlan {
+  planType?: 'intraday' | string;
   timeframe?: 'hourly';
   analysisTimeframe?: string;
   enabled?: boolean | string;

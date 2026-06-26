@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from src.core.crypto_backtest_engine import CryptoPlan
 from src.services.crypto_backtest_service import CryptoBacktestService, _Bar
-from src.storage import AnalysisHistory
+from src.storage import AnalysisHistory, CryptoBacktestResult
 
 
 class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
@@ -144,6 +144,123 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
 
         self.assertEqual([plan.plan_type for plan in plans], ["intraday"])
         self.assertEqual(plans[0].direction, "long")
+
+    def test_history_record_marks_missing_plan_fields(self):
+        analysis = AnalysisHistory(
+            id=11,
+            query_id="q-11",
+            code="BTC",
+            name="Bitcoin",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "long_plan": {
+                                "entry_price": "100000",
+                                "trigger_condition": "突破确认",
+                                "no_trade_reason": "等待止损和目标价补齐",
+                            }
+                        }
+                    }
+                }
+            ),
+            created_at=datetime(2026, 1, 1, 8),
+        )
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+
+        item = service._history_record_to_dict(analysis, {})
+
+        self.assertEqual(item["backtest_status"], "invalid_plan")
+        self.assertEqual(item["plans"][0]["plan_type"], "daily_long")
+        self.assertFalse(item["plans"][0]["backtestable"])
+        self.assertEqual(item["plans"][0]["missing_fields"], ["stop_loss", "take_profit"])
+        self.assertEqual(item["plans"][0]["no_trade_reason"], "等待止损和目标价补齐")
+
+    def test_history_record_attaches_latest_backtest_result_status(self):
+        analysis = AnalysisHistory(
+            id=12,
+            query_id="q-12",
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "long_plan": {
+                                "entry_price": "100000",
+                                "stop_loss": "99000",
+                                "take_profit": "102000",
+                                "risk_reward": "1:2",
+                            }
+                        }
+                    }
+                }
+            ),
+            created_at=datetime(2026, 1, 1, 8),
+        )
+        result = CryptoBacktestResult(
+            analysis_history_id=12,
+            code="BTCUSDT",
+            plan_type="daily_long",
+            horizon="daily",
+            direction="long",
+            engine_version="btc-plan-v2",
+            eval_status="completed",
+            outcome="win",
+            entry_triggered=True,
+            simulated_return_pct=1.2,
+            diagnostics_json=json.dumps({"trade": {"net_pnl": 12.3, "r_multiple": 1.1}}),
+        )
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+
+        item = service._history_record_to_dict(analysis, {(12, "daily_long"): result})
+
+        self.assertEqual(item["backtest_status"], "completed")
+        self.assertEqual(item["plans"][0]["backtest_status"], "win")
+        self.assertEqual(item["plans"][0]["risk_reward"], "1:2")
+        self.assertEqual(item["plans"][0]["latest_result"]["trade"]["net_pnl"], 12.3)
+
+    def test_run_selected_skips_existing_plan_without_force(self):
+        analysis = AnalysisHistory(
+            id=13,
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "long_plan": {
+                                "entry_price": "100000",
+                                "stop_loss": "99000",
+                                "take_profit": "102000",
+                            }
+                        }
+                    }
+                }
+            ),
+            created_at=datetime(2026, 1, 1, 8),
+        )
+
+        class Repo:
+            def get_history_records(self, *, ids=None, code=None, offset=0, limit=20):
+                return [analysis], 1
+
+            def get_results_for_history_ids(self, *, analysis_history_ids, engine_version):
+                return [
+                    CryptoBacktestResult(
+                        analysis_history_id=13,
+                        plan_type="daily_long",
+                        engine_version=engine_version,
+                    )
+                ]
+
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+        service.repo = Repo()
+        service._engine_version = lambda: "btc-plan-v2"
+
+        stats = service.run_selected_backtests(analysis_history_ids=[13], force=False)
+
+        self.assertEqual(stats["processed"], 1)
+        self.assertEqual(stats["saved"], 0)
+        self.assertEqual(stats["skipped"], 1)
 
 
 if __name__ == "__main__":

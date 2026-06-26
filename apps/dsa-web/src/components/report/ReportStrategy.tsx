@@ -68,11 +68,16 @@ const DirectionalPlanCard: React.FC<DirectionalPlanCardProps> = ({
   const rows = [
     { label: text.analysisMode, value: plan.analysisTimeframe },
     { label: text.direction, value: 'direction' in plan ? plan.direction : undefined },
+    { label: text.entryZone, value: plan.entryZone },
     { label: text.entryPrice, value: plan.entryPrice },
     { label: text.stopLoss, value: plan.stopLoss },
     { label: text.takeProfit, value: plan.takeProfit },
     { label: text.triggerCondition, value: plan.triggerCondition },
-    { label: text.invalidation, value: plan.invalidation },
+    { label: text.invalidation, value: plan.invalidation || plan.invalidCondition },
+    { label: text.riskReward, value: plan.riskReward },
+    { label: text.positionHint, value: plan.positionHint },
+    { label: text.confidence, value: plan.confidence },
+    { label: text.noTradeReason, value: plan.noTradeReason },
     { label: text.dailyConstraint, value: includeDailyConstraint && 'dailyConstraint' in plan ? plan.dailyConstraint : undefined },
     { label: text.reason, value: plan.reason },
   ].filter((row) => row.value && row.value.trim());

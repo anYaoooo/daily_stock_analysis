@@ -68,6 +68,80 @@ class CryptoBacktestRepository:
             ).scalars().all()
             return [row for row in rows if is_crypto_code(row.code)]
 
+    def get_history_records(
+        self,
+        *,
+        ids: Optional[list[int]] = None,
+        code: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 20,
+    ) -> tuple[list[AnalysisHistory], int]:
+        with self.db.get_session() as session:
+            btc_code_variants = {
+                "BTC",
+                BTC_CANONICAL_CODE,
+                "BTCUSDT",
+                "BTCUSD",
+                "BTC-USD",
+                "BTC/USD",
+                "BTC_USDT",
+            }
+            conditions = [
+                AnalysisHistory.code.in_(sorted(btc_code_variants)),
+                or_(
+                    AnalysisHistory.report_type.is_(None),
+                    AnalysisHistory.report_type != "market_review",
+                ),
+            ]
+            if ids:
+                conditions.append(AnalysisHistory.id.in_([int(item) for item in ids]))
+            if code:
+                code_variants = {
+                    str(code).strip().upper(),
+                    BTC_CANONICAL_CODE,
+                }
+                normalized_symbol = normalize_crypto_symbol(code)
+                if normalized_symbol:
+                    code_variants.add(normalized_symbol)
+                conditions.append(AnalysisHistory.code.in_(sorted(code_variants)))
+
+            where_clause = and_(*conditions)
+            total = session.execute(
+                select(func.count(AnalysisHistory.id))
+                .select_from(AnalysisHistory)
+                .where(where_clause)
+            ).scalar() or 0
+            rows = session.execute(
+                select(AnalysisHistory)
+                .where(where_clause)
+                .order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
+                .offset(max(0, int(offset)))
+                .limit(int(limit))
+            ).scalars().all()
+            return [row for row in rows if is_crypto_code(row.code)], int(total)
+
+    def get_results_for_history_ids(
+        self,
+        *,
+        analysis_history_ids: list[int],
+        engine_version: str,
+    ) -> list[CryptoBacktestResult]:
+        ids = sorted({int(item) for item in analysis_history_ids if item is not None})
+        if not ids:
+            return []
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(CryptoBacktestResult)
+                .where(
+                    and_(
+                        CryptoBacktestResult.analysis_history_id.in_(ids),
+                        CryptoBacktestResult.engine_version == engine_version,
+                    )
+                )
+                .order_by(desc(CryptoBacktestResult.evaluated_at), desc(CryptoBacktestResult.id))
+            ).scalars().all()
+            return list(rows)
+
     def save_results_batch(
         self,
         results: list[CryptoBacktestResult],
@@ -82,12 +156,14 @@ class CryptoBacktestRepository:
                 if replace_existing:
                     analysis_ids = sorted({row.analysis_history_id for row in results})
                     engine_versions = sorted({row.engine_version for row in results})
-                    if analysis_ids and engine_versions:
+                    plan_types = sorted({row.plan_type for row in results})
+                    if analysis_ids and engine_versions and plan_types:
                         session.execute(
                             delete(CryptoBacktestResult).where(
                                 and_(
                                     CryptoBacktestResult.analysis_history_id.in_(analysis_ids),
                                     CryptoBacktestResult.engine_version.in_(engine_versions),
+                                    CryptoBacktestResult.plan_type.in_(plan_types),
                                 )
                             )
                         )

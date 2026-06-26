@@ -108,29 +108,44 @@ class PositionStrategy(BaseModel):
 class DirectionalStrategyPlan(BaseModel):
     """Directional long/short plan for BTC and other two-way instruments."""
 
+    plan_type: Optional[str] = None
     timeframe: Optional[str] = None
     analysis_timeframe: Optional[str] = None
+    direction: Optional[str] = None
     entry_price: Optional[Union[str, int, float]] = None
+    entry_zone: Optional[Union[str, int, float]] = None
     stop_loss: Optional[Union[str, int, float]] = None
     take_profit: Optional[Union[str, int, float]] = None
     trigger_condition: Optional[str] = None
     invalidation: Optional[str] = None
+    invalid_condition: Optional[str] = None
+    risk_reward: Optional[Union[str, int, float]] = None
+    position_hint: Optional[str] = None
+    confidence: Optional[Union[str, int, float]] = None
+    no_trade_reason: Optional[str] = None
     reason: Optional[str] = None
 
 
 class IntradayPlan(BaseModel):
     """Hourly intraday plan."""
 
+    plan_type: Optional[str] = None
     timeframe: Optional[str] = None
     analysis_timeframe: Optional[str] = None
     enabled: Optional[bool] = None
     direction: Optional[str] = None
     entry_price: Optional[Union[str, int, float]] = None
+    entry_zone: Optional[Union[str, int, float]] = None
     stop_loss: Optional[Union[str, int, float]] = None
     take_profit: Optional[Union[str, int, float]] = None
     trigger_condition: Optional[str] = None
     invalidation: Optional[str] = None
+    invalid_condition: Optional[str] = None
     daily_constraint: Optional[str] = None
+    risk_reward: Optional[Union[str, int, float]] = None
+    position_hint: Optional[str] = None
+    confidence: Optional[Union[str, int, float]] = None
+    no_trade_reason: Optional[str] = None
     reason: Optional[str] = None
 
 

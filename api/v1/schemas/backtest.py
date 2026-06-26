@@ -20,6 +20,18 @@ class BacktestRunRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000, description="最多处理的分析记录数")
 
 
+class CryptoBacktestSelectedRunRequest(BaseModel):
+    analysis_history_ids: List[int] = Field(
+        default_factory=list,
+        description="要回测的分析历史记录主键 ID 列表",
+    )
+    plan_types: Optional[List[str]] = Field(
+        None,
+        description="可选计划类型过滤：daily_long/daily_short/intraday",
+    )
+    force: bool = Field(False, description="强制重新计算已存在的计划回测")
+
+
 class BacktestRunResponse(BaseModel):
     processed: int = Field(..., description="候选记录数")
     saved: int = Field(..., description="写入回测结果数")
@@ -106,6 +118,50 @@ class CryptoBacktestResultItem(BaseModel):
     trade: Dict[str, Any] = Field(default_factory=dict)
     execution: Dict[str, Any] = Field(default_factory=dict)
     diagnostics: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CryptoBacktestHistoryPlan(BaseModel):
+    plan_type: str
+    horizon: str
+    analysis_mode: Optional[str] = None
+    analysis_timeframe: Optional[str] = None
+    direction: str
+    entry_price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    invalid_condition: Optional[str] = None
+    risk_reward: Optional[str] = None
+    position_hint: Optional[str] = None
+    confidence: Optional[str] = None
+    backtestable: bool
+    quality_status: str
+    missing_fields: List[str] = Field(default_factory=list)
+    no_trade_reason: Optional[str] = None
+    backtest_status: str
+    latest_result: Optional[CryptoBacktestResultItem] = None
+
+
+class CryptoBacktestHistoryItem(BaseModel):
+    analysis_history_id: int
+    query_id: Optional[str] = None
+    code: str
+    stock_name: Optional[str] = None
+    report_type: Optional[str] = None
+    analysis_created_at: Optional[str] = None
+    analysis_mode: Optional[str] = None
+    analysis_timeframe: Optional[str] = None
+    analysis_summary: Optional[str] = None
+    operation_advice: Optional[str] = None
+    trend_prediction: Optional[str] = None
+    backtest_status: str
+    plans: List[CryptoBacktestHistoryPlan] = Field(default_factory=list)
+
+
+class CryptoBacktestHistoryResponse(BaseModel):
+    total: int
+    page: int
+    limit: int
+    items: List[CryptoBacktestHistoryItem] = Field(default_factory=list)
 
 
 class BacktestResultsResponse(BaseModel):

@@ -87,94 +87,25 @@ class CryptoBacktestService:
         results: list[CryptoBacktestResult] = []
 
         bars_cache: dict[tuple[str, str, int], _BarBatch] = {}
-        eval_config = CryptoPlanBacktestConfig(
-            neutral_band_pct=float(getattr(config, "crypto_backtest_neutral_band_pct", 0.2)),
-            engine_version=engine_version,
-            initial_equity=float(getattr(config, "crypto_backtest_initial_equity", 10000.0)),
-            risk_per_trade_pct=float(getattr(config, "crypto_backtest_risk_per_trade_pct", 1.0)),
-            max_notional_pct=float(getattr(config, "crypto_backtest_max_notional_pct", 100.0)),
-            leverage=float(getattr(config, "crypto_backtest_leverage", 1.0)),
-            fee_rate_bps=float(getattr(config, "crypto_backtest_fee_rate_bps", 5.0)),
-            slippage_bps=float(getattr(config, "crypto_backtest_slippage_bps", 2.0)),
-        )
+        eval_config = self._eval_config(config, engine_version)
 
         for analysis in candidates:
             processed += 1
             try:
-                plans = self._extract_plans(analysis)
-                if not plans:
+                evaluated, counts = self._evaluate_analysis_record(
+                    analysis=analysis,
+                    engine_version=engine_version,
+                    eval_config=eval_config,
+                    bars_cache=bars_cache,
+                )
+                if not evaluated:
                     skipped += 1
                     continue
-
-                analysis_at = analysis.created_at or datetime.now()
-                market_analysis_at = self._local_naive_to_utc_naive(analysis_at)
-                fetch_days = max(3, (datetime.now() - analysis_at).days + 3)
-
-                for plan in plans:
-                    if plan.horizon == "intraday":
-                        batch = self._get_cached_bars(
-                            bars_cache,
-                            analysis.code,
-                            period="hourly",
-                            days=max(fetch_days, 3),
-                        )
-                        window_start = market_analysis_at
-                        window_end = market_analysis_at + timedelta(hours=24)
-                    else:
-                        batch = self._get_cached_bars(
-                            bars_cache,
-                            analysis.code,
-                            period="daily",
-                            days=max(fetch_days, 5),
-                        )
-                        window_start = datetime.combine(market_analysis_at.date() + timedelta(days=1), time.min)
-                        window_end = window_start + timedelta(days=1)
-
-                    bars = batch.bars
-                    forward_bars = [
-                        bar
-                        for bar in bars
-                        if window_start <= bar.timestamp < window_end
-                    ]
-                    lookahead_guard = self._lookahead_guard(
-                        analysis_at=market_analysis_at,
-                        window_start=window_start,
-                        window_end=window_end,
-                        forward_bars=forward_bars,
-                    )
-                    if lookahead_guard["passed"]:
-                        evaluation = CryptoBacktestEngine.evaluate_plan(
-                            plan=plan,
-                            forward_bars=forward_bars,
-                            config=eval_config,
-                        )
-                    else:
-                        evaluation = self._skipped_evaluation(plan, "lookahead_bias_detected")
-                    evaluation = self._attach_run_diagnostics(
-                        evaluation=evaluation,
-                        data_snapshot=batch.metadata,
-                        lookahead_guard=lookahead_guard,
-                    )
-                    status = evaluation.get("eval_status")
-                    if status == "completed":
-                        completed += 1
-                    elif status == "insufficient_data":
-                        insufficient += 1
-                    elif status == "skipped":
-                        skipped += 1
-                    else:
-                        errors += 1
-
-                    results.append(
-                        self._build_result_model(
-                            analysis=analysis,
-                            plan=plan,
-                            evaluation=evaluation,
-                            engine_version=engine_version,
-                            evaluation_start=window_start,
-                            evaluation_end=window_end,
-                        )
-                    )
+                completed += counts["completed"]
+                insufficient += counts["insufficient"]
+                skipped += counts["skipped"]
+                errors += counts["errors"]
+                results.extend(evaluated)
             except Exception as exc:
                 errors += 1
                 logger.warning("BTC 回测失败: %s#%s: %s", analysis.code, analysis.id, exc)
@@ -190,6 +121,115 @@ class CryptoBacktestService:
             "insufficient": insufficient,
             "skipped": skipped,
             "errors": errors,
+        }
+
+    def run_selected_backtests(
+        self,
+        *,
+        analysis_history_ids: list[int],
+        plan_types: Optional[list[str]] = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        ids = sorted({int(item) for item in analysis_history_ids if item is not None})
+        if not ids:
+            return {"processed": 0, "saved": 0, "completed": 0, "insufficient": 0, "skipped": 0, "errors": 0}
+
+        engine_version = self._engine_version()
+        records, _total = self.repo.get_history_records(ids=ids, offset=0, limit=len(ids))
+        by_id = {int(record.id): record for record in records if record.id is not None}
+        selected_plan_types = {str(item).strip() for item in (plan_types or []) if str(item).strip()}
+        config = get_config()
+        eval_config = self._eval_config(config, engine_version)
+        existing_keys: set[tuple[int, str]] = set()
+        if not force:
+            existing_keys = {
+                (int(row.analysis_history_id), str(row.plan_type))
+                for row in self.repo.get_results_for_history_ids(
+                    analysis_history_ids=ids,
+                    engine_version=engine_version,
+                )
+            }
+
+        processed = 0
+        completed = 0
+        insufficient = 0
+        skipped = 0
+        errors = 0
+        results: list[CryptoBacktestResult] = []
+        bars_cache: dict[tuple[str, str, int], _BarBatch] = {}
+
+        for record_id in ids:
+            analysis = by_id.get(record_id)
+            if analysis is None:
+                skipped += 1
+                continue
+            processed += 1
+            try:
+                evaluated, counts = self._evaluate_analysis_record(
+                    analysis=analysis,
+                    engine_version=engine_version,
+                    eval_config=eval_config,
+                    bars_cache=bars_cache,
+                    plan_types=selected_plan_types or None,
+                    existing_keys=existing_keys,
+                )
+                if not evaluated:
+                    skipped += 1
+                    continue
+                completed += counts["completed"]
+                insufficient += counts["insufficient"]
+                skipped += counts["skipped"]
+                errors += counts["errors"]
+                results.extend(evaluated)
+            except Exception as exc:
+                errors += 1
+                logger.warning("指定 BTC 回测失败: %s#%s: %s", analysis.code, analysis.id, exc)
+
+        saved = 0
+        if results:
+            saved = self.repo.save_results_batch(results, replace_existing=force)
+            self._recompute_summaries(engine_version=engine_version)
+
+        return {
+            "processed": processed,
+            "saved": saved,
+            "completed": completed,
+            "insufficient": insufficient,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
+    def get_history_records(
+        self,
+        *,
+        code: Optional[str] = None,
+        page: int = 1,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        engine_version = self._engine_version()
+        rows, total = self.repo.get_history_records(
+            code=code,
+            offset=max(page - 1, 0) * int(limit),
+            limit=int(limit),
+        )
+        result_rows = self.repo.get_results_for_history_ids(
+            analysis_history_ids=[int(row.id) for row in rows if row.id is not None],
+            engine_version=engine_version,
+        )
+        results_by_key: dict[tuple[int, str], CryptoBacktestResult] = {}
+        for result in result_rows:
+            key = (int(result.analysis_history_id), str(result.plan_type))
+            if key not in results_by_key:
+                results_by_key[key] = result
+
+        return {
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "items": [
+                self._history_record_to_dict(row, results_by_key)
+                for row in rows
+            ],
         }
 
     def get_recent_evaluations(
@@ -252,6 +292,114 @@ class CryptoBacktestService:
         if deleted:
             self._recompute_summaries(engine_version=engine_version)
         return {"deleted": int(deleted)}
+
+    @staticmethod
+    def _eval_config(config: Any, engine_version: str) -> CryptoPlanBacktestConfig:
+        return CryptoPlanBacktestConfig(
+            neutral_band_pct=float(getattr(config, "crypto_backtest_neutral_band_pct", 0.2)),
+            engine_version=engine_version,
+            initial_equity=float(getattr(config, "crypto_backtest_initial_equity", 10000.0)),
+            risk_per_trade_pct=float(getattr(config, "crypto_backtest_risk_per_trade_pct", 1.0)),
+            max_notional_pct=float(getattr(config, "crypto_backtest_max_notional_pct", 100.0)),
+            leverage=float(getattr(config, "crypto_backtest_leverage", 1.0)),
+            fee_rate_bps=float(getattr(config, "crypto_backtest_fee_rate_bps", 5.0)),
+            slippage_bps=float(getattr(config, "crypto_backtest_slippage_bps", 2.0)),
+        )
+
+    def _evaluate_analysis_record(
+        self,
+        *,
+        analysis: AnalysisHistory,
+        engine_version: str,
+        eval_config: CryptoPlanBacktestConfig,
+        bars_cache: dict[tuple[str, str, int], _BarBatch],
+        plan_types: Optional[set[str]] = None,
+        existing_keys: Optional[set[tuple[int, str]]] = None,
+    ) -> tuple[list[CryptoBacktestResult], dict[str, int]]:
+        plans = self._extract_plans(analysis)
+        if plan_types:
+            plans = [plan for plan in plans if plan.plan_type in plan_types]
+        if existing_keys:
+            plans = [
+                plan
+                for plan in plans
+                if (int(analysis.id), str(plan.plan_type)) not in existing_keys
+            ]
+        if not plans:
+            return [], {"completed": 0, "insufficient": 0, "skipped": 0, "errors": 0}
+
+        analysis_at = analysis.created_at or datetime.now()
+        market_analysis_at = self._local_naive_to_utc_naive(analysis_at)
+        fetch_days = max(3, (datetime.now() - analysis_at).days + 3)
+        results: list[CryptoBacktestResult] = []
+        counts = {"completed": 0, "insufficient": 0, "skipped": 0, "errors": 0}
+
+        for plan in plans:
+            if plan.horizon == "intraday":
+                batch = self._get_cached_bars(
+                    bars_cache,
+                    analysis.code,
+                    period="hourly",
+                    days=max(fetch_days, 3),
+                )
+                window_start = market_analysis_at
+                window_end = market_analysis_at + timedelta(hours=24)
+            else:
+                batch = self._get_cached_bars(
+                    bars_cache,
+                    analysis.code,
+                    period="daily",
+                    days=max(fetch_days, 5),
+                )
+                window_start = datetime.combine(market_analysis_at.date() + timedelta(days=1), time.min)
+                window_end = window_start + timedelta(days=1)
+
+            forward_bars = [
+                bar
+                for bar in batch.bars
+                if window_start <= bar.timestamp < window_end
+            ]
+            lookahead_guard = self._lookahead_guard(
+                analysis_at=market_analysis_at,
+                window_start=window_start,
+                window_end=window_end,
+                forward_bars=forward_bars,
+            )
+            if lookahead_guard["passed"]:
+                evaluation = CryptoBacktestEngine.evaluate_plan(
+                    plan=plan,
+                    forward_bars=forward_bars,
+                    config=eval_config,
+                )
+            else:
+                evaluation = self._skipped_evaluation(plan, "lookahead_bias_detected")
+            evaluation = self._attach_run_diagnostics(
+                evaluation=evaluation,
+                data_snapshot=batch.metadata,
+                lookahead_guard=lookahead_guard,
+            )
+            status = evaluation.get("eval_status")
+            if status == "completed":
+                counts["completed"] += 1
+            elif status == "insufficient_data":
+                counts["insufficient"] += 1
+            elif status == "skipped":
+                counts["skipped"] += 1
+            else:
+                counts["errors"] += 1
+
+            results.append(
+                self._build_result_model(
+                    analysis=analysis,
+                    plan=plan,
+                    evaluation=evaluation,
+                    engine_version=engine_version,
+                    evaluation_start=window_start,
+                    evaluation_end=window_end,
+                )
+            )
+
+        return results, counts
 
     def _extract_plans(self, analysis: AnalysisHistory) -> list[CryptoPlan]:
         if not is_crypto_code(analysis.code):
@@ -650,6 +798,131 @@ class CryptoBacktestService:
             "equity_curve": diagnostics.get("equity_curve") or [],
             "diagnostics": diagnostics,
         }
+
+    def _history_record_to_dict(
+        self,
+        row: AnalysisHistory,
+        results_by_key: dict[tuple[int, str], CryptoBacktestResult],
+    ) -> dict[str, Any]:
+        raw = parse_json_field(row.raw_result)
+        snapshot = parse_json_field(row.context_snapshot)
+        analysis_mode = self._analysis_mode_from_snapshot(row)
+        plans = self._extract_plans(row)
+        plan_items = [
+            self._history_plan_to_dict(
+                analysis_history_id=int(row.id),
+                plan=plan,
+                result=results_by_key.get((int(row.id), plan.plan_type)),
+            )
+            for plan in plans
+        ]
+        terminal_statuses = {"completed", "win", "loss", "neutral", "no_entry", "skipped", "insufficient_data"}
+        if not plan_items:
+            backtest_status = "no_plan"
+        elif all(item["backtest_status"] in terminal_statuses for item in plan_items):
+            backtest_status = "completed"
+        elif any(item["backtest_status"] in {"completed", "no_entry", "win", "loss", "neutral"} for item in plan_items):
+            backtest_status = "partial"
+        elif any(item["backtestable"] for item in plan_items):
+            backtest_status = "pending"
+        else:
+            backtest_status = "invalid_plan"
+
+        return {
+            "analysis_history_id": int(row.id),
+            "query_id": row.query_id,
+            "code": normalize_crypto_symbol(row.code) or row.code,
+            "stock_name": row.name,
+            "report_type": row.report_type,
+            "analysis_created_at": row.created_at.isoformat() if row.created_at else None,
+            "analysis_mode": analysis_mode,
+            "analysis_timeframe": analysis_timeframe_label(analysis_mode),
+            "analysis_summary": row.analysis_summary or (raw.get("analysis_summary") if isinstance(raw, dict) else None),
+            "operation_advice": row.operation_advice,
+            "trend_prediction": row.trend_prediction,
+            "backtest_status": backtest_status,
+            "plans": plan_items,
+            "diagnostics": {
+                "context_snapshot_available": isinstance(snapshot, dict),
+            },
+        }
+
+    def _history_plan_to_dict(
+        self,
+        *,
+        analysis_history_id: int,
+        plan: CryptoPlan,
+        result: Optional[CryptoBacktestResult],
+    ) -> dict[str, Any]:
+        missing_fields = self._missing_plan_fields(plan)
+        backtestable = not missing_fields and plan.direction in {"long", "short"}
+        latest_result = self._result_to_dict(result) if result else None
+        if result:
+            backtest_status = self._plan_result_status(result)
+        elif backtestable:
+            backtest_status = "pending"
+        else:
+            backtest_status = "invalid_plan"
+        analysis_mode = horizon_to_analysis_mode(plan.horizon)
+        return {
+            "plan_type": plan.plan_type,
+            "horizon": plan.horizon,
+            "analysis_mode": analysis_mode,
+            "analysis_timeframe": analysis_timeframe_label(analysis_mode),
+            "direction": plan.direction,
+            "entry_price": plan.entry_price,
+            "stop_loss": plan.stop_loss,
+            "take_profit": plan.take_profit,
+            "invalid_condition": self._raw_plan_text(plan, "invalid_condition", "invalidation"),
+            "risk_reward": self._raw_plan_text(plan, "risk_reward"),
+            "position_hint": self._raw_plan_text(plan, "position_hint"),
+            "confidence": self._raw_plan_text(plan, "confidence"),
+            "backtestable": backtestable,
+            "quality_status": "ok" if backtestable else "missing_required_fields",
+            "missing_fields": missing_fields,
+            "no_trade_reason": self._no_trade_reason(plan),
+            "backtest_status": backtest_status,
+            "latest_result": latest_result,
+        }
+
+    @staticmethod
+    def _missing_plan_fields(plan: CryptoPlan) -> list[str]:
+        missing = []
+        if plan.direction not in {"long", "short"}:
+            missing.append("direction")
+        if plan.entry_price is None:
+            missing.append("entry_zone")
+        if plan.stop_loss is None:
+            missing.append("stop_loss")
+        if plan.take_profit is None:
+            missing.append("take_profit")
+        return missing
+
+    @staticmethod
+    def _no_trade_reason(plan: CryptoPlan) -> Optional[str]:
+        raw = plan.raw_plan or {}
+        for key in ("no_trade_reason", "reason", "invalidation"):
+            value = raw.get(key)
+            if value:
+                return str(value)
+        if plan.direction in {"long", "short"}:
+            return None
+        return "计划方向为观望，暂不回测入场交易。"
+
+    @staticmethod
+    def _raw_plan_text(plan: CryptoPlan, *keys: str) -> Optional[str]:
+        raw = plan.raw_plan or {}
+        for key in keys:
+            value = raw.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return None
+
+    @staticmethod
+    def _plan_result_status(row: CryptoBacktestResult) -> str:
+        if row.eval_status == "completed":
+            return str(row.outcome or "completed")
+        return str(row.eval_status or "pending")
 
     @staticmethod
     def _engine_version() -> str:

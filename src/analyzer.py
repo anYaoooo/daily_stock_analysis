@@ -1960,30 +1960,53 @@ class GeminiAnalyzer:
                 "take_profit": "目标位：XX元（按阻力位/风险回报比制定）"
             },
             "long_plan": {
+                "plan_type": "daily_long",
+                "direction": "long",
+                "entry_zone": "多单入场区间或触发价：XX-XX；若只给触发价也必须明确",
                 "entry_price": "多单入场价：XX（突破确认/回踩确认）",
                 "stop_loss": "多单止损：XX",
                 "take_profit": "多单目标：XX",
                 "trigger_condition": "多单触发条件",
                 "invalidation": "多单失效条件",
+                "invalid_condition": "多单失效条件（结构化字段，和 invalidation 保持一致或更精确）",
+                "risk_reward": "风险收益比：例如 1:2.0；无法计算时写明原因",
+                "position_hint": "仓位建议或单笔风险预算：例如 0.5-1.0% 账户风险",
+                "confidence": "置信度：高/中/低 + 原因",
+                "no_trade_reason": "若暂不做多，必须写清等待原因；可交易时为空",
                 "reason": "多单依据：价格行为/量能/VWAP/EMA/斐波那契共振"
             },
             "short_plan": {
+                "plan_type": "daily_short",
+                "direction": "short",
+                "entry_zone": "空单入场区间或触发价：XX-XX；若只给触发价也必须明确",
                 "entry_price": "空单入场价：XX（跌破确认/反抽确认）",
                 "stop_loss": "空单止损：XX",
                 "take_profit": "空单目标：XX",
                 "trigger_condition": "空单触发条件",
                 "invalidation": "空单失效条件",
+                "invalid_condition": "空单失效条件（结构化字段，和 invalidation 保持一致或更精确）",
+                "risk_reward": "风险收益比：例如 1:2.0；无法计算时写明原因",
+                "position_hint": "仓位建议或单笔风险预算：例如 0.5-1.0% 账户风险",
+                "confidence": "置信度：高/中/低 + 原因",
+                "no_trade_reason": "若暂不做空，必须写清等待原因；可交易时为空",
                 "reason": "空单依据：价格行为/量能/VWAP/EMA/斐波那契共振"
             },
             "intraday_plan": {
+                "plan_type": "intraday",
                 "enabled": false,
                 "direction": "none/long/short/wait",
+                "entry_zone": "小时线日内入场区间或触发价：XX-XX；无机会则写等待",
                 "entry_price": "小时线日内入场价：XX；无机会则写等待",
                 "stop_loss": "小时线日内止损：XX；必须受日线失效位约束",
                 "take_profit": "小时线日内目标：XX",
                 "trigger_condition": "小时线触发条件",
                 "invalidation": "小时线失效条件",
+                "invalid_condition": "小时线失效条件（结构化字段，和 invalidation 保持一致或更精确）",
                 "daily_constraint": "日线方向/关键支撑阻力/失效条件如何约束本次日内交易",
+                "risk_reward": "风险收益比：例如 1:1.5；无法计算时写明原因",
+                "position_hint": "仓位建议或单笔风险预算，日内逆日线时必须更轻",
+                "confidence": "置信度：高/中/低 + 原因",
+                "no_trade_reason": "enabled=false 或 direction=wait 时必须写清不交易原因",
                 "reason": "小时线日内机会依据；无机会时说明原因"
             },
             "position_strategy": {
@@ -3365,8 +3388,8 @@ class GeminiAnalyzer:
 > BTC 冲突判定规则：当短线 Price Action 与中线 EMA/VWAP 冲突时，定义为“反弹/回调或短线推进”，不得直接升级为趋势反转；只有 Price Action、VWAP、EMA、Volume 至少三项同向确认，才可称为趋势延续或反转。
 > BTC 本轮分析模式：{mode_instruction}
 > BTC 双向交易要求：BTC 支持多单和空单，分析时必须同时评估 Long/多单与 Short/空单，不得只给多单买入视角。若多头条件更强，给出多单入场、止损、目标和失效条件；若空头条件更强，给出空单入场/做空开仓、止损、目标和失效条件；若多空都不满足，明确“不做多也不做空，等待确认”。
-> BTC 日线策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 只承载日线级主策略，必须同时输出，分别包含 `entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件，不要省略该方向。
-> BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `enabled`、`direction`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`daily_constraint`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件。
+> BTC 日线策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 只承载日线级主策略，必须同时输出，分别包含 `plan_type`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件和 `no_trade_reason`，不要省略该方向。
+> BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `plan_type`、`enabled`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`invalid_condition`、`daily_constraint`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件和 `no_trade_reason`。
 > BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。
 > BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；为避免合约语义歧义，`buy` 仅表示 Long / 多单开仓或加多，`sell` 仅表示 Short / 空单开仓、加空或多单风控退出，`hold` 表示 Flat / 空仓等待、持仓观望或区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”；若是平空或平多，必须在文字中明确写“平空/平多”，不要只依赖 `buy`/`sell`。
 """

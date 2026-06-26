@@ -39,11 +39,11 @@
 每个计划至少需要：
 
 - `entry_price`：入场价。
-- `stop_loss`：止损价，可为空。
-- `take_profit`：止盈价，可为空。
+- `stop_loss`：止损价。
+- `take_profit`：止盈价。
 - `direction`：多/空方向，日内计划会额外检查 enabled 状态。
 
-无方向、等待方向、缺失入场价或非法入场价的计划会被标记为 skipped。
+计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。回测引擎当前仍以可解析的 `entry_price`、`stop_loss`、`take_profit` 作为机器执行字段；缺失关键字段的计划会在历史记录入口标记为 `invalid_plan`，不会被静默当作有效交易。
 
 ### 3.2 行情来源
 
@@ -311,7 +311,37 @@ curl -X POST http://127.0.0.1:8000/api/v1/backtest/crypto/run \
 | `min_age_days` | 最小报告天龄，会换算为小时 |
 | `limit` | 最多处理的历史报告数 |
 
-### 6.2 查询回测结果
+### 6.2 查询历史分析记录回测入口
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/backtest/crypto/history?code=BTC&page=1&limit=20"
+```
+
+返回内容以 `analysis_history_id` 为主对象，每条记录包含：
+
+- 报告时间、分析周期、摘要和当前整条记录的 `backtest_status`。
+- `plans[]`：每个计划的 `plan_type`、方向、点位、风险收益比、仓位建议、置信度、缺失字段、是否可回测。
+- `latest_result`：该计划最近一次回测摘要，包含是否触发入场、收益率、交易明细和状态。
+
+### 6.3 按历史记录回测
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/backtest/crypto/run-selected \
+  -H "Content-Type: application/json" \
+  -d '{"analysis_history_ids":[123,124],"plan_types":["daily_long","intraday"],"force":false}'
+```
+
+请求字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `analysis_history_ids` | 要回测的历史分析记录主键 ID 列表 |
+| `plan_types` | 可选，只回测指定计划类型 |
+| `force` | 是否替换同一记录、同一计划、同一 engine_version 的已有结果 |
+
+非 `force` 模式下，已存在的计划级结果会被跳过，避免产生难以解释的重复记录。`force=true` 只替换本次涉及的计划类型，不会删除同一报告其他计划的结果。
+
+### 6.4 查询回测结果
 
 ```bash
 curl "http://127.0.0.1:8000/api/v1/backtest/crypto/results?code=BTC&page=1&limit=20"
@@ -322,7 +352,7 @@ curl "http://127.0.0.1:8000/api/v1/backtest/crypto/results?code=BTC&page=1&limit
 - `horizon=daily|intraday`
 - `plan_type=daily_long|daily_short|intraday`
 
-### 6.3 查询汇总表现
+### 6.5 查询汇总表现
 
 ```bash
 curl "http://127.0.0.1:8000/api/v1/backtest/crypto/performance?scope=overall"

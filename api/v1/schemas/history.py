@@ -166,29 +166,44 @@ class ReportSummary(BaseModel):
 class DirectionalStrategyPlan(BaseModel):
     """多空方向策略计划"""
 
+    plan_type: Optional[str] = Field(None, description="计划类型：daily_long/daily_short 等")
     timeframe: Optional[str] = Field(None, description="策略周期：daily/hourly")
     analysis_timeframe: Optional[str] = Field(None, description="策略周期展示标签：日线/小时线")
+    direction: Optional[str] = Field(None, description="方向：long/short/neutral")
     entry_price: Optional[str] = Field(None, description="入场价")
+    entry_zone: Optional[str] = Field(None, description="入场区间或触发价")
     stop_loss: Optional[str] = Field(None, description="止损价")
     take_profit: Optional[str] = Field(None, description="止盈目标")
     trigger_condition: Optional[str] = Field(None, description="触发条件")
     invalidation: Optional[str] = Field(None, description="失效条件")
+    invalid_condition: Optional[str] = Field(None, description="失效条件（BTC 交易计划标准字段）")
+    risk_reward: Optional[str] = Field(None, description="风险收益比")
+    position_hint: Optional[str] = Field(None, description="仓位建议或风险预算")
+    confidence: Optional[str] = Field(None, description="置信度和原因")
+    no_trade_reason: Optional[str] = Field(None, description="观望原因")
     reason: Optional[str] = Field(None, description="计划依据")
 
 
 class IntradayStrategyPlan(BaseModel):
     """小时线日内策略计划"""
 
+    plan_type: Optional[str] = Field(None, description="计划类型：intraday")
     timeframe: Optional[str] = Field(None, description="策略周期：hourly")
     analysis_timeframe: Optional[str] = Field(None, description="策略周期展示标签：小时线")
     enabled: Optional[bool] = Field(None, description="是否存在可执行日内机会")
     direction: Optional[str] = Field(None, description="日内方向：long/short/wait/none")
     entry_price: Optional[str] = Field(None, description="小时线入场价")
+    entry_zone: Optional[str] = Field(None, description="小时线入场区间或触发价")
     stop_loss: Optional[str] = Field(None, description="小时线止损价")
     take_profit: Optional[str] = Field(None, description="小时线止盈目标")
     trigger_condition: Optional[str] = Field(None, description="小时线触发条件")
     invalidation: Optional[str] = Field(None, description="小时线失效条件")
+    invalid_condition: Optional[str] = Field(None, description="小时线失效条件（BTC 交易计划标准字段）")
     daily_constraint: Optional[str] = Field(None, description="日线约束")
+    risk_reward: Optional[str] = Field(None, description="风险收益比")
+    position_hint: Optional[str] = Field(None, description="仓位建议或风险预算")
+    confidence: Optional[str] = Field(None, description="置信度和原因")
+    no_trade_reason: Optional[str] = Field(None, description="观望原因")
     reason: Optional[str] = Field(None, description="日内计划依据")
 
 

@@ -9,6 +9,9 @@ import type {
   PerformanceMetrics,
   BacktestPhaseFilter,
   BacktestTimeframeFilter,
+  CryptoBacktestHistoryResponse,
+  CryptoBacktestHistoryItem,
+  CryptoBacktestSelectedRunRequest,
 } from '../types/backtest';
 
 // ============ API ============
@@ -31,6 +34,48 @@ export const backtestApi = {
       requestData,
     );
     return toCamelCase<BacktestRunResponse>(response.data);
+  },
+
+  /**
+   * Trigger BTC backtests for selected analysis history records
+   */
+  runSelected: async (params: CryptoBacktestSelectedRunRequest): Promise<BacktestRunResponse> => {
+    const requestData: Record<string, unknown> = {
+      analysis_history_ids: params.analysisHistoryIds,
+    };
+    if (params.planTypes?.length) requestData.plan_types = params.planTypes;
+    if (params.force) requestData.force = params.force;
+
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/backtest/crypto/run-selected',
+      requestData,
+    );
+    return toCamelCase<BacktestRunResponse>(response.data);
+  },
+
+  /**
+   * Get BTC analysis history records with plan-level backtest status
+   */
+  getHistory: async (params: {
+    code?: string;
+    page?: number;
+    limit?: number;
+  } = {}): Promise<CryptoBacktestHistoryResponse> => {
+    const { code, page = 1, limit = 20 } = params;
+    const queryParams: Record<string, string | number> = { page, limit };
+    if (code) queryParams.code = code;
+
+    const response = await apiClient.get<Record<string, unknown>>(
+      '/api/v1/backtest/crypto/history',
+      { params: queryParams },
+    );
+    const data = toCamelCase<CryptoBacktestHistoryResponse>(response.data);
+    return {
+      total: data.total,
+      page: data.page,
+      limit: data.limit,
+      items: (data.items || []).map(item => toCamelCase<CryptoBacktestHistoryItem>(item)),
+    };
   },
 
   /**

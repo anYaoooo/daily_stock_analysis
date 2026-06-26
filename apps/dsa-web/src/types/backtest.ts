@@ -19,12 +19,19 @@ export interface BacktestRunRequest {
   limit?: number;
 }
 
+export interface CryptoBacktestSelectedRunRequest {
+  analysisHistoryIds: number[];
+  planTypes?: string[];
+  force?: boolean;
+}
+
 export interface BacktestRunResponse {
   processed: number;
   saved: number;
   completed: number;
   insufficient: number;
   errors: number;
+  skipped?: number;
 }
 
 export interface BacktestDeleteResponse {
@@ -109,11 +116,55 @@ export interface CryptoBacktestResultItem {
   diagnostics: Record<string, unknown>;
 }
 
+export interface CryptoBacktestHistoryPlan {
+  planType: string;
+  horizon: string;
+  analysisMode?: string;
+  analysisTimeframe?: string;
+  direction: string;
+  entryPrice?: number | null;
+  stopLoss?: number | null;
+  takeProfit?: number | null;
+  invalidCondition?: string | null;
+  riskReward?: string | null;
+  positionHint?: string | null;
+  confidence?: string | null;
+  backtestable: boolean;
+  qualityStatus: string;
+  missingFields: string[];
+  noTradeReason?: string | null;
+  backtestStatus: string;
+  latestResult?: CryptoBacktestResultItem | null;
+}
+
+export interface CryptoBacktestHistoryItem {
+  analysisHistoryId: number;
+  queryId?: string;
+  code: string;
+  stockName?: string;
+  reportType?: string;
+  analysisCreatedAt?: string;
+  analysisMode?: string;
+  analysisTimeframe?: string;
+  analysisSummary?: string;
+  operationAdvice?: string;
+  trendPrediction?: string;
+  backtestStatus: string;
+  plans: CryptoBacktestHistoryPlan[];
+}
+
 export interface BacktestResultsResponse {
   total: number;
   page: number;
   limit: number;
   items: BacktestResultItem[];
+}
+
+export interface CryptoBacktestHistoryResponse {
+  total: number;
+  page: number;
+  limit: number;
+  items: CryptoBacktestHistoryItem[];
 }
 
 // ============ Performance Metrics ============

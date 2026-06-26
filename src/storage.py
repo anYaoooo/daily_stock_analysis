@@ -2089,6 +2089,9 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             session.execute(
                 delete(BacktestResult).where(BacktestResult.analysis_history_id.in_(existing_ids))
             )
+            session.execute(
+                delete(CryptoBacktestResult).where(CryptoBacktestResult.analysis_history_id.in_(existing_ids))
+            )
             result = session.execute(
                 delete(AnalysisHistory).where(AnalysisHistory.id.in_(existing_ids))
             )

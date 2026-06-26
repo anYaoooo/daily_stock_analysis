@@ -15,9 +15,12 @@ from api.v1.schemas.backtest import (
     BacktestRunRequest,
     BacktestRunResponse,
     CryptoBacktestMetrics,
+    CryptoBacktestHistoryItem,
+    CryptoBacktestHistoryResponse,
     CryptoBacktestResultsResponse,
     CryptoBacktestResultItem,
     CryptoBacktestRunResponse,
+    CryptoBacktestSelectedRunRequest,
     BacktestResultItem,
     BacktestResultsResponse,
     PerformanceMetrics,
@@ -113,6 +116,84 @@ def run_crypto_backtest(
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "message": f"BTC 回测执行失败: {str(exc)}"},
+        )
+
+
+@router.post(
+    "/crypto/run-selected",
+    response_model=CryptoBacktestRunResponse,
+    responses={
+        200: {"description": "指定 BTC 历史记录回测执行完成"},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="按历史记录触发 BTC 计划回测",
+    description="根据 analysis_history_id 精确回测已保存报告中的计划，避免用户手动理解底层候选参数。",
+)
+def run_selected_crypto_backtests(
+    request: CryptoBacktestSelectedRunRequest,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> CryptoBacktestRunResponse:
+    try:
+        allowed_plan_types = {"daily_long", "daily_short", "intraday"}
+        plan_types = request.plan_types or None
+        if plan_types:
+            invalid = sorted({item for item in plan_types if item not in allowed_plan_types})
+            if invalid:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "invalid_params",
+                        "message": f"Unsupported plan_types: {', '.join(invalid)}",
+                    },
+                )
+        service = CryptoBacktestService(db_manager)
+        stats = service.run_selected_backtests(
+            analysis_history_ids=request.analysis_history_ids,
+            plan_types=plan_types,
+            force=request.force,
+        )
+        return CryptoBacktestRunResponse(**stats)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"指定 BTC 回测执行失败: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"指定 BTC 回测执行失败: {str(exc)}"},
+        )
+
+
+@router.get(
+    "/crypto/history",
+    response_model=CryptoBacktestHistoryResponse,
+    responses={
+        200: {"description": "BTC 历史分析记录与回测状态列表"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取 BTC 历史分析记录回测入口",
+    description="分页返回 BTC 分析历史、结构化计划可回测状态和最新计划回测摘要。",
+)
+def get_crypto_backtest_history(
+    code: Optional[str] = Query(None, description="BTC 代码筛选"),
+    page: int = Query(1, ge=1, description="页码"),
+    limit: int = Query(20, ge=1, le=100, description="每页数量"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> CryptoBacktestHistoryResponse:
+    try:
+        service = CryptoBacktestService(db_manager)
+        data = service.get_history_records(code=code, page=page, limit=limit)
+        return CryptoBacktestHistoryResponse(
+            total=int(data.get("total", 0)),
+            page=page,
+            limit=limit,
+            items=[CryptoBacktestHistoryItem(**item) for item in data.get("items", [])],
+        )
+    except Exception as exc:
+        logger.error(f"查询 BTC 历史回测入口失败: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"查询 BTC 历史回测入口失败: {str(exc)}"},
         )
 
 
