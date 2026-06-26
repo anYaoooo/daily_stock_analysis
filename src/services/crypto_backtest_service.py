@@ -203,14 +203,21 @@ class CryptoBacktestService:
         self,
         *,
         code: Optional[str] = None,
+        analysis_mode: Optional[str] = None,
+        direction: Optional[str] = None,
+        plan_type: Optional[str] = None,
+        result_status: Optional[str] = None,
         page: int = 1,
         limit: int = 20,
     ) -> dict[str, Any]:
         engine_version = self._engine_version()
+        needs_plan_filter = any((analysis_mode, direction, plan_type, result_status))
+        fetch_limit = 10000 if needs_plan_filter else int(limit)
+        fetch_offset = 0 if needs_plan_filter else max(page - 1, 0) * int(limit)
         rows, total = self.repo.get_history_records(
             code=code,
-            offset=max(page - 1, 0) * int(limit),
-            limit=int(limit),
+            offset=fetch_offset,
+            limit=fetch_limit,
         )
         result_rows = self.repo.get_results_for_history_ids(
             analysis_history_ids=[int(row.id) for row in rows if row.id is not None],
@@ -222,15 +229,51 @@ class CryptoBacktestService:
             if key not in results_by_key:
                 results_by_key[key] = result
 
+        items = [
+            self._history_record_to_dict(
+                row,
+                results_by_key,
+                analysis_mode_filter=analysis_mode,
+                direction_filter=direction,
+                plan_type_filter=plan_type,
+                result_status_filter=result_status,
+            )
+            for row in rows
+        ]
+        items = [item for item in items if item is not None]
+        filtered_total = len(items) if needs_plan_filter else total
+        if needs_plan_filter:
+            offset = max(page - 1, 0) * int(limit)
+            items = items[offset:offset + int(limit)]
+
         return {
-            "total": total,
+            "total": filtered_total,
             "page": page,
             "limit": limit,
-            "items": [
-                self._history_record_to_dict(row, results_by_key)
-                for row in rows
-            ],
+            "items": items,
         }
+
+    def get_history_record(self, analysis_history_id: int) -> Optional[dict[str, Any]]:
+        engine_version = self._engine_version()
+        rows, _total = self.repo.get_history_records(
+            ids=[int(analysis_history_id)],
+            offset=0,
+            limit=1,
+        )
+        if not rows:
+            return None
+
+        result_rows = self.repo.get_results_for_history_ids(
+            analysis_history_ids=[int(rows[0].id)],
+            engine_version=engine_version,
+        )
+        results_by_key: dict[tuple[int, str], CryptoBacktestResult] = {}
+        for result in result_rows:
+            key = (int(result.analysis_history_id), str(result.plan_type))
+            if key not in results_by_key:
+                results_by_key[key] = result
+
+        return self._history_record_to_dict(rows[0], results_by_key)
 
     def get_recent_evaluations(
         self,
@@ -238,6 +281,8 @@ class CryptoBacktestService:
         code: Optional[str] = None,
         horizon: Optional[str] = None,
         plan_type: Optional[str] = None,
+        direction: Optional[str] = None,
+        result_status: Optional[str] = None,
         page: int = 1,
         limit: int = 50,
     ) -> dict[str, Any]:
@@ -246,6 +291,8 @@ class CryptoBacktestService:
             code=normalize_crypto_symbol(code) if code else None,
             horizon=horizon,
             plan_type=plan_type,
+            direction=direction,
+            result_status=result_status,
             engine_version=engine_version,
             offset=max(page - 1, 0) * int(limit),
             limit=int(limit),
@@ -377,6 +424,11 @@ class CryptoBacktestService:
                 evaluation=evaluation,
                 data_snapshot=batch.metadata,
                 lookahead_guard=lookahead_guard,
+            )
+            evaluation = self._attach_indicator_tags(
+                evaluation=evaluation,
+                analysis=analysis,
+                plan=plan,
             )
             status = evaluation.get("eval_status")
             if status == "completed":
@@ -625,6 +677,91 @@ class CryptoBacktestService:
         enriched["diagnostics"] = diagnostics
         return enriched
 
+    @classmethod
+    def _attach_indicator_tags(
+        cls,
+        *,
+        evaluation: dict[str, Any],
+        analysis: AnalysisHistory,
+        plan: CryptoPlan,
+    ) -> dict[str, Any]:
+        enriched = dict(evaluation)
+        diagnostics = dict(enriched.get("diagnostics") or {})
+        diagnostics["indicator_tags"] = cls._indicator_tags_from_snapshot(analysis, plan)
+        enriched["diagnostics"] = diagnostics
+        return enriched
+
+    @classmethod
+    def _indicator_tags_from_snapshot(cls, analysis: AnalysisHistory, plan: CryptoPlan) -> dict[str, Any]:
+        snapshot = parse_json_field(getattr(analysis, "context_snapshot", None))
+        crypto_context = cls._crypto_context_from_snapshot(snapshot)
+        timeframes = crypto_context.get("timeframes") if isinstance(crypto_context.get("timeframes"), dict) else {}
+        daily_context = timeframes.get("daily") if isinstance(timeframes.get("daily"), dict) else crypto_context
+        hourly_context = timeframes.get("hourly") if isinstance(timeframes.get("hourly"), dict) else {}
+        source_context = hourly_context if plan.horizon == "intraday" and hourly_context else daily_context
+        intraday = crypto_context.get("intraday") if isinstance(crypto_context.get("intraday"), dict) else {}
+        event = source_context.get("event") if isinstance(source_context.get("event"), dict) else {}
+        volatility = source_context.get("volatility") if isinstance(source_context.get("volatility"), dict) else {}
+
+        return {
+            "tag_version": "btc-indicators-v1",
+            "source_timeframe": "hourly" if source_context is hourly_context and hourly_context else "daily",
+            "price_action": {
+                "state": cls._tag_text(source_context, "price_action", "state"),
+            },
+            "ema": {
+                "structure": cls._tag_text(source_context, "ema", "structure"),
+            },
+            "vwap": {
+                "price_position": cls._tag_text(source_context, "vwap", "price_position"),
+            },
+            "volume": {
+                "confirmation": cls._tag_text(source_context, "volume", "confirmation"),
+            },
+            "volatility": {
+                "atr14_pct": cls._safe_float(volatility.get("atr14_pct")),
+            },
+            "intraday": {
+                "alignment": cls._clean_tag_value(intraday.get("alignment")),
+                "daily_bias": cls._clean_tag_value(intraday.get("daily_bias")),
+                "hourly_bias": cls._clean_tag_value(intraday.get("hourly_bias")),
+            },
+            "event": {
+                "type": cls._clean_tag_value(event.get("type")),
+            },
+        }
+
+    @staticmethod
+    def _crypto_context_from_snapshot(snapshot: Any) -> dict[str, Any]:
+        if not isinstance(snapshot, dict):
+            return {}
+        candidates = [
+            snapshot.get("crypto_technical"),
+        ]
+        enhanced = snapshot.get("enhanced_context")
+        if isinstance(enhanced, dict):
+            candidates.append(enhanced.get("crypto_technical"))
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                return candidate
+        return {}
+
+    @classmethod
+    def _tag_text(cls, payload: dict[str, Any], *path: str) -> Optional[str]:
+        current: Any = payload
+        for key in path:
+            if not isinstance(current, dict):
+                return None
+            current = current.get(key)
+        return cls._clean_tag_value(current)
+
+    @staticmethod
+    def _clean_tag_value(value: Any) -> Optional[str]:
+        text = str(value or "").strip().lower()
+        if not text or text in {"n/a", "none", "null", "unknown", "--"}:
+            return None
+        return text
+
     @staticmethod
     def _build_result_model(
         *,
@@ -692,6 +829,7 @@ class CryptoBacktestService:
             ("plan_type", None, None, plan_type, [row for row in rows if row.plan_type == plan_type])
             for plan_type in plan_types
         )
+        indicator_group_breakdown = self._indicator_group_breakdown(rows)
 
         for scope, code, horizon, plan_type, scoped_rows in summary_specs:
             data = CryptoBacktestEngine.compute_summary(
@@ -705,6 +843,8 @@ class CryptoBacktestService:
                 "equity_curve": data.get("equity_curve") or [],
                 "sample_confidence": (data.get("diagnostics") or {}).get("sample_confidence") or {},
             }
+            if scope == "overall":
+                diagnostics["indicator_group_breakdown"] = indicator_group_breakdown
             self.repo.upsert_summary(
                 CryptoBacktestSummary(
                     scope=scope,
@@ -799,14 +939,101 @@ class CryptoBacktestService:
             "diagnostics": diagnostics,
         }
 
+    @classmethod
+    def _indicator_group_breakdown(cls, rows: list[CryptoBacktestResult]) -> dict[str, Any]:
+        dimensions: list[tuple[str, str, Any]] = [
+            ("plan_type", "计划类型", lambda row, _tags: getattr(row, "plan_type", None)),
+            ("direction", "方向", lambda row, _tags: getattr(row, "direction", None)),
+            ("intraday.alignment", "多周期对齐", lambda _row, tags: cls._nested_tag(tags, "intraday", "alignment")),
+            ("price_action.state", "价格行为", lambda _row, tags: cls._nested_tag(tags, "price_action", "state")),
+            ("vwap.price_position", "VWAP 状态", lambda _row, tags: cls._nested_tag(tags, "vwap", "price_position")),
+            ("ema.structure", "EMA 结构", lambda _row, tags: cls._nested_tag(tags, "ema", "structure")),
+            ("volume.confirmation", "量能确认", lambda _row, tags: cls._nested_tag(tags, "volume", "confirmation")),
+            ("event.type", "事件类型", lambda _row, tags: cls._nested_tag(tags, "event", "type")),
+        ]
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for dimension, label, getter in dimensions:
+            buckets: dict[str, list[CryptoBacktestResult]] = {}
+            for row in rows:
+                tags = cls._row_indicator_tags(row)
+                raw_key = getter(row, tags)
+                key = cls._clean_tag_value(raw_key) or "unknown"
+                buckets.setdefault(key, []).append(row)
+            grouped[dimension] = [
+                cls._group_bucket_metrics(
+                    dimension=dimension,
+                    dimension_label=label,
+                    key=key,
+                    rows=bucket_rows,
+                )
+                for key, bucket_rows in sorted(buckets.items())
+            ]
+        return {
+            "minimum_sample_count": 30,
+            "groups": grouped,
+        }
+
+    @classmethod
+    def _group_bucket_metrics(
+        cls,
+        *,
+        dimension: str,
+        dimension_label: str,
+        key: str,
+        rows: list[CryptoBacktestResult],
+    ) -> dict[str, Any]:
+        data = CryptoBacktestEngine.compute_summary(
+            results=rows,
+            scope=dimension,
+            code=None,
+            engine_version=getattr(rows[0], "engine_version", BTC_PLAN_ENGINE_VERSION) if rows else BTC_PLAN_ENGINE_VERSION,
+        )
+        risk_metrics = data.get("risk_metrics") or {}
+        sample_confidence = (data.get("diagnostics") or {}).get("sample_confidence") or {}
+        return {
+            "dimension": dimension,
+            "dimension_label": dimension_label,
+            "key": key,
+            "total_evaluations": data.get("total_evaluations") or 0,
+            "completed_count": data.get("completed_count") or 0,
+            "triggered_count": data.get("triggered_count") or 0,
+            "win_rate_pct": data.get("win_rate_pct"),
+            "avg_simulated_return_pct": data.get("avg_simulated_return_pct"),
+            "max_drawdown_pct": risk_metrics.get("max_drawdown_pct"),
+            "avg_r_multiple": risk_metrics.get("avg_r_multiple"),
+            "sample_confidence": sample_confidence,
+        }
+
+    @staticmethod
+    def _row_indicator_tags(row: CryptoBacktestResult) -> dict[str, Any]:
+        diagnostics = parse_json_field(getattr(row, "diagnostics_json", None)) or {}
+        tags = diagnostics.get("indicator_tags") if isinstance(diagnostics, dict) else None
+        return tags if isinstance(tags, dict) else {}
+
+    @staticmethod
+    def _nested_tag(payload: dict[str, Any], *path: str) -> Optional[str]:
+        current: Any = payload
+        for key in path:
+            if not isinstance(current, dict):
+                return None
+            current = current.get(key)
+        return str(current) if current is not None else None
+
     def _history_record_to_dict(
         self,
         row: AnalysisHistory,
         results_by_key: dict[tuple[int, str], CryptoBacktestResult],
-    ) -> dict[str, Any]:
+        *,
+        analysis_mode_filter: Optional[str] = None,
+        direction_filter: Optional[str] = None,
+        plan_type_filter: Optional[str] = None,
+        result_status_filter: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
         raw = parse_json_field(row.raw_result)
         snapshot = parse_json_field(row.context_snapshot)
         analysis_mode = self._analysis_mode_from_snapshot(row)
+        if analysis_mode_filter and analysis_mode != analysis_mode_filter:
+            return None
         plans = self._extract_plans(row)
         plan_items = [
             self._history_plan_to_dict(
@@ -816,6 +1043,18 @@ class CryptoBacktestService:
             )
             for plan in plans
         ]
+        plan_items = [
+            item
+            for item in plan_items
+            if self._matches_plan_filters(
+                item,
+                direction_filter=direction_filter,
+                plan_type_filter=plan_type_filter,
+                result_status_filter=result_status_filter,
+            )
+        ]
+        if any((direction_filter, plan_type_filter, result_status_filter)) and not plan_items:
+            return None
         terminal_statuses = {"completed", "win", "loss", "neutral", "no_entry", "skipped", "insufficient_data"}
         if not plan_items:
             backtest_status = "no_plan"
@@ -846,6 +1085,22 @@ class CryptoBacktestService:
                 "context_snapshot_available": isinstance(snapshot, dict),
             },
         }
+
+    @staticmethod
+    def _matches_plan_filters(
+        item: dict[str, Any],
+        *,
+        direction_filter: Optional[str],
+        plan_type_filter: Optional[str],
+        result_status_filter: Optional[str],
+    ) -> bool:
+        if direction_filter and item.get("direction") != direction_filter:
+            return False
+        if plan_type_filter and item.get("plan_type") != plan_type_filter:
+            return False
+        if result_status_filter and item.get("backtest_status") != result_status_filter:
+            return False
+        return True
 
     def _history_plan_to_dict(
         self,
@@ -883,6 +1138,7 @@ class CryptoBacktestService:
             "no_trade_reason": self._no_trade_reason(plan),
             "backtest_status": backtest_status,
             "latest_result": latest_result,
+            "indicator_tags": (latest_result or {}).get("diagnostics", {}).get("indicator_tags") if latest_result else None,
         }
 
     @staticmethod

@@ -9,8 +9,11 @@ import type {
   PerformanceMetrics,
   BacktestPhaseFilter,
   BacktestTimeframeFilter,
+  CryptoBacktestDirectionFilter,
   CryptoBacktestHistoryResponse,
   CryptoBacktestHistoryItem,
+  CryptoBacktestPlanTypeFilter,
+  CryptoBacktestResultStatusFilter,
   CryptoBacktestSelectedRunRequest,
 } from '../types/backtest';
 
@@ -58,12 +61,20 @@ export const backtestApi = {
    */
   getHistory: async (params: {
     code?: string;
+    analysisMode?: BacktestTimeframeFilter;
+    direction?: CryptoBacktestDirectionFilter;
+    planType?: CryptoBacktestPlanTypeFilter;
+    resultStatus?: CryptoBacktestResultStatusFilter;
     page?: number;
     limit?: number;
   } = {}): Promise<CryptoBacktestHistoryResponse> => {
     const { code, page = 1, limit = 20 } = params;
     const queryParams: Record<string, string | number> = { page, limit };
     if (code) queryParams.code = code;
+    if (params.analysisMode && params.analysisMode !== 'all') queryParams.analysis_mode = params.analysisMode;
+    if (params.direction && params.direction !== 'all') queryParams.direction = params.direction;
+    if (params.planType && params.planType !== 'all') queryParams.plan_type = params.planType;
+    if (params.resultStatus && params.resultStatus !== 'all') queryParams.result_status = params.resultStatus;
 
     const response = await apiClient.get<Record<string, unknown>>(
       '/api/v1/backtest/crypto/history',
@@ -76,6 +87,16 @@ export const backtestApi = {
       limit: data.limit,
       items: (data.items || []).map(item => toCamelCase<CryptoBacktestHistoryItem>(item)),
     };
+  },
+
+  /**
+   * Get one BTC analysis history record with plan-level backtest status
+   */
+  getHistoryRecord: async (analysisHistoryId: number): Promise<CryptoBacktestHistoryItem> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/backtest/crypto/history/${analysisHistoryId}`,
+    );
+    return toCamelCase<CryptoBacktestHistoryItem>(response.data);
   },
 
   /**
@@ -113,6 +134,9 @@ export const backtestApi = {
     analysisDateTo?: string;
     analysisPhase?: BacktestPhaseFilter;
     analysisMode?: BacktestTimeframeFilter;
+    direction?: CryptoBacktestDirectionFilter;
+    planType?: CryptoBacktestPlanTypeFilter;
+    resultStatus?: CryptoBacktestResultStatusFilter;
     page?: number;
     limit?: number;
   } = {}): Promise<BacktestResultsResponse> => {
@@ -123,6 +147,9 @@ export const backtestApi = {
     if (params.analysisMode && params.analysisMode !== 'all') {
       queryParams.horizon = params.analysisMode === 'hourly' ? 'intraday' : 'daily';
     }
+    if (params.direction && params.direction !== 'all') queryParams.direction = params.direction;
+    if (params.planType && params.planType !== 'all') queryParams.plan_type = params.planType;
+    if (params.resultStatus && params.resultStatus !== 'all') queryParams.result_status = params.resultStatus;
 
     const response = await apiClient.get<Record<string, unknown>>(
       '/api/v1/backtest/crypto/results',
@@ -147,10 +174,15 @@ export const backtestApi = {
     analysisDateTo?: string;
     analysisPhase?: BacktestPhaseFilter;
     analysisMode?: BacktestTimeframeFilter;
+    planType?: CryptoBacktestPlanTypeFilter;
   } = {}): Promise<PerformanceMetrics | null> => {
     try {
       const queryParams: Record<string, string | number> = {};
       if (params.analysisMode && params.analysisMode !== 'all') queryParams.horizon = params.analysisMode === 'hourly' ? 'intraday' : 'daily';
+      if (params.planType && params.planType !== 'all') {
+        queryParams.scope = 'plan_type';
+        queryParams.plan_type = params.planType;
+      }
       const response = await apiClient.get<Record<string, unknown>>(
         '/api/v1/backtest/crypto/performance',
         { params: queryParams },

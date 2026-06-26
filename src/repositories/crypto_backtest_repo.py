@@ -230,6 +230,8 @@ class CryptoBacktestRepository:
         code: Optional[str],
         horizon: Optional[str],
         plan_type: Optional[str],
+        direction: Optional[str],
+        result_status: Optional[str],
         engine_version: Optional[str],
         offset: int,
         limit: int,
@@ -239,6 +241,8 @@ class CryptoBacktestRepository:
                 code=code,
                 horizon=horizon,
                 plan_type=plan_type,
+                direction=direction,
+                result_status=result_status,
                 engine_version=engine_version,
             )
             where_clause = and_(*conditions) if conditions else True
@@ -329,7 +333,9 @@ class CryptoBacktestRepository:
         code: Optional[str],
         horizon: Optional[str],
         plan_type: Optional[str],
-        engine_version: Optional[str],
+        direction: Optional[str] = None,
+        result_status: Optional[str] = None,
+        engine_version: Optional[str] = None,
     ) -> list[object]:
         conditions = []
         if code:
@@ -338,6 +344,13 @@ class CryptoBacktestRepository:
             conditions.append(CryptoBacktestResult.horizon == horizon)
         if plan_type:
             conditions.append(CryptoBacktestResult.plan_type == plan_type)
+        if direction:
+            conditions.append(CryptoBacktestResult.direction == direction)
+        if result_status:
+            if result_status in {"win", "loss", "neutral", "no_entry", "skipped", "insufficient_data"}:
+                conditions.append(CryptoBacktestResult.outcome == result_status)
+            else:
+                conditions.append(CryptoBacktestResult.eval_status == result_status)
         if engine_version:
             conditions.append(CryptoBacktestResult.engine_version == engine_version)
         return conditions

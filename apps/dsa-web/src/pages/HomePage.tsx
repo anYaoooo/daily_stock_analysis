@@ -485,6 +485,16 @@ const HomePage: React.FC = () => {
     }
   }, [closeStrategyMenu, focusStrategyItem, strategyOptions.length]);
   const setupNeedsAction = setupStatus ? !setupStatus.isComplete : false;
+  const requestedHistoryId = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const raw = params.get('history');
+    if (!raw) {
+      return null;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [location.search]);
+
   const setupMissingLabels = useMemo(() => {
     if (!setupStatus) {
       return '';
@@ -495,8 +505,16 @@ const HomePage: React.FC = () => {
     return requiredNeedsAction.slice(0, 3).join(uiLanguage === 'en' ? ', ' : '、');
   }, [setupStatus, uiLanguage]);
 
+  const loadInitialHistoryForRoute = useCallback(async () => {
+    if (requestedHistoryId) {
+      await refreshHistory();
+      return;
+    }
+    await loadInitialHistory();
+  }, [loadInitialHistory, refreshHistory, requestedHistoryId]);
+
   useDashboardLifecycle({
-    loadInitialHistory,
+    loadInitialHistory: loadInitialHistoryForRoute,
     refreshHistory,
     loadStockBar,
     refreshStockBar,
@@ -506,6 +524,15 @@ const HomePage: React.FC = () => {
     refreshActiveTasks,
     removeTask,
   });
+
+  useEffect(() => {
+    if (!requestedHistoryId) {
+      return;
+    }
+    void selectHistoryItem(requestedHistoryId).then(() => {
+      scrollDashboardTop();
+    });
+  }, [requestedHistoryId, scrollDashboardTop, selectHistoryItem]);
 
   const watchlistState = useWatchlist();
 

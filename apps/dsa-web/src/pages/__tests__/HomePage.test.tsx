@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { analysisApi, DuplicateTaskError } from '../../api/analysis';
 import { agentApi } from '../../api/agent';
+import { backtestApi } from '../../api/backtest';
 import { historyApi } from '../../api/history';
 import { stocksApi } from '../../api/stocks';
 import { systemConfigApi } from '../../api/systemConfig';
@@ -61,6 +62,12 @@ vi.mock('../../api/systemConfig', () => ({
 vi.mock('../../api/agent', () => ({
   agentApi: {
     getSkills: vi.fn(),
+  },
+}));
+
+vi.mock('../../api/backtest', () => ({
+  backtestApi: {
+    getHistoryRecord: vi.fn(),
   },
 }));
 
@@ -250,6 +257,12 @@ describe('HomePage', () => {
         { date: '2026-06-17', open: 63800, high: 66000, low: 63200, close: 65000, changePercent: 1.88 },
       ],
     });
+    vi.mocked(backtestApi.getHistoryRecord).mockResolvedValue({
+      analysisHistoryId: 7,
+      code: 'BTC',
+      backtestStatus: 'no_plan',
+      plans: [],
+    });
   });
 
   it('renders the dashboard workspace and auto-loads the first report', async () => {
@@ -286,6 +299,43 @@ describe('HomePage', () => {
       }),
     ).toBeInTheDocument();
     expect(historyApi.getMarkdown).not.toHaveBeenCalled();
+  });
+
+  it('opens the requested history report from the history query parameter', async () => {
+    const linkedReport = {
+      ...historyReport,
+      meta: {
+        ...historyReport.meta,
+        id: 7,
+        queryId: 'q-7',
+        stockCode: 'BTC',
+        stockName: 'Bitcoin',
+      },
+      summary: {
+        ...historyReport.summary,
+        analysisSummary: 'BTC 深链报告',
+      },
+    };
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [historyItem],
+    });
+    vi.mocked(historyApi.getDetail).mockImplementation(async (recordId: number) => (
+      recordId === 7 ? linkedReport : historyReport
+    ));
+
+    render(
+      <MemoryRouter initialEntries={['/?history=7']}>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('BTC 深链报告')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(historyApi.getDetail).toHaveBeenCalledWith(7);
+    });
   });
 
   it('loads markdown only after opening the full report drawer', async () => {

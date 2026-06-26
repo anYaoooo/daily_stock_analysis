@@ -9,6 +9,18 @@ import type { DecisionAction, MarketPhaseSummary } from './analysis';
 export type BacktestAnalysisPhase = 'premarket' | 'intraday' | 'postmarket' | 'unknown';
 export type BacktestPhaseFilter = BacktestAnalysisPhase | 'all';
 export type BacktestTimeframeFilter = 'all' | 'daily' | 'hourly';
+export type CryptoBacktestDirectionFilter = 'all' | 'long' | 'short' | 'wait';
+export type CryptoBacktestPlanTypeFilter = 'all' | 'daily_long' | 'daily_short' | 'intraday';
+export type CryptoBacktestResultStatusFilter =
+  | 'all'
+  | 'pending'
+  | 'win'
+  | 'loss'
+  | 'neutral'
+  | 'no_entry'
+  | 'skipped'
+  | 'insufficient_data'
+  | 'invalid_plan';
 
 export interface BacktestRunRequest {
   code?: string;
@@ -135,6 +147,7 @@ export interface CryptoBacktestHistoryPlan {
   noTradeReason?: string | null;
   backtestStatus: string;
   latestResult?: CryptoBacktestResultItem | null;
+  indicatorTags?: Record<string, unknown> | null;
 }
 
 export interface CryptoBacktestHistoryItem {
@@ -151,6 +164,7 @@ export interface CryptoBacktestHistoryItem {
   trendPrediction?: string;
   backtestStatus: string;
   plans: CryptoBacktestHistoryPlan[];
+  diagnostics?: Record<string, unknown>;
 }
 
 export interface BacktestResultsResponse {

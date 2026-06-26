@@ -45,6 +45,20 @@
 
 计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。回测引擎当前仍以可解析的 `entry_price`、`stop_loss`、`take_profit` 作为机器执行字段；缺失关键字段的计划会在历史记录入口标记为 `invalid_plan`，不会被静默当作有效交易。
 
+每个计划回测结果还会在 `diagnostics.indicator_tags` 中保存生成报告时的低敏 BTC 指标快照标签，当前包括：
+
+| 标签 | 来源 | 用途 |
+| --- | --- | --- |
+| `price_action.state` | 日线计划取日线上下文，日内计划优先取小时线上下文 | 区分突破、跌破、扫高扫低和区间 |
+| `ema.structure` | 同上 | 识别 bullish / bearish / mixed 趋势结构 |
+| `vwap.price_position` | 同上 | 判断价格位于 rolling VWAP 上方、下方或附近 |
+| `volume.confirmation` | 同上 | 标记高量、低量或正常确认 |
+| `volatility.atr14_pct` | 同上 | 记录当时 ATR14% 波动环境 |
+| `intraday.alignment` | 多周期上下文 | 区分顺日线、逆日线短线和等待触发 |
+| `event.type` | 日线或小时线事件上下文 | 标记急跌、扫低、反弹候选等事件 |
+
+这些标签只保存结构化摘要，不保存 prompt 或新闻原文，用于后续按指标组合复盘和风控降权。
+
 ### 3.2 行情来源
 
 服务通过 `CryptoFetcher.get_kline_data()` 获取 BTC K 线：
@@ -226,6 +240,16 @@ else:
 | `trade` | 仓位、成交价、手续费、净 PnL 等交易明细 |
 | `execution` | 本次回测使用的手续费、滑点、权益、杠杆和风控参数 |
 | `diagnostics` | 完整诊断信息 |
+| `diagnostics.indicator_tags` | 回测时固化的 BTC 指标快照标签 |
+
+结果接口支持过滤参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `horizon=daily|intraday` | 按日线主计划或小时线日内计划过滤 |
+| `plan_type=daily_long|daily_short|intraday` | 按计划类型过滤 |
+| `direction=long|short|wait` | 按计划方向过滤 |
+| `result_status=win|loss|neutral|no_entry|skipped|insufficient_data` | 按回测结果状态过滤 |
 
 `trade` 结构主要包含：
 
@@ -291,6 +315,8 @@ else:
 | `equity_curve` | 按回测交易顺序生成的权益曲线 |
 
 `diagnostics.sample_confidence` 会按 `triggered_count < 30` 标记低置信度样本，避免少量成交样本被误读为稳定策略结论。
+
+`diagnostics.indicator_group_breakdown` 会按计划类型、方向、多周期对齐、价格行为、VWAP、EMA、量能确认和事件类型分组。每个分组 bucket 展示样本数、触发数、胜率、平均净收益、最大回撤、平均 R 倍数和低样本置信提示。
 
 ## 6. API 使用
 

@@ -219,6 +219,238 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         self.assertEqual(item["plans"][0]["risk_reward"], "1:2")
         self.assertEqual(item["plans"][0]["latest_result"]["trade"]["net_pnl"], 12.3)
 
+    def test_indicator_tags_are_extracted_from_snapshot_for_intraday_plan(self):
+        analysis = AnalysisHistory(
+            id=31,
+            code="BTC",
+            context_snapshot=json.dumps(
+                {
+                    "enhanced_context": {
+                        "crypto_technical": {
+                            "timeframes": {
+                                "daily": {
+                                    "price_action": {"state": "range"},
+                                    "ema": {"structure": "mixed"},
+                                    "vwap": {"price_position": "below"},
+                                    "volume": {"confirmation": "normal"},
+                                    "volatility": {"atr14_pct": 2.1},
+                                },
+                                "hourly": {
+                                    "price_action": {"state": "breakout"},
+                                    "ema": {"structure": "bullish"},
+                                    "vwap": {"price_position": "above"},
+                                    "volume": {"confirmation": "high"},
+                                    "volatility": {"atr14_pct": 0.8},
+                                    "event": {"type": "liquidity_sweep_low_reversal_candidate"},
+                                },
+                            },
+                            "intraday": {
+                                "alignment": "countertrend_long",
+                                "daily_bias": "short",
+                                "hourly_bias": "long",
+                            },
+                        }
+                    }
+                }
+            ),
+        )
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            entry_price=100,
+            stop_loss=99,
+            take_profit=102,
+            raw_plan={},
+        )
+
+        tags = CryptoBacktestService._indicator_tags_from_snapshot(analysis, plan)
+
+        self.assertEqual(tags["source_timeframe"], "hourly")
+        self.assertEqual(tags["price_action"]["state"], "breakout")
+        self.assertEqual(tags["ema"]["structure"], "bullish")
+        self.assertEqual(tags["vwap"]["price_position"], "above")
+        self.assertEqual(tags["volume"]["confirmation"], "high")
+        self.assertEqual(tags["volatility"]["atr14_pct"], 0.8)
+        self.assertEqual(tags["intraday"]["alignment"], "countertrend_long")
+        self.assertEqual(tags["event"]["type"], "liquidity_sweep_low_reversal_candidate")
+
+    def test_indicator_group_breakdown_groups_by_existing_tags(self):
+        rows = [
+            CryptoBacktestResult(
+                analysis_history_id=41,
+                code="BTCUSDT",
+                plan_type="daily_long",
+                horizon="daily",
+                direction="long",
+                engine_version="btc-plan-v2",
+                eval_status="completed",
+                entry_triggered=True,
+                outcome="win",
+                simulated_return_pct=1.2,
+                diagnostics_json=json.dumps(
+                    {
+                        "indicator_tags": {
+                            "price_action": {"state": "breakout"},
+                            "ema": {"structure": "bullish"},
+                        },
+                        "trade": {
+                            "initial_equity": 10000,
+                            "net_pnl": 120,
+                            "net_return_pct": 1.2,
+                            "r_multiple": 1.2,
+                            "total_fee": 2,
+                        },
+                    }
+                ),
+            ),
+            CryptoBacktestResult(
+                analysis_history_id=42,
+                code="BTCUSDT",
+                plan_type="daily_short",
+                horizon="daily",
+                direction="short",
+                engine_version="btc-plan-v2",
+                eval_status="completed",
+                entry_triggered=True,
+                outcome="loss",
+                simulated_return_pct=-0.8,
+                diagnostics_json=json.dumps(
+                    {
+                        "indicator_tags": {
+                            "price_action": {"state": "breakdown"},
+                            "ema": {"structure": "bearish"},
+                        },
+                        "trade": {
+                            "initial_equity": 10000,
+                            "net_pnl": -80,
+                            "net_return_pct": -0.8,
+                            "r_multiple": -0.8,
+                            "total_fee": 2,
+                        },
+                    }
+                ),
+            ),
+        ]
+
+        breakdown = CryptoBacktestService._indicator_group_breakdown(rows)
+
+        price_action_groups = {
+            item["key"]: item for item in breakdown["groups"]["price_action.state"]
+        }
+        self.assertEqual(price_action_groups["breakout"]["total_evaluations"], 1)
+        self.assertEqual(price_action_groups["breakout"]["win_rate_pct"], 100.0)
+        self.assertTrue(price_action_groups["breakout"]["sample_confidence"]["is_low_confidence"])
+        self.assertEqual(price_action_groups["breakdown"]["win_rate_pct"], 0.0)
+
+    def test_history_record_filters_plans_by_direction_plan_type_and_status(self):
+        analysis = AnalysisHistory(
+            id=51,
+            query_id="q-51",
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "long_plan": {
+                                "entry_price": "100000",
+                                "stop_loss": "99000",
+                                "take_profit": "102000",
+                            },
+                            "short_plan": {
+                                "entry_price": "98000",
+                                "stop_loss": "99000",
+                                "take_profit": "95000",
+                            },
+                        }
+                    }
+                }
+            ),
+            created_at=datetime(2026, 1, 1, 8),
+        )
+        result = CryptoBacktestResult(
+            analysis_history_id=51,
+            code="BTCUSDT",
+            plan_type="daily_short",
+            horizon="daily",
+            direction="short",
+            engine_version="btc-plan-v2",
+            eval_status="completed",
+            outcome="loss",
+        )
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+
+        item = service._history_record_to_dict(
+            analysis,
+            {(51, "daily_short"): result},
+            direction_filter="short",
+            plan_type_filter="daily_short",
+            result_status_filter="loss",
+        )
+
+        self.assertIsNotNone(item)
+        self.assertEqual(len(item["plans"]), 1)
+        self.assertEqual(item["plans"][0]["plan_type"], "daily_short")
+        self.assertEqual(item["plans"][0]["backtest_status"], "loss")
+
+    def test_get_history_record_loads_one_record_with_latest_results(self):
+        analysis = AnalysisHistory(
+            id=21,
+            query_id="q-21",
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "long_plan": {
+                                "entry_price": "100000",
+                                "stop_loss": "99000",
+                                "take_profit": "102000",
+                            }
+                        }
+                    }
+                }
+            ),
+            created_at=datetime(2026, 1, 1, 8),
+        )
+
+        class Repo:
+            def __init__(self):
+                self.history_calls = []
+                self.result_calls = []
+
+            def get_history_records(self, *, ids=None, code=None, offset=0, limit=20):
+                self.history_calls.append((ids, offset, limit))
+                return [analysis], 1
+
+            def get_results_for_history_ids(self, *, analysis_history_ids, engine_version):
+                self.result_calls.append((analysis_history_ids, engine_version))
+                return [
+                    CryptoBacktestResult(
+                        analysis_history_id=21,
+                        code="BTCUSDT",
+                        plan_type="daily_long",
+                        horizon="daily",
+                        direction="long",
+                        engine_version=engine_version,
+                        eval_status="completed",
+                        outcome="win",
+                    )
+                ]
+
+        repo = Repo()
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+        service.repo = repo
+        service._engine_version = lambda: "btc-plan-v2"
+
+        item = service.get_history_record(21)
+
+        self.assertIsNotNone(item)
+        self.assertEqual(repo.history_calls, [([21], 0, 1)])
+        self.assertEqual(repo.result_calls, [([21], "btc-plan-v2")])
+        self.assertEqual(item["analysis_history_id"], 21)
+        self.assertEqual(item["plans"][0]["backtest_status"], "win")
+
     def test_run_selected_skips_existing_plan_without_force(self):
         analysis = AnalysisHistory(
             id=13,

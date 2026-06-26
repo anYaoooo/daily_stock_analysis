@@ -8,8 +8,12 @@ import { historyApi } from '../api/history';
 import { ApiErrorAlert, Badge, Card, EmptyState, Pagination } from '../components/common';
 import type {
   BacktestRunResponse,
+  BacktestTimeframeFilter,
+  CryptoBacktestDirectionFilter,
   CryptoBacktestHistoryItem,
   CryptoBacktestHistoryPlan,
+  CryptoBacktestPlanTypeFilter,
+  CryptoBacktestResultStatusFilter,
   PerformanceMetrics,
 } from '../types/backtest';
 
@@ -58,6 +62,13 @@ function statusBadge(status: string): React.ReactNode {
   return <Badge variant="default">{normalized}</Badge>;
 }
 
+function tagValue(tags: Record<string, unknown> | null | undefined, group: string, key: string): string | null {
+  const section = tags?.[group];
+  if (!section || typeof section !== 'object') return null;
+  const value = (section as Record<string, unknown>)[key];
+  return typeof value === 'string' && value ? value : null;
+}
+
 const RunSummary: React.FC<{ data: BacktestRunResponse }> = ({ data }) => (
   <div className="backtest-summary animate-fade-in">
     <span className="label">记录 <span className="value">{data.processed}</span></span>
@@ -101,6 +112,76 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
   );
 };
 
+type IndicatorBucket = {
+  dimension: string;
+  dimensionLabel?: string;
+  key: string;
+  totalEvaluations: number;
+  triggeredCount?: number;
+  winRatePct?: number | null;
+  avgSimulatedReturnPct?: number | null;
+  maxDrawdownPct?: number | null;
+  avgRMultiple?: number | null;
+  sampleConfidence?: {
+    isLowConfidence?: boolean;
+  };
+};
+
+function indicatorBuckets(metrics: PerformanceMetrics | null): IndicatorBucket[] {
+  const breakdown = metrics?.diagnostics?.indicatorGroupBreakdown;
+  if (!breakdown || typeof breakdown !== 'object') return [];
+  const groups = (breakdown as { groups?: Record<string, unknown> }).groups;
+  if (!groups || typeof groups !== 'object') return [];
+  const preferred = [
+    ['planType', 'plan_type'],
+    ['direction'],
+    ['intradayAlignment', 'intraday.alignment'],
+    ['priceActionState', 'price_action.state'],
+    ['vwapPricePosition', 'vwap.price_position'],
+    ['emaStructure', 'ema.structure'],
+    ['volumeConfirmation', 'volume.confirmation'],
+    ['eventType', 'event.type'],
+  ];
+  return preferred.flatMap((keys) => {
+    const items = keys.map((key) => groups[key]).find((value) => Array.isArray(value));
+    if (!Array.isArray(items)) return [];
+    return items as IndicatorBucket[];
+  }).filter((item) => item.key !== 'unknown').slice(0, 8);
+}
+
+const IndicatorGroupCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ metrics }) => {
+  const buckets = indicatorBuckets(metrics);
+  if (!buckets.length) {
+    return null;
+  }
+
+  return (
+    <Card padding="md" className="text-sm">
+      <span className="label-uppercase">指标分组复盘</span>
+      <div className="mt-3 flex flex-col gap-2">
+        {buckets.map((bucket) => (
+          <div key={`${bucket.dimension}:${bucket.key}`} className="rounded-lg border border-white/10 bg-elevated/35 p-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-xs text-secondary-text">
+                {bucket.dimensionLabel || bucket.dimension} · {bucket.key}
+              </span>
+              {bucket.sampleConfidence?.isLowConfidence ? <Badge variant="warning">低样本</Badge> : null}
+            </div>
+            <div className="mt-1 grid grid-cols-2 gap-1 text-xs text-muted-text">
+              <span>样本 {bucket.totalEvaluations}</span>
+              <span>触发 {bucket.triggeredCount ?? 0}</span>
+              <span>胜率 {pct(bucket.winRatePct)}</span>
+              <span>均收益 {pct(bucket.avgSimulatedReturnPct)}</span>
+              <span>回撤 {pct(bucket.maxDrawdownPct)}</span>
+              <span>均 R {money(bucket.avgRMultiple)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+};
+
 const PlanSummary: React.FC<{
   plan: CryptoBacktestHistoryPlan;
   runningKey: string | null;
@@ -139,6 +220,16 @@ const PlanSummary: React.FC<{
           <span>净 PnL {money(trade.netPnl)}</span>
         </div>
       ) : null}
+      {plan.indicatorTags ? (
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-text">
+          {tagValue(plan.indicatorTags, 'priceAction', 'state') ? <span>PA {tagValue(plan.indicatorTags, 'priceAction', 'state')}</span> : null}
+          {tagValue(plan.indicatorTags, 'ema', 'structure') ? <span>EMA {tagValue(plan.indicatorTags, 'ema', 'structure')}</span> : null}
+          {tagValue(plan.indicatorTags, 'vwap', 'pricePosition') ? <span>VWAP {tagValue(plan.indicatorTags, 'vwap', 'pricePosition')}</span> : null}
+          {tagValue(plan.indicatorTags, 'volume', 'confirmation') ? <span>量能 {tagValue(plan.indicatorTags, 'volume', 'confirmation')}</span> : null}
+          {tagValue(plan.indicatorTags, 'intraday', 'alignment') ? <span>对齐 {tagValue(plan.indicatorTags, 'intraday', 'alignment')}</span> : null}
+          {tagValue(plan.indicatorTags, 'event', 'type') ? <span>事件 {tagValue(plan.indicatorTags, 'event', 'type')}</span> : null}
+        </div>
+      ) : null}
       {!plan.backtestable ? (
         <p className="mt-2 text-xs text-danger">
           缺少关键字段：{plan.missingFields.join('、') || plan.noTradeReason || '不可回测'}
@@ -161,11 +252,17 @@ const PlanSummary: React.FC<{
 
 const BacktestPage: React.FC = () => {
   const [codeFilter, setCodeFilter] = useState('BTC');
+  const [analysisModeFilter, setAnalysisModeFilter] = useState<BacktestTimeframeFilter>('all');
+  const [directionFilter, setDirectionFilter] = useState<CryptoBacktestDirectionFilter>('all');
+  const [planTypeFilter, setPlanTypeFilter] = useState<CryptoBacktestPlanTypeFilter>('all');
+  const [resultStatusFilter, setResultStatusFilter] = useState<CryptoBacktestResultStatusFilter>('all');
   const [history, setHistory] = useState<CryptoBacktestHistoryItem[]>([]);
   const [total, setTotal] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
+  const [dailyMetrics, setDailyMetrics] = useState<PerformanceMetrics | null>(null);
+  const [intradayMetrics, setIntradayMetrics] = useState<PerformanceMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunningBatch, setIsRunningBatch] = useState(false);
   const [runningRecordId, setRunningRecordId] = useState<number | null>(null);
@@ -190,22 +287,32 @@ const BacktestPage: React.FC = () => {
       const [historyResponse, performance] = await Promise.all([
         backtestApi.getHistory({
           code: codeFilter.trim() || 'BTC',
+          analysisMode: analysisModeFilter,
+          direction: directionFilter,
+          planType: planTypeFilter,
+          resultStatus: resultStatusFilter,
           page,
           limit: PAGE_SIZE,
         }),
-        backtestApi.getOverallPerformance(),
+        backtestApi.getOverallPerformance({ analysisMode: analysisModeFilter }),
+      ]);
+      const [dailyPerformance, intradayPerformance] = await Promise.all([
+        backtestApi.getOverallPerformance({ analysisMode: 'daily' }),
+        backtestApi.getOverallPerformance({ analysisMode: 'hourly' }),
       ]);
       setHistory(historyResponse.items);
       setTotal(historyResponse.total);
       setCurrentPage(historyResponse.page);
       setMetrics(performance);
+      setDailyMetrics(dailyPerformance);
+      setIntradayMetrics(intradayPerformance);
       setError(null);
     } catch (err) {
       setError(getParsedApiError(err));
     } finally {
       setIsLoading(false);
     }
-  }, [codeFilter, currentPage]);
+  }, [analysisModeFilter, codeFilter, currentPage, directionFilter, planTypeFilter, resultStatusFilter]);
 
   useEffect(() => {
     void fetchData(1);
@@ -297,6 +404,53 @@ const BacktestPage: React.FC = () => {
             <RefreshCw className="h-4 w-4" />
             刷新
           </button>
+          <select
+            value={analysisModeFilter}
+            onChange={(event) => setAnalysisModeFilter(event.target.value as BacktestTimeframeFilter)}
+            className={`${INPUT_CLASS} w-36`}
+            aria-label="分析模式"
+          >
+            <option value="all">全部模式</option>
+            <option value="daily">日线</option>
+            <option value="hourly">小时线</option>
+          </select>
+          <select
+            value={directionFilter}
+            onChange={(event) => setDirectionFilter(event.target.value as CryptoBacktestDirectionFilter)}
+            className={`${INPUT_CLASS} w-32`}
+            aria-label="方向"
+          >
+            <option value="all">全部方向</option>
+            <option value="long">做多</option>
+            <option value="short">做空</option>
+            <option value="wait">观望</option>
+          </select>
+          <select
+            value={planTypeFilter}
+            onChange={(event) => setPlanTypeFilter(event.target.value as CryptoBacktestPlanTypeFilter)}
+            className={`${INPUT_CLASS} w-40`}
+            aria-label="计划类型"
+          >
+            <option value="all">全部计划</option>
+            <option value="daily_long">日线多单</option>
+            <option value="daily_short">日线空单</option>
+            <option value="intraday">小时线日内</option>
+          </select>
+          <select
+            value={resultStatusFilter}
+            onChange={(event) => setResultStatusFilter(event.target.value as CryptoBacktestResultStatusFilter)}
+            className={`${INPUT_CLASS} w-36`}
+            aria-label="结果状态"
+          >
+            <option value="all">全部状态</option>
+            <option value="pending">待回测</option>
+            <option value="win">盈利</option>
+            <option value="loss">亏损</option>
+            <option value="neutral">持平</option>
+            <option value="no_entry">未触发</option>
+            <option value="insufficient_data">样本不足</option>
+            <option value="invalid_plan">计划缺字段</option>
+          </select>
           <button
             type="button"
             onClick={() => setForceRerun(!forceRerun)}
@@ -337,6 +491,20 @@ const BacktestPage: React.FC = () => {
       <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row">
         <aside className="flex max-h-[38vh] flex-col gap-3 overflow-y-auto lg:max-h-none lg:w-64 lg:flex-shrink-0">
           <PerformanceCard metrics={metrics} />
+          <Card padding="md" className="text-sm">
+            <span className="label-uppercase">周期拆分</span>
+            <div className="mt-3 grid gap-2 text-xs text-secondary-text">
+              <div className="flex items-center justify-between">
+                <span>日线主计划</span>
+                <span>{dailyMetrics ? `${dailyMetrics.triggeredCount ?? 0}/${dailyMetrics.totalEvaluations} · ${pct(dailyMetrics.winRatePct)}` : '--'}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>小时线日内</span>
+                <span>{intradayMetrics ? `${intradayMetrics.triggeredCount ?? 0}/${intradayMetrics.totalEvaluations} · ${pct(intradayMetrics.winRatePct)}` : '--'}</span>
+              </div>
+            </div>
+          </Card>
+          <IndicatorGroupCard metrics={metrics} />
           <Card padding="md" className="text-sm">
             <span className="label-uppercase">选择</span>
             <div className="mt-3 flex items-center justify-between text-secondary-text">

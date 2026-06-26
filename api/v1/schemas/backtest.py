@@ -139,6 +139,7 @@ class CryptoBacktestHistoryPlan(BaseModel):
     no_trade_reason: Optional[str] = None
     backtest_status: str
     latest_result: Optional[CryptoBacktestResultItem] = None
+    indicator_tags: Optional[Dict[str, Any]] = None
 
 
 class CryptoBacktestHistoryItem(BaseModel):
@@ -155,6 +156,7 @@ class CryptoBacktestHistoryItem(BaseModel):
     trend_prediction: Optional[str] = None
     backtest_status: str
     plans: List[CryptoBacktestHistoryPlan] = Field(default_factory=list)
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CryptoBacktestHistoryResponse(BaseModel):

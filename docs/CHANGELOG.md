@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] BTC 回测页新增分析模式、方向、计划类型和结果状态筛选，并在汇总区展示日线主计划、小时线日内计划和指标标签分组表现。
+- [改进] BTC 计划级回测结果写入 Price Action、VWAP、EMA、Volume、ATR、多周期对齐和事件类型指标快照标签，用于后续分组复盘与风控降权。
+- [改进] BTC 报告页新增计划级回测卡片，并支持从回测页通过历史记录参数跳回原始报告。
 - [新功能] BTC 回测页改为以历史分析记录为主对象，支持按单条报告或多选报告触发计划级回测、查看计划状态摘要并批量删除历史记录。
 - [改进] BTC 交易计划结构补充 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason` 字段，报告 schema、解析器和展示层同步透出。
 - [改进] BTC 计划级回测新增按 `analysis_history_id` 精确回测 API，并在历史记录接口返回计划可回测状态和最新回测结果摘要。

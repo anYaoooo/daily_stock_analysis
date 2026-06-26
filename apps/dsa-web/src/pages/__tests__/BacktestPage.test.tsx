@@ -1,423 +1,227 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
-import { UI_LANGUAGE_STORAGE_KEY } from '../../utils/uiLanguage';
+import { MemoryRouter } from 'react-router-dom';
 import BacktestPage from '../BacktestPage';
 
 const {
-  mockGetResults,
+  mockGetHistory,
   mockGetOverallPerformance,
-  mockGetStockPerformance,
-  mockRun,
-  mockDeleteResult,
+  mockRunSelected,
+  mockDeleteRecords,
 } = vi.hoisted(() => ({
-  mockGetResults: vi.fn(),
+  mockGetHistory: vi.fn(),
   mockGetOverallPerformance: vi.fn(),
-  mockGetStockPerformance: vi.fn(),
-  mockRun: vi.fn(),
-  mockDeleteResult: vi.fn(),
+  mockRunSelected: vi.fn(),
+  mockDeleteRecords: vi.fn(),
 }));
 
 vi.mock('../../api/backtest', () => ({
   backtestApi: {
-    getResults: mockGetResults,
+    getHistory: mockGetHistory,
     getOverallPerformance: mockGetOverallPerformance,
-    getStockPerformance: mockGetStockPerformance,
-    run: mockRun,
-    deleteResult: mockDeleteResult,
+    runSelected: mockRunSelected,
+  },
+}));
+
+vi.mock('../../api/history', () => ({
+  historyApi: {
+    deleteRecords: mockDeleteRecords,
   },
 }));
 
 const basePerformance = {
   scope: 'overall',
-  evalWindowDays: 10,
-  engineVersion: 'test-engine',
+  engineVersion: 'btc-plan-v2',
   totalEvaluations: 3,
-  completedCount: 2,
-  insufficientCount: 1,
-  longCount: 2,
-  cashCount: 1,
+  completedCount: 3,
+  triggeredCount: 2,
+  noEntryCount: 1,
+  skippedCount: 0,
+  insufficientCount: 0,
   winCount: 1,
   lossCount: 1,
   neutralCount: 0,
-  directionAccuracyPct: 66.7,
+  directionAccuracyPct: 50,
   winRatePct: 50,
-  neutralRatePct: 0,
-  avgStockReturnPct: 2.4,
-  avgSimulatedReturnPct: 1.2,
-  stopLossTriggerRate: 10,
-  takeProfitTriggerRate: 20,
-  ambiguousRate: 0,
-  avgDaysToFirstHit: 3.5,
-  adviceBreakdown: {},
-  diagnostics: {},
+  avgSimulatedReturnPct: 0.4,
+  planTypeBreakdown: {},
+  riskMetrics: {},
+  equityCurve: [],
+  diagnostics: {
+    indicatorGroupBreakdown: {
+      groups: {
+        'price_action.state': [
+          {
+            dimension: 'price_action.state',
+            dimensionLabel: '价格行为',
+            key: 'breakout',
+            totalEvaluations: 2,
+            triggeredCount: 1,
+            winRatePct: 100,
+            avgSimulatedReturnPct: 1.2,
+            maxDrawdownPct: 0,
+            avgRMultiple: 1.1,
+            sampleConfidence: { isLowConfidence: true },
+          },
+        ],
+      },
+    },
+  },
 };
 
-const baseResultItem = {
-  analysisHistoryId: 101,
-  code: '600519',
-  stockName: '贵州茅台',
-  analysisDate: '2026-03-20',
+const baseHistoryItem = {
+  analysisHistoryId: 7,
+  queryId: 'q-7',
+  code: 'BTCUSDT',
+  stockName: 'Bitcoin',
+  reportType: 'stock',
+  analysisCreatedAt: '2026-06-25T08:00:00',
   analysisMode: 'daily',
   analysisTimeframe: '日线',
-  planType: 'daily_long',
-  horizon: 'daily',
-  direction: 'long',
-  evalWindowDays: 10,
-  engineVersion: 'test-engine',
-  evalStatus: 'completed',
-  operationAdvice: '继续持有',
-  action: 'watch',
-  actionLabel: '观望',
+  analysisSummary: '突破后等待回踩确认',
+  operationAdvice: '观望',
   trendPrediction: '震荡偏多',
-  actualMovement: 'up',
-  actualReturnPct: 3.8,
-  directionExpected: 'long',
-  directionCorrect: true,
-  outcome: 'win',
-  simulatedReturnPct: 3.8,
+  backtestStatus: 'pending',
+  plans: [
+    {
+      planType: 'daily_long',
+      horizon: 'daily',
+      analysisMode: 'daily',
+      analysisTimeframe: '日线',
+      direction: 'long',
+      entryPrice: 100000,
+      stopLoss: 99000,
+      takeProfit: 102000,
+      invalidCondition: '跌回区间',
+      riskReward: '1:2',
+      positionHint: '0.5% 风险',
+      confidence: '中',
+      backtestable: true,
+      qualityStatus: 'ok',
+      missingFields: [],
+      noTradeReason: null,
+      backtestStatus: 'pending',
+      latestResult: null,
+      indicatorTags: {
+        priceAction: { state: 'breakout' },
+        ema: { structure: 'bullish' },
+        vwap: { pricePosition: 'above' },
+        volume: { confirmation: 'high' },
+        intraday: { alignment: 'aligned_long' },
+        event: { type: 'none' },
+      },
+    },
+  ],
 };
+
+function renderPage() {
+  render(
+    <MemoryRouter>
+      <BacktestPage />
+    </MemoryRouter>,
+  );
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.localStorage.clear();
-  mockGetOverallPerformance.mockResolvedValue(basePerformance);
-  mockGetStockPerformance.mockResolvedValue(null);
-  mockGetResults.mockResolvedValue({
+  mockGetHistory.mockResolvedValue({
     total: 1,
     page: 1,
     limit: 20,
-    items: [baseResultItem],
+    items: [baseHistoryItem],
   });
-  mockRun.mockResolvedValue({
+  mockGetOverallPerformance.mockResolvedValue(basePerformance);
+  mockRunSelected.mockResolvedValue({
     processed: 1,
     saved: 1,
     completed: 1,
     insufficient: 0,
+    skipped: 0,
     errors: 0,
   });
-  mockDeleteResult.mockResolvedValue({ deleted: 1 });
+  mockDeleteRecords.mockResolvedValue({ deleted: 1 });
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
 describe('BacktestPage', () => {
-  function renderEnglishPage() {
-    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
-    render(
-      <UiLanguageProvider>
-        <BacktestPage />
-      </UiLanguageProvider>,
-    );
-  }
+  it('loads BTC history records with plan summaries and indicator grouping', async () => {
+    renderPage();
 
-  it('renders shared surface inputs and prediction tracking outputs', async () => {
-    render(<BacktestPage />);
-
-    const filterInput = await screen.findByPlaceholderText('按股票代码筛选（留空表示全部）');
-    const windowInput = screen.getByPlaceholderText('10');
-
-    expect(filterInput).toHaveClass('input-surface');
-    expect(filterInput).toHaveClass('input-focus-glow');
-    expect(windowInput).toHaveClass('input-surface');
-    expect(windowInput).toHaveClass('input-focus-glow');
-
-    expect(await screen.findByText('盈利')).toBeInTheDocument();
-    expect(screen.getByText('已完成')).toBeInTheDocument();
-    expect(screen.getByText('600519')).toBeInTheDocument();
-    expect(screen.getByText('贵州茅台')).toBeInTheDocument();
-    const resultRow = screen.getByText('600519').closest('tr');
-    expect(resultRow).not.toBeNull();
-    const rowScope = within(resultRow as HTMLElement);
-    expect(rowScope.getByText('观望')).toBeInTheDocument();
-    expect(rowScope.getByText('震荡偏多')).toBeInTheDocument();
-    expect(rowScope.getByText('继续持有')).toBeInTheDocument();
-    expect(screen.getByText('上涨')).toBeInTheDocument();
-    expect(screen.getByText('窗口收益')).toBeInTheDocument();
-    expect(screen.getByText('方向匹配')).toBeInTheDocument();
-    expect(screen.getByText('做多')).toBeInTheDocument();
-    expect(screen.getAllByLabelText('是').length).toBeGreaterThan(0);
-    expect(screen.getByText('方向准确率')).toBeInTheDocument();
-    expect(screen.getByText('平均模拟收益')).toBeInTheDocument();
-    expect(screen.getByText('周期')).toBeInTheDocument();
-    expect(screen.getByText('计划类型')).toBeInTheDocument();
-    expect(rowScope.getByText('日线多单')).toBeInTheDocument();
-  });
-
-  it('renders BTC hourly intraday backtest plan type distinctly', async () => {
-    mockGetResults.mockResolvedValueOnce({
-      total: 1,
+    expect(await screen.findByText('BTCUSDT')).toBeInTheDocument();
+    expect(screen.getByText('突破后等待回踩确认')).toBeInTheDocument();
+    expect(screen.getAllByText('日线多单').length).toBeGreaterThan(0);
+    expect(screen.getByText('PA breakout')).toBeInTheDocument();
+    expect(screen.getByText('指标分组复盘')).toBeInTheDocument();
+    expect(screen.getByText('价格行为 · breakout')).toBeInTheDocument();
+    expect(mockGetHistory).toHaveBeenCalledWith({
+      code: 'BTC',
+      analysisMode: 'all',
+      direction: 'all',
+      planType: 'all',
+      resultStatus: 'all',
       page: 1,
       limit: 20,
-      items: [
-        {
-          ...baseResultItem,
-          analysisHistoryId: 202,
-          code: 'BTC',
-          stockName: undefined,
-          analysisDate: undefined,
-          analysisCreatedAt: '2026-06-25T10:00:00',
-          analysisMode: 'hourly',
-          analysisTimeframe: '小时线',
-          planType: 'intraday',
-          horizon: 'intraday',
-          direction: 'short',
-          actualReturnPct: undefined,
-          simulatedReturnPct: 1.7,
-          directionExpected: undefined,
-        },
-      ],
     });
-
-    render(<BacktestPage />);
-
-    const codeCell = await screen.findByText('BTC');
-    const resultRow = codeCell.closest('tr');
-    expect(resultRow).not.toBeNull();
-    const rowScope = within(resultRow as HTMLElement);
-    expect(rowScope.getByText('小时线')).toBeInTheDocument();
-    expect(rowScope.getByText('小时线日内')).toBeInTheDocument();
-    expect(rowScope.getByText('看跌')).toBeInTheDocument();
-    expect(rowScope.getByText('1.7%')).toBeInTheDocument();
   });
 
-  it('falls back to the taxonomy label when backtest actionLabel is missing', async () => {
-    mockGetResults.mockResolvedValueOnce({
-      total: 1,
-      page: 1,
-      limit: 20,
-      items: [
-        {
-          ...baseResultItem,
-          action: 'watch',
-          actionLabel: null,
-        },
-      ],
-    });
+  it('sends analysis mode, direction, plan type, and result status filters', async () => {
+    renderPage();
+    await screen.findByText('BTCUSDT');
 
-    render(<BacktestPage />);
-
-    const codeCell = await screen.findByText('600519');
-    const resultRow = codeCell.closest('tr');
-    expect(resultRow).not.toBeNull();
-    const rowScope = within(resultRow as HTMLElement);
-    expect(rowScope.getByText('观望')).toBeInTheDocument();
-    expect(rowScope.getByText('继续持有')).toBeInTheDocument();
-  });
-
-  it('uses localized taxonomy labels before server labels in English UI mode', async () => {
-    mockGetResults.mockResolvedValueOnce({
-      total: 1,
-      page: 1,
-      limit: 20,
-      items: [
-        {
-          ...baseResultItem,
-          operationAdvice: 'continue holding',
-          action: 'watch',
-          actionLabel: '观望',
-          trendPrediction: 'range-bound',
-        },
-      ],
-    });
-
-    renderEnglishPage();
-
-    const codeCell = await screen.findByText('600519');
-    const resultRow = codeCell.closest('tr');
-    expect(resultRow).not.toBeNull();
-    const rowScope = within(resultRow as HTMLElement);
-    expect(rowScope.getByText('Watch')).toBeInTheDocument();
-    expect(rowScope.getByText('continue holding')).toBeInTheDocument();
-    expect(rowScope.queryByText('观望')).not.toBeInTheDocument();
-  });
-
-  it('keeps operation advice visible when backtest action fields are absent for multi-guard advice', async () => {
-    mockGetResults.mockResolvedValueOnce({
-      total: 1,
-      page: 1,
-      limit: 20,
-      items: [
-        {
-          ...baseResultItem,
-          operationAdvice: 'risk alert, avoid buying',
-          action: null,
-          actionLabel: null,
-        },
-      ],
-    });
-
-    render(<BacktestPage />);
-
-    const codeCell = await screen.findByText('600519');
-    const resultRow = codeCell.closest('tr');
-    expect(resultRow).not.toBeNull();
-    const rowScope = within(resultRow as HTMLElement);
-    expect(rowScope.getByText('震荡偏多')).toBeInTheDocument();
-    expect(rowScope.getByText('risk alert, avoid buying')).toBeInTheDocument();
-    expect(rowScope.queryByText('回避')).not.toBeInTheDocument();
-    expect(rowScope.queryByText('预警')).not.toBeInTheDocument();
-  });
-
-  it('renders backtest controls and result headings in English UI mode', async () => {
-    renderEnglishPage();
-
-    expect(await screen.findByPlaceholderText('Filter by stock code (leave empty for all)')).toBeInTheDocument();
-    expect(screen.getByText('Evaluation window')).toBeInTheDocument();
-    expect(screen.getAllByText('Phase').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Run backtest' })).toBeInTheDocument();
-    expect(screen.getByText('Window return')).toBeInTheDocument();
-    expect(screen.getByText('Direction match')).toBeInTheDocument();
-    expect(screen.getByText('Direction accuracy')).toBeInTheDocument();
-    expect(screen.queryByText('运行回测')).not.toBeInTheDocument();
-    expect(screen.queryByText('窗口收益')).not.toBeInTheDocument();
-  });
-
-  it('filters results with stock code, window, phase, and analysis date range when clicking Filter', async () => {
-    render(<BacktestPage />);
-
-    const filterInput = await screen.findByPlaceholderText('按股票代码筛选（留空表示全部）');
-    const windowInput = screen.getByPlaceholderText('10');
-    const phaseSelect = screen.getByDisplayValue('全部阶段');
-    const fromInput = screen.getByLabelText('分析开始日期');
-    const toInput = screen.getByLabelText('分析结束日期');
-
-    fireEvent.change(filterInput, { target: { value: 'aapl' } });
-    fireEvent.change(windowInput, { target: { value: '20' } });
-    fireEvent.change(phaseSelect, { target: { value: 'intraday' } });
-    fireEvent.change(fromInput, { target: { value: '2026-03-01' } });
-    fireEvent.change(toInput, { target: { value: '2026-03-31' } });
-    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.change(screen.getByLabelText('分析模式'), { target: { value: 'hourly' } });
+    fireEvent.change(screen.getByLabelText('方向'), { target: { value: 'short' } });
+    fireEvent.change(screen.getByLabelText('计划类型'), { target: { value: 'intraday' } });
+    fireEvent.change(screen.getByLabelText('结果状态'), { target: { value: 'loss' } });
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
 
     await waitFor(() => {
-      expect(mockGetResults).toHaveBeenLastCalledWith({
-        code: 'AAPL',
-        evalWindowDays: 20,
-        analysisDateFrom: '2026-03-01',
-        analysisDateTo: '2026-03-31',
-        analysisPhase: 'intraday',
-        page: 1,
-        limit: 20,
-      });
-      expect(mockGetStockPerformance).toHaveBeenLastCalledWith('AAPL', {
-        evalWindowDays: 20,
-        analysisDateFrom: '2026-03-01',
-        analysisDateTo: '2026-03-31',
-        analysisPhase: 'intraday',
-      });
-    });
-  });
-
-  it('runs a backtest and refreshes results using the shared filter values', async () => {
-    render(<BacktestPage />);
-
-    const filterInput = await screen.findByPlaceholderText('按股票代码筛选（留空表示全部）');
-    const windowInput = screen.getByPlaceholderText('10');
-
-    fireEvent.change(filterInput, { target: { value: 'tsla' } });
-    fireEvent.change(windowInput, { target: { value: '15' } });
-    fireEvent.click(screen.getByRole('button', { name: '运行回测' }));
-
-    await waitFor(() => {
-      expect(mockRun).toHaveBeenCalledWith({
-        code: 'TSLA',
-        force: undefined,
-        minAgeDays: undefined,
-        evalWindowDays: 15,
-      });
-    });
-
-    await waitFor(() => {
-      expect(mockGetResults).toHaveBeenLastCalledWith({
-        code: 'TSLA',
-        evalWindowDays: 15,
-        analysisDateFrom: undefined,
-        analysisDateTo: undefined,
-        analysisPhase: undefined,
-        page: 1,
-        limit: 20,
-      });
-      expect(mockGetStockPerformance).toHaveBeenLastCalledWith('TSLA', {
-        evalWindowDays: 15,
-        analysisDateFrom: undefined,
-        analysisDateTo: undefined,
-        analysisPhase: undefined,
-      });
-    });
-
-    expect(await screen.findByText('已处理:')).toBeInTheDocument();
-    expect(screen.getByText('已保存:')).toBeInTheDocument();
-  });
-
-  it('shows a clear no-op message when there are no new backtest candidates', async () => {
-    mockRun.mockResolvedValueOnce({
-      processed: 0,
-      saved: 0,
-      completed: 0,
-      insufficient: 0,
-      errors: 0,
-    });
-
-    render(<BacktestPage />);
-
-    await screen.findByPlaceholderText('按股票代码筛选（留空表示全部）');
-    fireEvent.click(screen.getByRole('button', { name: '运行回测' }));
-
-    expect(await screen.findByText('没有新的可回测记录；已存在的结果不会重复计算。如需重算，请启用强制重跑。')).toBeInTheDocument();
-  });
-
-  it('deletes a backtest result and refreshes the current result set', async () => {
-    render(<BacktestPage />);
-
-    const deleteButton = await screen.findByRole('button', { name: '删除 600519 回测结果' });
-    fireEvent.click(deleteButton);
-
-    await waitFor(() => {
-      expect(mockDeleteResult).toHaveBeenCalledWith(101, 10, 'daily_long');
-    });
-    await waitFor(() => {
-      expect(mockGetResults).toHaveBeenLastCalledWith({
-        code: undefined,
-        evalWindowDays: 10,
-        analysisDateFrom: undefined,
-        analysisDateTo: undefined,
-        analysisPhase: undefined,
+      expect(mockGetHistory).toHaveBeenLastCalledWith({
+        code: 'BTC',
+        analysisMode: 'hourly',
+        direction: 'short',
+        planType: 'intraday',
+        resultStatus: 'loss',
         page: 1,
         limit: 20,
       });
     });
-    expect(mockGetOverallPerformance).toHaveBeenLastCalledWith({
-      evalWindowDays: 10,
-      analysisDateFrom: undefined,
-      analysisDateTo: undefined,
-      analysisPhase: undefined,
-    });
   });
 
-  it('switches to next-day validation with the 1D shortcut', async () => {
-    render(<BacktestPage />);
+  it('runs one selected plan through the history-id API', async () => {
+    renderPage();
+    await screen.findByText('BTCUSDT');
 
-    await screen.findByPlaceholderText('按股票代码筛选（留空表示全部）');
-    fireEvent.click(screen.getByRole('button', { name: '1 日验证' }));
+    fireEvent.click(screen.getByRole('button', { name: '回测计划' }));
 
     await waitFor(() => {
-      expect(mockGetResults).toHaveBeenLastCalledWith({
-        code: undefined,
-        evalWindowDays: 1,
-        analysisDateFrom: undefined,
-        analysisDateTo: undefined,
-        analysisPhase: undefined,
-        page: 1,
-        limit: 20,
+      expect(mockRunSelected).toHaveBeenCalledWith({
+        analysisHistoryIds: [7],
+        planTypes: ['daily_long'],
+        force: false,
       });
-      expect(mockGetOverallPerformance).toHaveBeenLastCalledWith({
-        evalWindowDays: 1,
-        analysisDateFrom: undefined,
-        analysisDateTo: undefined,
-        analysisPhase: undefined,
+    });
+    expect(await screen.findByText('写入')).toBeInTheDocument();
+  });
+
+  it('batch-runs selected history records and deletes with traceability warning', async () => {
+    renderPage();
+    await screen.findByText('BTCUSDT');
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: /批量回测/ }));
+
+    await waitFor(() => {
+      expect(mockRunSelected).toHaveBeenCalledWith({
+        analysisHistoryIds: [7],
+        planTypes: undefined,
+        force: false,
       });
     });
 
-    expect(screen.getByText('实际表现')).toBeInTheDocument();
-    expect(screen.getByText('准确性')).toBeInTheDocument();
-    expect(screen.getByText('1 日验证模式会用下一个交易日收盘表现校验 AI 预测。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '批量删除' }));
+    await waitFor(() => {
+      expect(window.confirm).toHaveBeenCalledWith('确认删除 1 条历史分析记录？对应报告入口和回测追溯也会受影响。');
+      expect(mockDeleteRecords).toHaveBeenCalledWith([7]);
+    });
   });
 });

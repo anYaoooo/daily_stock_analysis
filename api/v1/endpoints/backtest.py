@@ -36,6 +36,18 @@ router = APIRouter()
 
 BacktestAnalysisPhaseQuery = Literal["premarket", "intraday", "postmarket", "unknown"]
 BacktestAnalysisModeQuery = Literal["daily", "hourly"]
+CryptoBacktestDirectionQuery = Literal["long", "short", "wait"]
+CryptoBacktestPlanTypeQuery = Literal["daily_long", "daily_short", "intraday"]
+CryptoBacktestResultStatusQuery = Literal[
+    "pending",
+    "win",
+    "loss",
+    "neutral",
+    "no_entry",
+    "skipped",
+    "insufficient_data",
+    "invalid_plan",
+]
 
 
 def _validate_analysis_date_range(
@@ -176,13 +188,25 @@ def run_selected_crypto_backtests(
 )
 def get_crypto_backtest_history(
     code: Optional[str] = Query(None, description="BTC 代码筛选"),
+    analysis_mode: Optional[BacktestAnalysisModeQuery] = Query(None, description="分析周期过滤：daily/hourly"),
+    direction: Optional[CryptoBacktestDirectionQuery] = Query(None, description="计划方向过滤：long/short/wait"),
+    plan_type: Optional[CryptoBacktestPlanTypeQuery] = Query(None, description="计划类型过滤"),
+    result_status: Optional[CryptoBacktestResultStatusQuery] = Query(None, description="回测状态过滤"),
     page: int = Query(1, ge=1, description="页码"),
     limit: int = Query(20, ge=1, le=100, description="每页数量"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> CryptoBacktestHistoryResponse:
     try:
         service = CryptoBacktestService(db_manager)
-        data = service.get_history_records(code=code, page=page, limit=limit)
+        data = service.get_history_records(
+            code=code,
+            analysis_mode=analysis_mode,
+            direction=direction,
+            plan_type=plan_type,
+            result_status=result_status,
+            page=page,
+            limit=limit,
+        )
         return CryptoBacktestHistoryResponse(
             total=int(data.get("total", 0)),
             page=page,
@@ -194,6 +218,40 @@ def get_crypto_backtest_history(
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "message": f"查询 BTC 历史回测入口失败: {str(exc)}"},
+        )
+
+
+@router.get(
+    "/crypto/history/{analysis_history_id}",
+    response_model=CryptoBacktestHistoryItem,
+    responses={
+        200: {"description": "BTC 历史分析记录与回测状态"},
+        404: {"description": "未找到 BTC 历史分析记录", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取单条 BTC 历史分析记录回测入口",
+    description="按 analysis_history_id 返回对应 BTC 分析报告的结构化计划可回测状态和最新计划回测摘要。",
+)
+def get_crypto_backtest_history_record(
+    analysis_history_id: int,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> CryptoBacktestHistoryItem:
+    try:
+        service = CryptoBacktestService(db_manager)
+        item = service.get_history_record(analysis_history_id)
+        if item is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "未找到 BTC 历史分析记录"},
+            )
+        return CryptoBacktestHistoryItem(**item)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"查询单条 BTC 历史回测入口失败: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"查询单条 BTC 历史回测入口失败: {str(exc)}"},
         )
 
 
@@ -298,7 +356,9 @@ def delete_backtest_result(
 def get_crypto_backtest_results(
     code: Optional[str] = Query(None, description="BTC 代码筛选"),
     horizon: Optional[Literal["daily", "intraday"]] = Query(None, description="周期过滤：daily/intraday"),
-    plan_type: Optional[Literal["daily_long", "daily_short", "intraday"]] = Query(None, description="计划类型过滤"),
+    plan_type: Optional[CryptoBacktestPlanTypeQuery] = Query(None, description="计划类型过滤"),
+    direction: Optional[CryptoBacktestDirectionQuery] = Query(None, description="计划方向过滤：long/short/wait"),
+    result_status: Optional[CryptoBacktestResultStatusQuery] = Query(None, description="回测状态过滤"),
     page: int = Query(1, ge=1, description="页码"),
     limit: int = Query(20, ge=1, le=200, description="每页数量"),
     db_manager: DatabaseManager = Depends(get_database_manager),
@@ -309,6 +369,8 @@ def get_crypto_backtest_results(
             code=code,
             horizon=horizon,
             plan_type=plan_type,
+            direction=direction,
+            result_status=result_status,
             page=page,
             limit=limit,
         )
