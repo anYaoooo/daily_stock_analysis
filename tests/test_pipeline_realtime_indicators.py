@@ -308,6 +308,22 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
             "volatility": {"atr14": 420, "atr14_pct": 0.42},
             "vwap": {"rolling_20": 99500, "price_position": "above"},
             "ema": {"ema20": 99200, "ema50": 98900, "structure": "bullish"},
+            "event": {
+                "type": "selloff_rebound_candidate",
+                "suggested_direction": "conditional_long",
+                "urgency": "high",
+                "reference_high": 100800,
+                "event_low": 98700,
+                "event_bar_high": 99600,
+                "drop_from_reference_high_pct": -2.08,
+                "rebound_from_event_low_pct": 0.9,
+                "atr_move": 2.4,
+                "trigger_reference": {
+                    "long_confirmation_price": 99600,
+                    "long_invalidation_price": 98574,
+                    "short_breakdown_price": 98700,
+                },
+            },
         }
         context = {
             "code": "BTC",
@@ -337,6 +353,12 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         self.assertIn("逆日线短线计划", prompt)
         self.assertIn("ATR14=420", prompt)
         self.assertIn("止损不得落在小时线常规 ATR 噪音内", prompt)
+        self.assertIn("小时线急跌/扫低事件", prompt)
+        self.assertIn("selloff_rebound_candidate", prompt)
+        self.assertIn("多单确认价=99600", prompt)
+        self.assertIn("多单失效价=98574", prompt)
+        self.assertIn("空单跌破价=98700", prompt)
+        self.assertIn("BTC 急跌机会约束", prompt)
         self.assertIn("BTC 小时线日内计划强制结构", prompt)
         self.assertIn("dashboard.battle_plan.intraday_plan", prompt)
         self.assertIn("daily_constraint", prompt)

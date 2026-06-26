@@ -47,6 +47,7 @@ if os.getenv("GITHUB_ACTIONS") != "true" and os.getenv("USE_PROXY", "false").low
 import argparse
 import logging
 import sys
+import threading
 import time
 import uuid
 from datetime import date, datetime, timezone, timedelta
@@ -60,6 +61,7 @@ from src.logging_config import setup_logging
 logger = logging.getLogger(__name__)
 _RUNTIME_ENV_FILE_KEYS = set()
 _PUBLIC_BIND_HOSTS = frozenset({"0.0.0.0", "::", "[::]", "*"})
+_BTC_ANALYSIS_RUN_LOCK = threading.Lock()
 
 
 def _get_active_env_path() -> Path:
@@ -304,7 +306,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--schedule',
         action='store_true',
-        help='启用定时任务模式：北京时间 08:00 执行 BTC 日线分析，小时线每小时执行'
+        help='启用定时任务模式：北京时间 08:00 执行 BTC 日线分析，小时线每小时 05 分执行'
     )
 
     parser.add_argument(
@@ -939,6 +941,24 @@ def run_full_analysis(
         logger.exception(f"分析流程执行失败: {e}")
 
 
+def _run_btc_analysis_with_runtime_lock(
+    config: Config,
+    args: argparse.Namespace,
+    stock_codes: Optional[List[str]],
+    *,
+    analysis_mode: str,
+    trigger_source: str,
+) -> bool:
+    if not _BTC_ANALYSIS_RUN_LOCK.acquire(blocking=False):
+        logger.info("[BTCAnalysis] %s 触发的 %s 分析已跳过：已有分析正在运行", trigger_source, analysis_mode)
+        return False
+    try:
+        run_full_analysis(config, args, stock_codes, analysis_mode=analysis_mode)
+        return True
+    finally:
+        _BTC_ANALYSIS_RUN_LOCK.release()
+
+
 def start_api_server(host: str, port: int, config: Config) -> None:
     """
     在后台线程启动 FastAPI 服务
@@ -1221,7 +1241,7 @@ def main() -> int:
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
             logger.info("BTC 日线分析执行时间: 北京时间 08:00")
-            logger.info("BTC 小时线分析执行频率: 每小时整点")
+            logger.info("BTC 小时线分析执行时间: 每小时 05 分")
 
             # Determine whether to run immediately:
             # Command line arg --no-run-immediately overrides config if present.
@@ -1239,17 +1259,30 @@ def main() -> int:
 
             def scheduled_daily_task():
                 runtime_config = _reload_runtime_config()
-                run_full_analysis(runtime_config, args, scheduled_stock_codes, analysis_mode="daily")
+                _run_btc_analysis_with_runtime_lock(
+                    runtime_config,
+                    args,
+                    scheduled_stock_codes,
+                    analysis_mode="daily",
+                    trigger_source="daily_schedule",
+                )
 
             def scheduled_hourly_task():
                 runtime_config = _reload_runtime_config()
-                run_full_analysis(runtime_config, args, scheduled_stock_codes, analysis_mode="hourly")
+                _run_btc_analysis_with_runtime_lock(
+                    runtime_config,
+                    args,
+                    scheduled_stock_codes,
+                    analysis_mode="hourly",
+                    trigger_source="hourly_schedule",
+                )
 
             background_tasks = []
             background_tasks.append({
                 "task": scheduled_hourly_task,
                 "interval_seconds": 60 * 60,
-                "run_immediately": should_run_immediately,
+                "hourly_at_minute": 5,
+                "run_immediately": False,
                 "name": "btc_hourly_analysis",
             })
             if getattr(config, 'agent_event_monitor_enabled', False):
@@ -1269,6 +1302,44 @@ def main() -> int:
                     "interval_seconds": interval_minutes * 60,
                     "run_immediately": True,
                     "name": "agent_event_monitor",
+                })
+
+            if getattr(config, 'btc_volatility_monitor_enabled', False):
+                from src.services.btc_volatility_monitor import BTCVolatilityMonitor
+
+                volatility_monitor = BTCVolatilityMonitor()
+
+                def btc_volatility_monitor_task():
+                    runtime_config = _reload_runtime_config()
+                    stats = volatility_monitor.run_once(runtime_config)
+                    if not stats.get("triggered"):
+                        if stats.get("suppressed"):
+                            logger.info(
+                                "[BTCVolatility] 触发被冷却抑制: change=%s%% threshold=%s%%",
+                                stats.get("change_pct"),
+                                stats.get("threshold_pct"),
+                            )
+                        return
+                    logger.info(
+                        "[BTCVolatility] 价格剧烈波动触发小时线分析: direction=%s change=%s%% price=%s baseline=%s",
+                        stats.get("direction"),
+                        stats.get("change_pct"),
+                        stats.get("price"),
+                        stats.get("baseline_price"),
+                    )
+                    _run_btc_analysis_with_runtime_lock(
+                        runtime_config,
+                        args,
+                        scheduled_stock_codes,
+                        analysis_mode="hourly",
+                        trigger_source="btc_volatility",
+                    )
+
+                background_tasks.append({
+                    "task": btc_volatility_monitor_task,
+                    "interval_seconds": getattr(config, 'btc_volatility_monitor_interval_seconds', 60),
+                    "run_immediately": True,
+                    "name": "btc_volatility_monitor",
                 })
 
             if getattr(config, 'backtest_enabled', False):

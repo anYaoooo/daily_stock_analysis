@@ -30,6 +30,99 @@ def _round(value: Optional[float], digits: int = 2) -> Optional[float]:
     return round(value, digits)
 
 
+def _pct_change(current: Optional[float], base: Optional[float]) -> Optional[float]:
+    if current is None or base is None or base <= 0:
+        return None
+    return (current - base) / base * 100
+
+
+def _build_event_context(
+    bars: pd.DataFrame,
+    *,
+    close: float,
+    recent_low: Optional[float],
+    low_swept: bool,
+    close_below_support: bool,
+    atr14: Optional[float],
+    vwap: Optional[float],
+    ema20: Optional[float],
+) -> Dict[str, Any]:
+    """Summarize recent BTC shock moves into concrete intraday trigger references."""
+    prior = bars.iloc[:-1] if len(bars) > 1 else bars
+    reference_window = prior.tail(12)
+    event_window = bars.tail(6)
+
+    reference_high = _safe_float(reference_window["high"].max()) if not reference_window.empty else None
+    event_low = _safe_float(event_window["low"].min()) if not event_window.empty else None
+    event_low_bar = event_window.loc[event_window["low"].idxmin()] if event_low is not None else None
+    event_bar_high = _safe_float(event_low_bar.get("high")) if event_low_bar is not None else None
+
+    drop_from_reference_high_pct = _pct_change(event_low, reference_high)
+    rebound_from_event_low_pct = _pct_change(close, event_low)
+    atr_move = None
+    if reference_high is not None and event_low is not None and atr14 and atr14 > 0:
+        atr_move = (reference_high - event_low) / atr14
+
+    shock_move = bool(
+        (drop_from_reference_high_pct is not None and drop_from_reference_high_pct <= -3.0)
+        or (atr_move is not None and atr_move >= 2.0)
+    )
+    reclaim_candidates = [value for value in (event_bar_high, vwap, ema20) if value is not None and value > close]
+    confirmation_price = min(reclaim_candidates) if reclaim_candidates else event_bar_high
+    invalidation_buffer = atr14 * 0.3 if atr14 is not None and atr14 > 0 else None
+    long_invalidation = (event_low - invalidation_buffer) if event_low is not None and invalidation_buffer is not None else event_low
+    short_breakdown = recent_low if recent_low is not None else event_low
+
+    event_type = "none"
+    suggested_direction = "wait"
+    urgency = "normal"
+    interpretation = "未检测到足够明确的急跌、扫低或反转事件。"
+
+    if low_swept and not close_below_support:
+        event_type = "liquidity_sweep_low_reversal_candidate"
+        suggested_direction = "conditional_long"
+        urgency = "high"
+        interpretation = "插针扫过前低后未收盘跌破，优先按假跌破/反弹候选处理，等待右侧确认。"
+    elif shock_move:
+        urgency = "high"
+        if confirmation_price is not None and close >= confirmation_price:
+            event_type = "selloff_rebound_confirmed"
+            suggested_direction = "long"
+            interpretation = "急跌后已收回关键确认价，允许评估日内反弹多单，但必须使用事件低点下方作为失效边界。"
+        elif rebound_from_event_low_pct is not None and rebound_from_event_low_pct >= 0.5:
+            event_type = "selloff_rebound_candidate"
+            suggested_direction = "conditional_long"
+            interpretation = "急跌后从低点反弹，但尚未完全确认，需等待确认价触发，避免左侧抄底。"
+        else:
+            event_type = "sharp_selloff_wait_reclaim"
+            suggested_direction = "wait"
+            interpretation = "急跌仍未出现足够右侧确认，不应直接抄底；必须同时给出上破确认与下破延续两套条件。"
+    elif close_below_support:
+        event_type = "breakdown_continuation"
+        suggested_direction = "conditional_short"
+        urgency = "high"
+        interpretation = "收盘跌破前低/支撑，优先按跌破延续处理，反抽不过确认价时偏空。"
+
+    return {
+        "type": event_type,
+        "suggested_direction": suggested_direction,
+        "urgency": urgency,
+        "reference_high": _round(reference_high),
+        "event_low": _round(event_low),
+        "event_bar_high": _round(event_bar_high),
+        "drop_from_reference_high_pct": _round(drop_from_reference_high_pct, 2),
+        "rebound_from_event_low_pct": _round(rebound_from_event_low_pct, 2),
+        "atr_move": _round(atr_move, 2),
+        "trigger_reference": {
+            "long_confirmation_price": _round(confirmation_price),
+            "long_invalidation_price": _round(long_invalidation),
+            "short_breakdown_price": _round(short_breakdown),
+            "stop_buffer_atr": _round(invalidation_buffer),
+        },
+        "interpretation": interpretation,
+    }
+
+
 def build_crypto_technical_context(
     df: pd.DataFrame,
     code: str,
@@ -153,6 +246,17 @@ def build_crypto_technical_context(
         else:
             ema_structure = "mixed"
 
+    event_context = _build_event_context(
+        bars,
+        close=close,
+        recent_low=recent_low,
+        low_swept=bool(low_swept),
+        close_below_support=bool(close_below_support),
+        atr14=atr14,
+        vwap=vwap,
+        ema20=ema20,
+    )
+
     return {
         "framework": "Price Action + Fibonacci + Volume + VWAP + EMA",
         "lookback_bars": int(len(bars)),
@@ -191,6 +295,7 @@ def build_crypto_technical_context(
             "ema50": _round(ema50),
             "structure": ema_structure,
         },
+        "event": event_context,
     }
 
 

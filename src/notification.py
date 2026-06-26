@@ -724,29 +724,35 @@ class NotificationService(
             return False
 
     def _send_feishu_stream_chunked(
-        self, 
-        reply_client, 
-        chat_id: str, 
-        content: str, 
+        self,
+        reply_client,
+        chat_id: str,
+        content: str,
         max_bytes: int
     ) -> bool:
         """
-        分批发送长消息到飞书（Stream 模式）
-        
+        分批发送长消息到飞书（Stream 模式），均衡分配字数
+
         Args:
             reply_client: FeishuReplyClient 实例
             chat_id: 飞书会话 ID
             content: 完整消息内容
             max_bytes: 单条消息最大字节数
-            
+
         Returns:
             是否全部发送成功
         """
         import time
-        
+
         def get_bytes(s: str) -> int:
             return len(s.encode('utf-8'))
-        
+
+        total_bytes = get_bytes(content)
+
+        # 计算需要的消息数量（向上取整）
+        num_chunks = (total_bytes + max_bytes - 1) // max_bytes
+        target_bytes_per_chunk = total_bytes // num_chunks if num_chunks > 1 else max_bytes
+
         # 按段落或分隔线分割
         if "\n---\n" in content:
             sections = content.split("\n---\n")
@@ -756,40 +762,42 @@ class NotificationService(
             sections = [parts[0]] + [f"### {p}" for p in parts[1:]]
             separator = "\n"
         else:
-            # 按行分割
             sections = content.split("\n")
             separator = "\n"
-        
+
         chunks = []
         current_chunk = []
         current_bytes = 0
         separator_bytes = get_bytes(separator)
-        
+
         for section in sections:
             section_bytes = get_bytes(section) + separator_bytes
-            
-            if current_bytes + section_bytes > max_bytes:
-                if current_chunk:
-                    chunks.append(separator.join(current_chunk))
+
+            # 优化：当接近目标字数且还有足够空间时，尽量填满当前块
+            will_exceed_target = current_bytes + section_bytes > target_bytes_per_chunk * 1.1
+            will_exceed_max = current_bytes + section_bytes > max_bytes
+
+            if will_exceed_max or (will_exceed_target and current_chunk and len(chunks) < num_chunks - 1):
+                chunks.append(separator.join(current_chunk))
                 current_chunk = [section]
                 current_bytes = section_bytes
             else:
                 current_chunk.append(section)
                 current_bytes += section_bytes
-        
+
         if current_chunk:
             chunks.append(separator.join(current_chunk))
-        
+
         # 发送每个分块
         success = True
         for i, chunk in enumerate(chunks):
             if i > 0:
-                time.sleep(0.5)  # 避免请求过快
-            
+                time.sleep(0.5)
+
             if not reply_client.send_to_chat(chat_id, chunk):
                 success = False
                 logger.error(f"飞书 Stream 分块 {i+1}/{len(chunks)} 发送失败")
-        
+
         return success
         
     def generate_daily_report(
@@ -1868,7 +1876,7 @@ class NotificationService(
 
         intraday = plans.get("intraday_plan")
         if is_hourly:
-            self._append_btc_plan(lines, "小时线日内计划（整点更新）", intraday)
+            self._append_btc_plan(lines, "小时线日内计划（05 分更新）", intraday)
         else:
             self._append_btc_plan(lines, "日线多单计划（08:00 后更新）", plans.get("long_plan"))
             self._append_btc_plan(lines, "日线空单计划（08:00 后更新）", plans.get("short_plan"))

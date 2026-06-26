@@ -697,7 +697,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         self.assertIn("Bitcoin (BTC) 小时线分析", out)
         self.assertIn("### 日内建议", out)
-        self.assertIn("#### 小时线日内计划（整点更新）", out)
+        self.assertIn("#### 小时线日内计划（05 分更新）", out)
         self.assertIn("- 方向: long", out)
         self.assertNotIn("#### 日线多单计划", out)
         self.assertNotIn("#### 日线空单计划", out)
@@ -741,7 +741,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertIn("#### 日线多单计划（08:00 后更新）", out)
         self.assertIn("#### 日线空单计划（08:00 后更新）", out)
         self.assertIn("#### 小时线日内计划", out)
-        self.assertNotIn("#### 小时线日内计划（整点更新）", out)
+        self.assertNotIn("#### 小时线日内计划（05 分更新）", out)
 
     @mock.patch("src.notification.get_config")
     def test_generate_dashboard_report_uses_btc_template(

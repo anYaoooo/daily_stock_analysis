@@ -737,6 +737,12 @@ class Config:
     agent_event_monitor_enabled: bool = False  # Enable periodic event-driven alert checks in schedule mode
     agent_event_monitor_interval_minutes: int = 5  # Polling interval for event monitor background checks
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
+    btc_volatility_monitor_enabled: bool = False
+    btc_volatility_monitor_interval_seconds: int = 60
+    btc_volatility_monitor_window_minutes: int = 5
+    btc_volatility_monitor_threshold_pct: float = 1.0
+    btc_volatility_monitor_cooldown_minutes: int = 30
+    btc_volatility_monitor_symbol: str = "BTC"
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -1561,6 +1567,35 @@ class Config:
                 minimum=1,
             ),
             agent_event_alert_rules_json=os.getenv('AGENT_EVENT_ALERT_RULES_JSON', ''),
+            btc_volatility_monitor_enabled=parse_env_bool(
+                os.getenv('BTC_VOLATILITY_MONITOR_ENABLED'),
+                default=False,
+            ),
+            btc_volatility_monitor_interval_seconds=parse_env_int(
+                os.getenv('BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS'),
+                60,
+                field_name='BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS',
+                minimum=30,
+            ),
+            btc_volatility_monitor_window_minutes=parse_env_int(
+                os.getenv('BTC_VOLATILITY_MONITOR_WINDOW_MINUTES'),
+                5,
+                field_name='BTC_VOLATILITY_MONITOR_WINDOW_MINUTES',
+                minimum=1,
+            ),
+            btc_volatility_monitor_threshold_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_THRESHOLD_PCT'),
+                1.0,
+                field_name='BTC_VOLATILITY_MONITOR_THRESHOLD_PCT',
+                minimum=0.1,
+            ),
+            btc_volatility_monitor_cooldown_minutes=parse_env_int(
+                os.getenv('BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES'),
+                30,
+                field_name='BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES',
+                minimum=0,
+            ),
+            btc_volatility_monitor_symbol=(os.getenv('BTC_VOLATILITY_MONITOR_SYMBOL') or 'BTC').strip() or 'BTC',
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),
             feishu_webhook_secret=os.getenv('FEISHU_WEBHOOK_SECRET'),

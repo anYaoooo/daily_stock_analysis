@@ -69,5 +69,30 @@ def test_build_crypto_technical_context_distinguishes_liquidity_sweep_from_break
     assert context["price_action"]["close_above_resistance"] is False
 
 
+def test_build_crypto_technical_context_flags_selloff_rebound_candidate() -> None:
+    bars = _btc_bars()
+    bars[["open", "high", "low", "close", "volume"]] = bars[["open", "high", "low", "close", "volume"]].astype(float)
+    last_idx = bars.index[-1]
+    reference_high = bars.iloc[-7:-1]["high"].max()
+    event_low = reference_high * 0.94
+    bars.loc[last_idx, "open"] = reference_high * 0.965
+    bars.loc[last_idx, "high"] = reference_high * 0.972
+    bars.loc[last_idx, "low"] = event_low
+    bars.loc[last_idx, "close"] = event_low * 1.012
+    bars.loc[last_idx, "volume"] = bars.iloc[-21:-1]["volume"].mean() * 2
+
+    context = build_crypto_technical_context(bars, "BTC")
+
+    assert context is not None
+    assert context["event"]["type"] in {
+        "selloff_rebound_candidate",
+        "liquidity_sweep_low_reversal_candidate",
+    }
+    assert context["event"]["urgency"] == "high"
+    assert context["event"]["trigger_reference"]["long_confirmation_price"] is not None
+    assert context["event"]["trigger_reference"]["long_invalidation_price"] is not None
+    assert context["event"]["trigger_reference"]["short_breakdown_price"] is not None
+
+
 def test_build_crypto_technical_context_ignores_regular_stocks() -> None:
     assert build_crypto_technical_context(_btc_bars(), "AAPL") is None

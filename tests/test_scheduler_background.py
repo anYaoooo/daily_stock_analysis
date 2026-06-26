@@ -91,6 +91,57 @@ class SchedulerBackgroundTaskTestCase(unittest.TestCase):
 
         self.assertEqual(calls, [])
 
+    def test_background_task_runs_once_per_hour_at_configured_minute(self):
+        fake_schedule = _FakeScheduleModule()
+        with patch.dict(sys.modules, {"schedule": fake_schedule}):
+            from src.scheduler import Scheduler
+
+            scheduler = Scheduler(schedule_time="18:00")
+            calls = []
+            fake_thread = MagicMock()
+            fake_thread.is_alive.return_value = False
+
+            def _make_thread(target=None, **kwargs):
+                fake_thread.start.side_effect = target
+                return fake_thread
+
+            scheduler.add_background_task(
+                lambda: calls.append("ran"),
+                interval_seconds=60 * 60,
+                hourly_at_minute=5,
+                run_immediately=False,
+                name="hourly",
+            )
+
+            with patch("src.scheduler.threading.Thread", side_effect=_make_thread), \
+                 patch("src.scheduler.datetime") as datetime_mock:
+                datetime_mock.now.return_value = datetime(2026, 1, 1, 1, 4, 30)
+                scheduler._run_background_tasks()
+
+                datetime_mock.now.return_value = datetime(2026, 1, 1, 1, 5, 0)
+                scheduler._run_background_tasks()
+                scheduler._run_background_tasks()
+
+                datetime_mock.now.return_value = datetime(2026, 1, 1, 2, 5, 0)
+                scheduler._run_background_tasks()
+
+        self.assertEqual(calls, ["ran", "ran"])
+
+    def test_background_task_rejects_invalid_hourly_minute(self):
+        fake_schedule = _FakeScheduleModule()
+        with patch.dict(sys.modules, {"schedule": fake_schedule}):
+            from src.scheduler import Scheduler
+
+            scheduler = Scheduler(schedule_time="18:00")
+
+            with self.assertRaises(ValueError):
+                scheduler.add_background_task(
+                    lambda: None,
+                    interval_seconds=60 * 60,
+                    hourly_at_minute=60,
+                    name="hourly",
+                )
+
     def test_run_with_schedule_registers_background_tasks_before_immediate_daily_task(self):
         fake_schedule = _FakeScheduleModule()
         with patch.dict(sys.modules, {"schedule": fake_schedule}):
@@ -105,7 +156,7 @@ class SchedulerBackgroundTaskTestCase(unittest.TestCase):
                     order.append(("mode", schedule_mode))
 
                 def add_background_task(self, **kwargs):
-                    order.append(("background", kwargs["name"]))
+                    order.append(("background", kwargs["name"], kwargs.get("hourly_at_minute")))
 
                 def set_daily_task(self, task, run_immediately=True):
                     order.append(("daily", run_immediately))
@@ -122,10 +173,11 @@ class SchedulerBackgroundTaskTestCase(unittest.TestCase):
                         "interval_seconds": 60,
                         "run_immediately": True,
                         "name": "event_monitor",
+                        "hourly_at_minute": 5,
                     }],
                 )
 
-        self.assertEqual(order[:5], [("init", "18:00"), ("provider", False), ("mode", "daily"), ("background", "event_monitor"), ("daily", True)])
+        self.assertEqual(order[:5], [("init", "18:00"), ("provider", False), ("mode", "daily"), ("background", "event_monitor", 5), ("daily", True)])
 
     def test_scheduler_hourly_mode_registers_top_of_hour_job(self):
         fake_schedule = _FakeScheduleModule()

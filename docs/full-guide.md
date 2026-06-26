@@ -1399,7 +1399,7 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 
 ### 自动运行
 
-回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析保持每小时执行一次，后台回测仍会每小时检查一次够龄的 BTC 历史报告。BTC 计划级回测会从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，按入场触发、止盈止损、手续费、滑点、风险预算和名义仓位模拟交易，分别写入 `crypto_backtest_results`，并在 `crypto_backtest_summaries` 汇总正确率、胜率、资金曲线和风险收益指标。`btc-plan-v2` 会额外保存 K 线来源/周期/拉取时间/bar 范围/哈希、前视偏差校验、单笔 R 倍数，并在入场触发样本小于 30 时标记低置信度。也可通过 API 手动触发或删除单条回测结果；删除后会自动重算汇总。
+回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析会在每小时 05 分执行以获取上一根完整小时 K 线，后台回测仍会每小时检查一次够龄的 BTC 历史报告。BTC 计划级回测会从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，按入场触发、止盈止损、手续费、滑点、风险预算和名义仓位模拟交易，分别写入 `crypto_backtest_results`，并在 `crypto_backtest_summaries` 汇总正确率、胜率、资金曲线和风险收益指标。`btc-plan-v2` 会额外保存 K 线来源/周期/拉取时间/bar 范围/哈希、前视偏差校验、单笔 R 倍数，并在入场触发样本小于 30 时标记低置信度。也可通过 API 手动触发或删除单条回测结果；删除后会自动重算汇总。
 
 BTC 单标的分析完成后的完整报告推送使用 BTC 专用模板，不再发送通用股票决策仪表盘；正文只保留多空建议、日线多单计划、日线空单计划、小时线日内计划和技术分析。
 
@@ -1662,6 +1662,23 @@ AGENT_EVENT_ALERT_RULES_JSON=[{"stock_code":"600519","alert_type":"price_cross",
 worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_triggers` 作为评估历史；正常未触发不写历史。DB 持久化规则的 `triggered` 历史按 `rule_id + target + data_source + data_timestamp` 对同一数据点做 best-effort 去重，重复命中会复用最早一条触发记录，`data_timestamp` 缺失时不去重。真实触发后会把每个通知渠道的 attempt 写入 `alert_notifications`，并为 Alert API 创建的持久化规则写入 `alert_cooldowns` 业务冷却状态；若读取持久化冷却失败，worker 会临时使用进程内 fingerprint 防止 DB 异常期间重复推送。legacy `AGENT_EVENT_ALERT_RULES_JSON` 规则继续使用进程内 fingerprint 抑制，不写持久化冷却；通知基础设施的 `notification_noise.py` 降噪仍独立生效。Web 规则列表使用后端返回的 `cooldown_active` 判断冷却状态，避免浏览器本地时区解析影响展示。
 
 技术指标规则只使用日线 close 的边缘触发，partial bar 处理是服务器本地时区 + 16:00 的启发式，不做市场日历精确判定。`watchlist` 每轮刷新 `STOCK_LIST` 后展开，`portfolio_holdings` 从持仓快照的非零持仓按 symbol 去重展开，`portfolio_account` 复用持仓风险服务做账户级聚合评估。`market` 规则的 target 仅支持 `cn|hk|us`，使用结构化 `MarketLightSnapshot`；`trade_date` 来自当次 market overview，`data_quality=unavailable` 会跳过触发，非交易日会被交易日 gate 跳过，`market_light_score_drop` 只比较跨交易日 score。WebUI 的“告警”页面可以管理持久化规则、执行一次性 dry-run 测试，并查看触发历史、通知尝试结果和只读冷却状态；批量规则的列表冷却状态是父规则摘要，子目标冷却以触发历史为准。详细边界见 [实时告警中心](alerts.md)。
+
+## BTC 剧烈波动触发分析
+
+`BTC_VOLATILITY_MONITOR_ENABLED=true` 后，schedule 模式会额外注册 `btc_volatility_monitor` 后台任务。它按实时 BTC 价格维护一个短窗口，窗口内绝对涨跌幅达到 `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT` 后，会立即触发一次 `analysis_mode=hourly` 的 BTC 分析并走现有 report 通知路由。该能力只生成分析和进场计划，不会自动下单；真实交易仍需通过手动交易接口确认。
+
+默认参数偏保守：每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 触发，触发后冷却 30 分钟。调度器后台任务最小轮询精度为 30 秒，因此低于 30 秒的间隔会被自动夹到 30 秒。
+
+```env
+BTC_VOLATILITY_MONITOR_ENABLED=true
+BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=60
+BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=5
+BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
+BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
+BTC_VOLATILITY_MONITOR_SYMBOL=BTC
+```
+
+回退方式是删除或设置 `BTC_VOLATILITY_MONITOR_ENABLED=false`；每小时 05 分的小时线分析和 `AGENT_EVENT_MONITOR_*` 告警中心不受影响。波动触发分析与定时小时线分析共用进程内互斥锁，若已有 BTC 分析正在运行，本次触发会记录日志并跳过，避免重复生成报告。
 
 ## 持仓管理说明
 

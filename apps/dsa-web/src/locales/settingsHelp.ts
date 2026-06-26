@@ -490,6 +490,21 @@ const settingsHelpZhCN: SettingsHelpMap = {
       '若当前进程未以 schedule 模式启动，保存这些字段不会自动创建调度器。',
     ],
   },
+  'settings.system.btc_volatility_monitor': {
+    title: 'BTC 剧烈波动触发分析',
+    summary: '在 schedule 模式下按实时 BTC 短窗口波动自动触发小时线分析。',
+    usage: '启用 BTC_VOLATILITY_MONITOR_ENABLED 后，系统会按配置间隔轮询 BTC 价格；窗口内绝对涨跌幅达到阈值时触发一次小时线分析。',
+    valueNotes: [
+      '默认每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 触发。',
+      '冷却时间用于抑制连续剧烈波动导致的重复报告。',
+      '调度器后台任务最小轮询精度为 30 秒，低于 30 秒的间隔会被自动夹到 30 秒。',
+    ],
+    impact: ['影响 schedule 模式下是否在整点小时线之外额外生成 BTC 日内机会报告。'],
+    notes: [
+      '该能力只触发分析和通知，不会自动下单。',
+      '波动触发分析与日线、小时线计划任务共用进程内互斥；若已有分析正在运行，本次触发会记录日志并跳过。',
+    ],
+  },
   'settings.system.RUN_IMMEDIATELY': {
     title: '启动后立即运行',
     summary: '控制非定时模式启动时是否立即执行一次分析。',
@@ -1414,6 +1429,21 @@ const settingsHelpEnUS: SettingsHelpMap = {
     notes: [
       'Check the runtime timezone, especially in containers and servers.',
       'If the current process was not started in schedule mode, saving these fields will not create a scheduler.',
+    ],
+  },
+  'settings.system.btc_volatility_monitor': {
+    title: 'BTC Volatility-Triggered Analysis',
+    summary: 'Triggers hourly BTC analysis from short-window realtime BTC volatility in schedule mode.',
+    usage: 'When BTC_VOLATILITY_MONITOR_ENABLED is enabled, the system polls BTC prices at the configured interval and triggers one hourly analysis when the absolute window move reaches the threshold.',
+    valueNotes: [
+      'Defaults: poll every 60 seconds, use a 5-minute window, and trigger on moves above 1.0%.',
+      'Cooldown suppresses repeated reports during continuous sharp moves.',
+      'The scheduler loop has a 30-second minimum polling precision, so shorter intervals are clamped to 30 seconds.',
+    ],
+    impact: ['Affects whether schedule mode can generate extra BTC intraday opportunity reports outside the top-of-hour run.'],
+    notes: [
+      'This only triggers analysis and notification; it never places orders automatically.',
+      'Volatility-triggered analysis shares the process-local BTC analysis lock with daily and hourly scheduled runs; if another analysis is running, the trigger is logged and skipped.',
     ],
   },
   'settings.system.RUN_IMMEDIATELY': {

@@ -74,7 +74,7 @@ class Scheduler:
 
         Args:
             schedule_time: 每日执行时间，格式 "HH:MM"
-            schedule_mode: 调度模式，"daily" 表示每日固定时间，"hourly" 表示每小时整点
+            schedule_mode: 调度模式，"daily" 表示每日固定时间，"hourly" 表示主任务每小时整点
         """
         try:
             import schedule
@@ -157,7 +157,7 @@ class Scheduler:
         return True
 
     def _configure_hourly_task(self) -> bool:
-        """(Re)register the analysis job at every top of the hour."""
+        """(Re)register the main scheduled job at every top of the hour."""
         self._cancel_daily_job()
         self._daily_job = self.schedule.every().hour.at(":00").do(self._safe_run_task)
         logger.info("已设置每小时整点定时任务")
@@ -214,12 +214,19 @@ class Scheduler:
         interval_seconds: int,
         run_immediately: bool = False,
         name: Optional[str] = None,
+        hourly_at_minute: Optional[int] = None,
     ) -> None:
         """Register a periodic background task executed inside the scheduler loop.
 
         Note: The scheduler loop polls every 30 seconds, so *interval_seconds*
         below 30 will be clamped to 30 to avoid promising unreachable precision.
         """
+        normalized_hourly_minute = None
+        if hourly_at_minute is not None:
+            normalized_hourly_minute = int(hourly_at_minute)
+            if normalized_hourly_minute < 0 or normalized_hourly_minute > 59:
+                raise ValueError(f"hourly_at_minute must be between 0 and 59: {hourly_at_minute!r}")
+
         clamped_interval = max(30, int(interval_seconds))
         if int(interval_seconds) < 30:
             logger.warning(
@@ -234,18 +241,25 @@ class Scheduler:
             "name": name or getattr(task, "__name__", "background_task"),
             "thread": None,
             "running": False,
+            "hourly_at_minute": normalized_hourly_minute,
+            "last_scheduled_hour": None,
         }
         if not run_immediately:
             entry["last_run"] = time.time()
         self._background_tasks.append(entry)
+        schedule_description = (
+            f"每小时第 {normalized_hourly_minute:02d} 分"
+            if normalized_hourly_minute is not None
+            else f"间隔 {entry['interval_seconds']} 秒"
+        )
         logger.info(
-            "已注册后台任务: %s（间隔 %s 秒，立即执行=%s）",
+            "已注册后台任务: %s（%s，立即执行=%s）",
             entry["name"],
-            entry["interval_seconds"],
+            schedule_description,
             run_immediately,
         )
-        if run_immediately:
-            self._start_background_task(entry)
+        if run_immediately and self._start_background_task(entry) and normalized_hourly_minute is not None:
+            entry["last_scheduled_hour"] = datetime.now().strftime("%Y-%m-%d %H")
 
     def _start_background_task(self, entry: Dict[str, Any]) -> bool:
         """Start one background task in a dedicated daemon thread."""
@@ -280,6 +294,8 @@ class Scheduler:
             return
 
         now = time.time()
+        current_time = datetime.now()
+        current_hour_slot = current_time.strftime("%Y-%m-%d %H")
         for entry in self._background_tasks:
             worker = entry.get("thread")
             if worker is not None and worker.is_alive():
@@ -287,6 +303,15 @@ class Scheduler:
             if entry.get("running"):
                 entry["running"] = False
                 entry["thread"] = None
+            hourly_at_minute = entry.get("hourly_at_minute")
+            if hourly_at_minute is not None:
+                if current_time.minute != hourly_at_minute:
+                    continue
+                if entry.get("last_scheduled_hour") == current_hour_slot:
+                    continue
+                if self._start_background_task(entry):
+                    entry["last_scheduled_hour"] = current_hour_slot
+                continue
             if now - entry["last_run"] < entry["interval_seconds"]:
                 continue
             self._start_background_task(entry)
@@ -343,10 +368,11 @@ def run_with_schedule(
         run_immediately: 是否立即执行一次
         background_tasks: 可选的后台任务定义列表。每项为一个字典，
             需包含 `task` 与 `interval_seconds`，可选包含 `name`
-            和 `run_immediately`。`interval_seconds` 单位为秒。
+            `run_immediately` 和 `hourly_at_minute`。`interval_seconds`
+            单位为秒；设置 `hourly_at_minute` 时按每小时固定分钟触发。
         schedule_time_provider: 可选的时间提供器；调度器每轮检查前会读取，
             当返回值变化时自动重建 daily job。
-        schedule_mode: 调度模式，"daily" 表示每日固定时间，"hourly" 表示每小时整点。
+        schedule_mode: 调度模式，"daily" 表示每日固定时间，"hourly" 表示主任务每小时整点。
     """
     scheduler = Scheduler(
         schedule_time=schedule_time,
@@ -359,6 +385,7 @@ def run_with_schedule(
             interval_seconds=entry["interval_seconds"],
             run_immediately=entry.get("run_immediately", False),
             name=entry.get("name"),
+            hourly_at_minute=entry.get("hourly_at_minute"),
         )
     scheduler.set_daily_task(task, run_immediately=run_immediately)
     scheduler.run()

@@ -105,10 +105,22 @@ class MainScheduleModeTestCase(unittest.TestCase):
             "agent_event_monitor_enabled": False,
             "agent_event_alert_rules_json": "",
             "agent_event_monitor_interval_minutes": 5,
+            "btc_volatility_monitor_enabled": False,
+            "btc_volatility_monitor_interval_seconds": 60,
+            "btc_volatility_monitor_window_minutes": 5,
+            "btc_volatility_monitor_threshold_pct": 1.0,
+            "btc_volatility_monitor_cooldown_minutes": 30,
+            "btc_volatility_monitor_symbol": "BTC",
             "daily_market_context_enabled": True,
         }
         defaults.update(overrides)
         return _DummyConfig(**defaults)
+
+    def _assert_btc_hourly_background_task(self, task):
+        self.assertEqual(task["name"], "btc_hourly_analysis")
+        self.assertEqual(task["interval_seconds"], 60 * 60)
+        self.assertEqual(task["hourly_at_minute"], 5)
+        self.assertEqual(task["run_immediately"], False)
 
     def test_public_webui_bind_warns_when_auth_is_disabled(self) -> None:
         with patch("src.auth.is_auth_enabled", return_value=False), \
@@ -189,9 +201,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
             },
         )
         self.assertEqual(len(scheduled_call["background_tasks"]), 1)
-        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "btc_hourly_analysis")
-        self.assertEqual(scheduled_call["background_tasks"][0]["interval_seconds"], 60 * 60)
-        self.assertEqual(scheduled_call["background_tasks"][0]["run_immediately"], True)
+        self._assert_btc_hourly_background_task(scheduled_call["background_tasks"][0])
         run_full_analysis.assert_called_once_with(config, args, None, analysis_mode="daily")
         warning_log.assert_any_call(
             "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照，并在每次运行前重新读取最新的 STOCK_LIST。"
@@ -280,7 +290,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(scheduled_call["schedule_mode"], "daily")
         self.assertEqual(scheduled_call["resolved_schedule_time"], "08:00")
         self.assertEqual(len(scheduled_call["background_tasks"]), 2)
-        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "btc_hourly_analysis")
+        self._assert_btc_hourly_background_task(scheduled_call["background_tasks"][0])
         background_task = scheduled_call["background_tasks"][1]
         self.assertEqual(background_task["name"], "agent_event_monitor")
         self.assertEqual(background_task["interval_seconds"], 7 * 60)
@@ -327,8 +337,64 @@ class MainScheduleModeTestCase(unittest.TestCase):
         worker_cls.assert_called_once()
         run_full_analysis.assert_not_called()
         self.assertEqual(len(scheduled_call["background_tasks"]), 2)
-        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "btc_hourly_analysis")
+        self._assert_btc_hourly_background_task(scheduled_call["background_tasks"][0])
         self.assertEqual(scheduled_call["background_tasks"][1]["name"], "agent_event_monitor")
+
+    def test_schedule_mode_registers_btc_volatility_monitor_and_triggers_hourly_analysis(self) -> None:
+        args = self._make_args(schedule=True)
+        config = self._make_config(
+            schedule_enabled=False,
+            btc_volatility_monitor_enabled=True,
+            btc_volatility_monitor_interval_seconds=45,
+        )
+        runtime_config = self._make_config(
+            schedule_enabled=False,
+            btc_volatility_monitor_enabled=True,
+            btc_volatility_monitor_interval_seconds=45,
+        )
+        monitor = MagicMock()
+        monitor.run_once.return_value = {
+            "triggered": 1,
+            "direction": "down",
+            "change_pct": -1.2,
+            "price": 59000,
+            "baseline_price": 59800,
+        }
+        scheduled_call = {}
+
+        def fake_run_with_schedule(
+            task,
+            schedule_time,
+            run_immediately,
+            background_tasks=None,
+            schedule_time_provider=None,
+            schedule_mode="daily",
+        ):
+            scheduled_call["background_tasks"] = background_tasks or []
+
+        with patch("main.parse_arguments", return_value=args), \
+             patch("main.get_config", return_value=config), \
+             patch.object(main, "_reload_runtime_config", return_value=runtime_config), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
+             patch("main.setup_logging"), \
+             patch("main.run_full_analysis") as run_full_analysis, \
+             patch("src.services.btc_volatility_monitor.BTCVolatilityMonitor", return_value=monitor) as monitor_cls, \
+             patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
+            exit_code = main.main()
+            self.assertEqual(exit_code, 0)
+            monitor_cls.assert_called_once()
+            run_full_analysis.assert_not_called()
+            self.assertEqual(len(scheduled_call["background_tasks"]), 2)
+            self._assert_btc_hourly_background_task(scheduled_call["background_tasks"][0])
+            background_task = scheduled_call["background_tasks"][1]
+            self.assertEqual(background_task["name"], "btc_volatility_monitor")
+            self.assertEqual(background_task["interval_seconds"], 45)
+            self.assertEqual(background_task["run_immediately"], True)
+
+            background_task["task"]()
+
+            monitor.run_once.assert_called_once_with(runtime_config)
+            run_full_analysis.assert_called_once_with(runtime_config, args, None, analysis_mode="hourly")
 
     def test_check_notify_returns_before_other_modes(self) -> None:
         args = self._make_args(check_notify=True, serve=True, schedule=True, market_review=True)
@@ -451,7 +517,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(scheduled_call["run_immediately"], True)
         self.assertEqual(scheduled_call["schedule_mode"], "daily")
         self.assertEqual(len(scheduled_call["background_tasks"]), 1)
-        self.assertEqual(scheduled_call["background_tasks"][0]["name"], "btc_hourly_analysis")
+        self._assert_btc_hourly_background_task(scheduled_call["background_tasks"][0])
         error_log.assert_called_once()
 
     def test_reload_runtime_config_preserves_process_env_overrides(self) -> None:
