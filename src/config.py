@@ -743,6 +743,7 @@ class Config:
     btc_volatility_monitor_threshold_pct: float = 1.0
     btc_volatility_monitor_cooldown_minutes: int = 30
     btc_volatility_monitor_symbol: str = "BTC"
+    btc_volatility_monitor_confirmation_samples: int = 2
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -1596,6 +1597,11 @@ class Config:
                 minimum=0,
             ),
             btc_volatility_monitor_symbol=(os.getenv('BTC_VOLATILITY_MONITOR_SYMBOL') or 'BTC').strip() or 'BTC',
+            btc_volatility_monitor_confirmation_samples=parse_env_int(
+                os.getenv('BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES'),
+                2,
+                field_name='BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES',
+            ),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),
             feishu_webhook_secret=os.getenv('FEISHU_WEBHOOK_SECRET'),

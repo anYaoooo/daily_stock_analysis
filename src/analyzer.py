@@ -3328,6 +3328,7 @@ class GeminiAnalyzer:
 """
 
         crypto_technical = context.get("crypto_technical") if isinstance(context, dict) else None
+        trigger_context = context.get("trigger_context") if isinstance(context, dict) else None
         analysis_mode = str(context.get("analysis_mode") or "daily").strip().lower() if isinstance(context, dict) else "daily"
         if isinstance(crypto_technical, dict):
             timeframes = crypto_technical.get("timeframes") or {}
@@ -3381,6 +3382,24 @@ class GeminiAnalyzer:
             hourly_opportunity = intraday.get("opportunity", "N/A")
             if not hourly_crypto:
                 hourly_opportunity = "小时线数据缺失，日内交易计划必须设为 enabled=false、direction=\"wait\"，等待小时线数据恢复或新的日内触发。"
+            if isinstance(trigger_context, dict) and trigger_context.get("trigger_reason") == "volatility_spike":
+                prompt += f"""
+### BTC 波动触发上下文（必须解释）
+| 字段 | 数值 |
+|------|------|
+| 触发来源 | {trigger_context.get('trigger_source', 'btc_volatility')} |
+| 触发原因 | {trigger_context.get('trigger_reason', 'volatility_spike')} |
+| 短窗口方向 | {trigger_context.get('direction', 'N/A')} |
+| 短窗口涨跌幅 | {trigger_context.get('change_pct', 'N/A')}% |
+| 当前价格 | {trigger_context.get('price', 'N/A')} |
+| 基准价格 | {trigger_context.get('baseline_price', 'N/A')} |
+| 窗口秒数 | {trigger_context.get('window_seconds', 'N/A')} |
+| 触发阈值 | {trigger_context.get('threshold_pct', 'N/A')}% |
+| 确认采样 | {trigger_context.get('confirmation_count', 'N/A')}/{trigger_context.get('confirmation_required', 'N/A')} |
+| 行情时间 | {trigger_context.get('provider_timestamp', 'N/A')} |
+
+> 本轮小时线分析由短窗口价格剧烈波动触发，不是普通整点小时线复盘。必须在 `dashboard.battle_plan.intraday_plan.reason` 或 `trigger_condition` 中说明该短窗口冲击，并明确：当前 1 小时 K 线可能尚未收线，5 分钟级别冲击只能作为日内触发/风控上下文，不能直接升级为日线趋势反转结论。
+"""
             prompt += f"""
 ### BTC 小时线日内交易机会（独立判断）
 | 维度 | 当前读数 | 分析要求 |

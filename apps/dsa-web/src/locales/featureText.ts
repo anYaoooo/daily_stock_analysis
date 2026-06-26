@@ -1,4 +1,4 @@
-import type { BacktestPhaseFilter } from '../types/backtest';
+import type { BacktestPhaseFilter, BacktestTimeframeFilter } from '../types/backtest';
 import type { AlertTargetScope, AlertType, MarketLightStatus, MarketRegion, PortfolioStopLossMode } from '../types/alerts';
 import type { PortfolioCashDirection, PortfolioCorporateActionType, PortfolioSide } from '../types/portfolio';
 import type { UiLanguage } from '../i18n/uiText';
@@ -17,6 +17,10 @@ export const BACKTEST_TEXT = {
 export const BACKTEST_PHASE_FILTER_OPTIONS: Record<UiLanguage, Array<Option<BacktestPhaseFilter>>> = {
   zh: [{ value: 'all', label: '全部阶段' }, { value: 'premarket', label: '盘前' }, { value: 'intraday', label: '盘中' }, { value: 'postmarket', label: '盘后' }, { value: 'unknown', label: '未知' }],
   en: [{ value: 'all', label: 'All phases' }, { value: 'premarket', label: 'Pre-market' }, { value: 'intraday', label: 'Intraday' }, { value: 'postmarket', label: 'Post-market' }, { value: 'unknown', label: 'Unknown' }],
+};
+export const BACKTEST_TIMEFRAME_FILTER_OPTIONS: Record<UiLanguage, Array<Option<BacktestTimeframeFilter>>> = {
+  zh: [{ value: 'all', label: '全部周期' }, { value: 'daily', label: '日线' }, { value: 'hourly', label: '小时线' }],
+  en: [{ value: 'all', label: 'All timeframes' }, { value: 'daily', label: 'Daily' }, { value: 'hourly', label: 'Hourly' }],
 };
 export const BACKTEST_PHASE_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { premarket: '盘前', intraday: '盘中', postmarket: '盘后', unknown: '未知' }, en: { premarket: 'Pre-market', intraday: 'Intraday', postmarket: 'Post-market', unknown: 'Unknown' } };
 export const BACKTEST_OUTCOME_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { win: '盈利', loss: '亏损', neutral: '中性' }, en: { win: 'Win', loss: 'Loss', neutral: 'Neutral' } };

@@ -33,6 +33,8 @@ class BTCVolatilityMonitor:
         self.now_provider = now_provider or time.time
         self._snapshots: List[PriceSnapshot] = []
         self._last_trigger_at: Optional[float] = None
+        self._confirmation_direction: Optional[str] = None
+        self._confirmation_count = 0
 
     @staticmethod
     def _fetch_quote(symbol: str) -> Any:
@@ -67,6 +69,10 @@ class BTCVolatilityMonitor:
             0.1,
             float(getattr(config, "btc_volatility_monitor_threshold_pct", 1.0) or 1.0),
         )
+        confirmation_samples = max(
+            1,
+            int(getattr(config, "btc_volatility_monitor_confirmation_samples", 2) or 2),
+        )
         cooldown_seconds = max(
             0,
             int(getattr(config, "btc_volatility_monitor_cooldown_minutes", 30) or 30) * 60,
@@ -88,6 +94,7 @@ class BTCVolatilityMonitor:
         baseline = self._snapshots[0]
         change_pct = (snapshot.price - baseline.price) / baseline.price * 100
         if abs(change_pct) < threshold_pct:
+            self._reset_confirmation()
             stats["reason"] = "below_threshold"
             stats.update(
                 self._market_fields(
@@ -95,6 +102,27 @@ class BTCVolatilityMonitor:
                     baseline=baseline,
                     change_pct=change_pct,
                     threshold_pct=threshold_pct,
+                )
+            )
+            return stats
+
+        direction = "up" if change_pct > 0 else "down"
+        if self._confirmation_direction == direction:
+            self._confirmation_count += 1
+        else:
+            self._confirmation_direction = direction
+            self._confirmation_count = 1
+
+        if self._confirmation_count < confirmation_samples:
+            stats["reason"] = "awaiting_confirmation"
+            stats.update(
+                self._market_fields(
+                    snapshot=snapshot,
+                    baseline=baseline,
+                    change_pct=change_pct,
+                    threshold_pct=threshold_pct,
+                    confirmation_count=self._confirmation_count,
+                    confirmation_required=confirmation_samples,
                 )
             )
             return stats
@@ -108,6 +136,8 @@ class BTCVolatilityMonitor:
                     baseline=baseline,
                     change_pct=change_pct,
                     threshold_pct=threshold_pct,
+                    confirmation_count=self._confirmation_count,
+                    confirmation_required=confirmation_samples,
                 )
             )
             return stats
@@ -121,9 +151,15 @@ class BTCVolatilityMonitor:
                 baseline=baseline,
                 change_pct=change_pct,
                 threshold_pct=threshold_pct,
+                confirmation_count=self._confirmation_count,
+                confirmation_required=confirmation_samples,
             )
         )
         return stats
+
+    def _reset_confirmation(self) -> None:
+        self._confirmation_direction = None
+        self._confirmation_count = 0
 
     def _prune(self, *, now: float, window_seconds: int) -> None:
         cutoff = now - window_seconds
@@ -165,6 +201,8 @@ class BTCVolatilityMonitor:
         baseline: PriceSnapshot,
         change_pct: float,
         threshold_pct: float,
+        confirmation_count: Optional[int] = None,
+        confirmation_required: Optional[int] = None,
     ) -> Dict[str, Any]:
         fields = cls._snapshot_fields(snapshot)
         fields.update(
@@ -176,4 +214,8 @@ class BTCVolatilityMonitor:
                 "window_seconds": int(snapshot.timestamp - baseline.timestamp),
             }
         )
+        if confirmation_count is not None:
+            fields["confirmation_count"] = int(confirmation_count)
+        if confirmation_required is not None:
+            fields["confirmation_required"] = int(confirmation_required)
         return fields

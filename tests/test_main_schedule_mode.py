@@ -111,6 +111,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
             "btc_volatility_monitor_threshold_pct": 1.0,
             "btc_volatility_monitor_cooldown_minutes": 30,
             "btc_volatility_monitor_symbol": "BTC",
+            "btc_volatility_monitor_confirmation_samples": 2,
             "daily_market_context_enabled": True,
         }
         defaults.update(overrides)
@@ -202,7 +203,14 @@ class MainScheduleModeTestCase(unittest.TestCase):
         )
         self.assertEqual(len(scheduled_call["background_tasks"]), 1)
         self._assert_btc_hourly_background_task(scheduled_call["background_tasks"][0])
-        run_full_analysis.assert_called_once_with(config, args, None, analysis_mode="daily")
+        run_full_analysis.assert_called_once_with(
+            config,
+            args,
+            None,
+            analysis_mode="daily",
+            trigger_source="daily_schedule",
+            trigger_context=None,
+        )
         warning_log.assert_any_call(
             "定时模式下检测到 --stocks 参数；计划执行将忽略启动时股票快照，并在每次运行前重新读取最新的 STOCK_LIST。"
         )
@@ -242,7 +250,14 @@ class MainScheduleModeTestCase(unittest.TestCase):
             scheduled_call,
             {"schedule_time": "08:00", "schedule_mode": "daily", "resolved_schedule_time": "08:00"},
         )
-        run_full_analysis.assert_called_once_with(runtime_config, args, None, analysis_mode="daily")
+        run_full_analysis.assert_called_once_with(
+            runtime_config,
+            args,
+            None,
+            analysis_mode="daily",
+            trigger_source="daily_schedule",
+            trigger_context=None,
+        )
 
     def test_schedule_mode_registers_event_monitor_background_task(self) -> None:
         args = self._make_args(schedule=True)
@@ -359,6 +374,10 @@ class MainScheduleModeTestCase(unittest.TestCase):
             "change_pct": -1.2,
             "price": 59000,
             "baseline_price": 59800,
+            "threshold_pct": 1.0,
+            "window_seconds": 120,
+            "confirmation_count": 2,
+            "confirmation_required": 2,
         }
         scheduled_call = {}
 
@@ -394,7 +413,30 @@ class MainScheduleModeTestCase(unittest.TestCase):
             background_task["task"]()
 
             monitor.run_once.assert_called_once_with(runtime_config)
-            run_full_analysis.assert_called_once_with(runtime_config, args, None, analysis_mode="hourly")
+            run_full_analysis.assert_called_once()
+            call_args = run_full_analysis.call_args
+            self.assertEqual(call_args.args, (runtime_config, args, None))
+            self.assertEqual(call_args.kwargs["analysis_mode"], "hourly")
+            self.assertEqual(call_args.kwargs["trigger_source"], "btc_volatility")
+            self.assertEqual(
+                call_args.kwargs["trigger_context"],
+                {
+                    "trigger_source": "btc_volatility",
+                    "trigger_reason": "volatility_spike",
+                    "monitor": "btc_volatility_monitor",
+                    "analysis_mode": "hourly",
+                    "symbol": "BTC",
+                    "price": 59000,
+                    "baseline_price": 59800,
+                    "change_pct": -1.2,
+                    "threshold_pct": 1.0,
+                    "direction": "down",
+                    "window_seconds": 120,
+                    "confirmation_count": 2,
+                    "confirmation_required": 2,
+                    "poll_interval_seconds": 45,
+                },
+            )
 
     def test_check_notify_returns_before_other_modes(self) -> None:
         args = self._make_args(check_notify=True, serve=True, schedule=True, market_review=True)

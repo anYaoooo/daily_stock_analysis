@@ -1503,6 +1503,26 @@ The worker writes `triggered`, `skipped`, `degraded`, and `failed` rows to `aler
 
 Technical indicator rules use daily-close edge triggers only. Partial-bar handling is a server-local-time + 16:00 heuristic and does not implement market-calendar precision. `watchlist` rules refresh and expand `STOCK_LIST` each worker run, `portfolio_holdings` expands non-zero snapshot positions with symbol de-duplication, and `portfolio_account` reuses the portfolio risk service for account-level aggregate evaluation. `market` rules accept only `cn|hk|us` targets and use structured `MarketLightSnapshot` data; `trade_date` comes from the current market overview, `data_quality=unavailable` skips triggering, non-trading days are skipped by the trading-day gate, and `market_light_score_drop` compares score across trading days only. The WebUI "Alerts" page can manage persisted rules, run one-shot dry-run tests, and view trigger history, notification attempts, and read-only cooldown state; cooldown on batch rules is a parent-rule summary, while child-target cooldown details are visible through trigger history. See [Real-Time Alert Center](alerts.md) for detailed boundaries.
 
+## BTC Volatility-Triggered Analysis
+
+When `BTC_VOLATILITY_MONITOR_ENABLED=true`, schedule mode also registers the `btc_volatility_monitor` background task. It keeps a short real-time BTC price window and triggers one `analysis_mode=hourly` BTC analysis when the absolute move reaches `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT` and the same direction is confirmed for `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES` consecutive samples. The analysis is routed through the existing report notification path. It only generates analysis and entry plans; it does not place orders automatically.
+
+Volatility-triggered hourly analysis receives `trigger_reason=volatility_spike` plus the short-window direction, change percentage, current price, baseline price, window seconds, threshold, and confirmation sample counts. Reports should treat this as intraday trigger/risk context and state that the current 1h candle may still be unfinished; a short-window shock must not be promoted directly into a daily trend reversal.
+
+The current implementation uses REST polling rather than WebSocket subscriptions, so detection latency can be close to `BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS`. The default two-sample confirmation reduces false positives from dirty Last Price ticks, one-off wicks, or abnormal exchange quotes. Setting confirmation samples to `1` improves response speed but increases false-trigger risk.
+
+```env
+BTC_VOLATILITY_MONITOR_ENABLED=true
+BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=60
+BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=5
+BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
+BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
+BTC_VOLATILITY_MONITOR_SYMBOL=BTC
+BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES=2
+```
+
+Rollback is to remove the variables or set `BTC_VOLATILITY_MONITOR_ENABLED=false`. The regular hourly analysis at minute 05 and `AGENT_EVENT_MONITOR_*` alert center are unaffected. Volatility-triggered analysis shares the in-process BTC analysis lock with scheduled hourly analysis; if another BTC analysis is already running, the trigger is logged and skipped to avoid duplicate reports.
+
 ---
 
 For more questions, please [submit an Issue](https://github.com/ZhuLinsen/daily_stock_analysis/issues)

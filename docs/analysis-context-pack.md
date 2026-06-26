@@ -280,7 +280,11 @@ Agent 工具还会独立调用 `get_realtime_quote`、`get_daily_history`、`get
 
 ### 回测
 
-回测服务在 `src/services/backtest_service.py` 和 `src/repositories/backtest_repo.py` 中消费历史分析记录与日线数据。现有 `parse_analysis_date_from_snapshot()` 依赖 `analysis_history.context_snapshot.enhanced_context.date` 解析分析日期。
+回测服务在 `src/services/backtest_service.py` 和 `src/repositories/backtest_repo.py` 中消费历史分析记录与 K 线数据。现有 `parse_analysis_date_from_snapshot()` 依赖 `analysis_history.context_snapshot.enhanced_context.date` 解析分析日期；同时读取 `context_snapshot.analysis_mode` 或 `enhanced_context.analysis_mode` 区分 `daily` / `hourly` 回测结果。
+
+- `daily` 分析记录使用日线数据评估，`eval_window_days` 表示后续 N 个日线 bar。
+- `hourly` 分析记录单独落库、查询和动态汇总；BTC/加密货币小时线使用小时 K 线评估，`eval_window_days` 表示后续 N 根小时线 bar。
+- 普通股票小时线若当前没有小时 K 线数据源，回测结果写为 `insufficient_data`，不得回退使用日线数据伪造小时线准确率。
 
 P0 必须把 `enhanced_context.date` 标为兼容边界。后续 pack 可以新增更清晰的日期字段，但不能无迁移地删除或改名当前历史快照中的日期位置。
 

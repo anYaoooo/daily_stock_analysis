@@ -591,6 +591,8 @@ def run_full_analysis(
     args: argparse.Namespace,
     stock_codes: Optional[List[str]] = None,
     analysis_mode: str = "daily",
+    trigger_source: str = "cli",
+    trigger_context: Optional[Dict[str, Any]] = None,
 ):
     """
     执行完整的 BTC 分析流程
@@ -672,11 +674,12 @@ def run_full_analysis(
             config=config,
             max_workers=args.workers,
             query_id=query_id,
-            query_source="cli",
+            query_source=trigger_source or "cli",
             save_context_snapshot=save_context_snapshot,
             daily_market_context_enabled=should_use_daily_market_context,
             daily_market_context_allow_generate=should_use_daily_market_context,
             analysis_mode=normalized_analysis_mode,
+            trigger_context=trigger_context,
         )
         if should_use_daily_market_context:
             # Prompt-side context can reuse historical summaries, while full-merge
@@ -948,12 +951,20 @@ def _run_btc_analysis_with_runtime_lock(
     *,
     analysis_mode: str,
     trigger_source: str,
+    trigger_context: Optional[Dict[str, Any]] = None,
 ) -> bool:
     if not _BTC_ANALYSIS_RUN_LOCK.acquire(blocking=False):
         logger.info("[BTCAnalysis] %s 触发的 %s 分析已跳过：已有分析正在运行", trigger_source, analysis_mode)
         return False
     try:
-        run_full_analysis(config, args, stock_codes, analysis_mode=analysis_mode)
+        run_full_analysis(
+            config,
+            args,
+            stock_codes,
+            analysis_mode=analysis_mode,
+            trigger_source=trigger_source,
+            trigger_context=trigger_context,
+        )
         return True
     finally:
         _BTC_ANALYSIS_RUN_LOCK.release()
@@ -1320,6 +1331,28 @@ def main() -> int:
                                 stats.get("threshold_pct"),
                             )
                         return
+                    trigger_context = {
+                        "trigger_source": "btc_volatility",
+                        "trigger_reason": "volatility_spike",
+                        "monitor": "btc_volatility_monitor",
+                        "analysis_mode": "hourly",
+                        "symbol": getattr(runtime_config, 'btc_volatility_monitor_symbol', 'BTC'),
+                        "price": stats.get("price"),
+                        "baseline_price": stats.get("baseline_price"),
+                        "change_pct": stats.get("change_pct"),
+                        "threshold_pct": stats.get("threshold_pct"),
+                        "direction": stats.get("direction"),
+                        "window_seconds": stats.get("window_seconds"),
+                        "provider_timestamp": stats.get("provider_timestamp"),
+                        "confirmation_count": stats.get("confirmation_count"),
+                        "confirmation_required": stats.get("confirmation_required"),
+                        "poll_interval_seconds": getattr(runtime_config, 'btc_volatility_monitor_interval_seconds', 60),
+                    }
+                    trigger_context = {
+                        key: value
+                        for key, value in trigger_context.items()
+                        if value is not None
+                    }
                     logger.info(
                         "[BTCVolatility] 价格剧烈波动触发小时线分析: direction=%s change=%s%% price=%s baseline=%s",
                         stats.get("direction"),
@@ -1333,6 +1366,7 @@ def main() -> int:
                         scheduled_stock_codes,
                         analysis_mode="hourly",
                         trigger_source="btc_volatility",
+                        trigger_context=trigger_context,
                     )
 
                 background_tasks.append({

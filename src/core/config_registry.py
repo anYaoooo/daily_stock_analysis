@@ -3797,6 +3797,29 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
+    "BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES": {
+        "title": "BTC Volatility Confirmation Samples",
+        "description": "Consecutive same-direction threshold hits required before triggering analysis, reducing single-tick dirty-data false positives.",
+        "category": "system",
+        "data_type": "integer",
+        "ui_control": "number",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "2",
+        "options": [],
+        "validation": {"min": 1, "max": 10},
+        "display_order": 78,
+        "help_key": "settings.system.btc_volatility_monitor",
+        "examples": ["BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES=2"],
+        "docs": [
+            {
+                "label": "完整指南：环境变量完整列表",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
 }
 
 _DOC_FULL_GUIDE_ENV = [

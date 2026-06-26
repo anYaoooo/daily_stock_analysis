@@ -15,12 +15,14 @@ import {
   BACKTEST_PHASE_LABELS,
   BACKTEST_STATUS_LABELS,
   BACKTEST_TEXT,
+  BACKTEST_TIMEFRAME_FILTER_OPTIONS,
 } from '../locales/featureText';
 import type {
   BacktestResultItem,
   BacktestRunResponse,
   PerformanceMetrics,
   BacktestPhaseFilter,
+  BacktestTimeframeFilter,
 } from '../types/backtest';
 import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../utils/decisionAction';
 import { getMarketPhaseSummaryLabel } from '../utils/marketPhase';
@@ -264,6 +266,7 @@ const BacktestPage: React.FC = () => {
   const { language, t } = useUiLanguage();
   const text = BACKTEST_TEXT[language];
   const phaseFilterOptions = BACKTEST_PHASE_FILTER_OPTIONS[language];
+  const timeframeFilterOptions = BACKTEST_TIMEFRAME_FILTER_OPTIONS[language];
   const actionLabels = buildDecisionActionLabelMap(t);
 
   // Set page title
@@ -276,6 +279,7 @@ const BacktestPage: React.FC = () => {
   const [analysisDateFrom, setAnalysisDateFrom] = useState('');
   const [analysisDateTo, setAnalysisDateTo] = useState('');
   const [phaseFilter, setPhaseFilter] = useState<BacktestPhaseFilter>('all');
+  const [timeframeFilter, setTimeframeFilter] = useState<BacktestTimeframeFilter>('all');
   const [evalDays, setEvalDays] = useState('');
   const [forceRerun, setForceRerun] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
@@ -307,6 +311,7 @@ const BacktestPage: React.FC = () => {
     startDate?: string,
     endDate?: string,
     phase?: BacktestPhaseFilter,
+    timeframe?: BacktestTimeframeFilter,
   ) => {
     setIsLoadingResults(true);
     try {
@@ -316,6 +321,7 @@ const BacktestPage: React.FC = () => {
         analysisDateFrom: startDate || undefined,
         analysisDateTo: endDate || undefined,
         analysisPhase: phase && phase !== 'all' ? phase : undefined,
+        analysisMode: timeframe,
         page,
         limit: pageSize,
       });
@@ -338,6 +344,7 @@ const BacktestPage: React.FC = () => {
     startDate?: string,
     endDate?: string,
     phase?: BacktestPhaseFilter,
+    timeframe?: BacktestTimeframeFilter,
   ) => {
     setIsLoadingPerf(true);
     try {
@@ -346,16 +353,12 @@ const BacktestPage: React.FC = () => {
         analysisDateFrom: startDate || undefined,
         analysisDateTo: endDate || undefined,
         analysisPhase: phase && phase !== 'all' ? phase : undefined,
+        analysisMode: timeframe,
       });
       setOverallPerf(overall);
 
-      if (code) {
-        const stock = await backtestApi.getStockPerformance(code, {
-          evalWindowDays: windowDays,
-          analysisDateFrom: startDate || undefined,
-          analysisDateTo: endDate || undefined,
-          analysisPhase: phase && phase !== 'all' ? phase : undefined,
-        });
+      if (code && (!timeframe || timeframe === 'all')) {
+        const stock = await backtestApi.getStockPerformance(code);
         setStockPerf(stock);
       } else {
         setStockPerf(null);
@@ -380,7 +383,7 @@ const BacktestPage: React.FC = () => {
       if (windowDays && !evalDays) {
         setEvalDays(String(windowDays));
       }
-      fetchResults(1, undefined, windowDays, undefined, undefined, 'all');
+      fetchResults(1, undefined, windowDays, undefined, undefined, 'all', timeframeFilter);
     };
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -398,11 +401,12 @@ const BacktestPage: React.FC = () => {
         force: forceRerun || undefined,
         minAgeDays: forceRerun ? 0 : undefined,
         evalWindowDays,
+        analysisMode: timeframeFilter !== 'all' ? timeframeFilter : undefined,
       });
       setRunResult(response);
       // Refresh data with same eval_window_days
-      fetchResults(1, codeFilter.trim() || undefined, evalWindowDays, analysisDateFrom, analysisDateTo, phaseFilter);
-      fetchPerformance(codeFilter.trim() || undefined, evalWindowDays, analysisDateFrom, analysisDateTo, phaseFilter);
+      fetchResults(1, codeFilter.trim() || undefined, evalWindowDays, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
+      fetchPerformance(codeFilter.trim() || undefined, evalWindowDays, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
     } catch (err) {
       setRunError(getParsedApiError(err));
     } finally {
@@ -415,8 +419,8 @@ const BacktestPage: React.FC = () => {
     const code = codeFilter.trim() || undefined;
     const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
     setCurrentPage(1);
-    fetchResults(1, code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
-    fetchPerformance(code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
+    fetchResults(1, code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
+    fetchPerformance(code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -429,20 +433,25 @@ const BacktestPage: React.FC = () => {
     const code = codeFilter.trim() || undefined;
     setEvalDays('1');
     setCurrentPage(1);
-    fetchResults(1, code, 1, analysisDateFrom, analysisDateTo, phaseFilter);
-    fetchPerformance(code, 1, analysisDateFrom, analysisDateTo, phaseFilter);
+    fetchResults(1, code, 1, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
+    fetchPerformance(code, 1, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
   };
 
   const handleDeleteResult = async (row: BacktestResultItem) => {
     const key = `${row.analysisHistoryId}:${row.planType || row.evalWindowDays || 'result'}`;
     setDeletingKey(key);
     try {
-      await backtestApi.deleteResult(row.analysisHistoryId, row.evalWindowDays, row.planType);
+      await backtestApi.deleteResult(
+        row.analysisHistoryId,
+        row.evalWindowDays,
+        row.planType,
+        row.analysisMode === 'hourly' ? 'hourly' : 'daily',
+      );
       const code = codeFilter.trim() || undefined;
       const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
       const nextPage = results.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage;
-      await fetchResults(nextPage, code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
-      await fetchPerformance(code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
+      await fetchResults(nextPage, code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
+      await fetchPerformance(code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
     } catch (err) {
       console.error('Failed to delete backtest result:', err);
       setPageError(getParsedApiError(err));
@@ -455,7 +464,7 @@ const BacktestPage: React.FC = () => {
   const totalPages = Math.ceil(totalResults / pageSize);
   const handlePageChange = (page: number) => {
     const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
-    fetchResults(page, codeFilter.trim() || undefined, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
+    fetchResults(page, codeFilter.trim() || undefined, windowDays, analysisDateFrom, analysisDateTo, phaseFilter, timeframeFilter);
   };
 
   return (
@@ -494,6 +503,19 @@ const BacktestPage: React.FC = () => {
               disabled={isRunning}
               className={`${BACKTEST_COMPACT_INPUT_CLASS} w-24 text-center tabular-nums`}
             />
+          </div>
+          <div className="flex items-center gap-2 whitespace-nowrap">
+            <span className="text-xs text-muted-text">{text.analysisMode}</span>
+            <select
+              value={timeframeFilter}
+              onChange={(e) => setTimeframeFilter(e.target.value as BacktestTimeframeFilter)}
+              disabled={isRunning}
+              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-28`}
+            >
+              {timeframeFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
           </div>
           <div className="flex items-center gap-2 whitespace-nowrap">
             <span className="text-xs text-muted-text">{text.phase}</span>
@@ -636,6 +658,7 @@ const BacktestPage: React.FC = () => {
                   <span className="text-xs text-secondary-text">
                     {codeFilter.trim() ? formatUiText(text.filteredStock, { code: codeFilter.trim() }) : text.allStocks}
                     {evalDays ? ` · ${formatUiText(text.dayWindow, { days: evalDays })}` : ''}
+                    {timeframeFilter !== 'all' ? ` · ${timeframeFilterOptions.find((item) => item.value === timeframeFilter)?.label ?? timeframeFilter}` : ''}
                     {phaseFilter !== 'all' ? ` · ${phaseFilterOptions.find((item) => item.value === phaseFilter)?.label ?? phaseFilter}` : ''}
                     {analysisDateFrom ? ` · ${formatUiText(text.fromDate, { date: analysisDateFrom })}` : ''}
                     {analysisDateTo ? ` · ${formatUiText(text.toDate, { date: analysisDateTo })}` : ''}

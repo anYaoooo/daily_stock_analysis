@@ -8,6 +8,7 @@ import type {
   BacktestResultItem,
   PerformanceMetrics,
   BacktestPhaseFilter,
+  BacktestTimeframeFilter,
 } from '../types/backtest';
 
 // ============ API ============
@@ -20,6 +21,7 @@ export const backtestApi = {
     const requestData: Record<string, unknown> = {};
     if (params.code) requestData.code = params.code;
     if (params.force) requestData.force = params.force;
+    if (params.analysisMode) requestData.analysis_mode = params.analysisMode;
     if (params.evalWindowDays) requestData.eval_window_days = params.evalWindowDays;
     if (params.minAgeDays != null) requestData.min_age_days = params.minAgeDays;
     if (params.limit) requestData.limit = params.limit;
@@ -34,12 +36,18 @@ export const backtestApi = {
   /**
    * Delete one backtest result for the current engine version
    */
-  deleteResult: async (analysisHistoryId: number, evalWindowDays?: number, planType?: string): Promise<BacktestDeleteResponse> => {
+  deleteResult: async (
+    analysisHistoryId: number,
+    evalWindowDays?: number,
+    planType?: string,
+    analysisMode?: 'daily' | 'hourly',
+  ): Promise<BacktestDeleteResponse> => {
     const params: Record<string, string | number> = {};
     if (planType) {
       params.plan_type = planType;
     } else if (evalWindowDays != null) {
       params.eval_window_days = evalWindowDays;
+      if (analysisMode) params.analysis_mode = analysisMode;
     }
     const response = await apiClient.delete<Record<string, unknown>>(
       planType
@@ -59,6 +67,7 @@ export const backtestApi = {
     analysisDateFrom?: string;
     analysisDateTo?: string;
     analysisPhase?: BacktestPhaseFilter;
+    analysisMode?: BacktestTimeframeFilter;
     page?: number;
     limit?: number;
   } = {}): Promise<BacktestResultsResponse> => {
@@ -66,6 +75,9 @@ export const backtestApi = {
 
     const queryParams: Record<string, string | number> = { page, limit };
     if (code) queryParams.code = code;
+    if (params.analysisMode && params.analysisMode !== 'all') {
+      queryParams.horizon = params.analysisMode === 'hourly' ? 'intraday' : 'daily';
+    }
 
     const response = await apiClient.get<Record<string, unknown>>(
       '/api/v1/backtest/crypto/results',
@@ -89,9 +101,11 @@ export const backtestApi = {
     analysisDateFrom?: string;
     analysisDateTo?: string;
     analysisPhase?: BacktestPhaseFilter;
+    analysisMode?: BacktestTimeframeFilter;
   } = {}): Promise<PerformanceMetrics | null> => {
     try {
       const queryParams: Record<string, string | number> = {};
+      if (params.analysisMode && params.analysisMode !== 'all') queryParams.horizon = params.analysisMode === 'hourly' ? 'intraday' : 'daily';
       const response = await apiClient.get<Record<string, unknown>>(
         '/api/v1/backtest/crypto/performance',
         { params: queryParams },
@@ -109,12 +123,7 @@ export const backtestApi = {
   /**
    * Get per-stock performance metrics
    */
-  getStockPerformance: async (code: string, params: {
-    evalWindowDays?: number;
-    analysisDateFrom?: string;
-    analysisDateTo?: string;
-    analysisPhase?: BacktestPhaseFilter;
-  } = {}): Promise<PerformanceMetrics | null> => {
+  getStockPerformance: async (code: string): Promise<PerformanceMetrics | null> => {
     try {
       const queryParams: Record<string, string | number> = {};
       queryParams.scope = 'code';

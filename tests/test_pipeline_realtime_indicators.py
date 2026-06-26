@@ -330,6 +330,20 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
             "stock_name": "Bitcoin",
             "date": "2026-06-22",
             "today": {"close": 100000, "volume": 1200},
+            "analysis_mode": "hourly",
+            "trigger_context": {
+                "trigger_source": "btc_volatility",
+                "trigger_reason": "volatility_spike",
+                "direction": "down",
+                "change_pct": -1.2,
+                "price": 98800,
+                "baseline_price": 100000,
+                "window_seconds": 120,
+                "threshold_pct": 1.0,
+                "confirmation_count": 2,
+                "confirmation_required": 2,
+                "provider_timestamp": "2026-06-22T10:05:00Z",
+            },
             "crypto_technical": {
                 **daily_context,
                 "timeframes": {"daily": daily_context, "hourly": hourly_context},
@@ -362,6 +376,11 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         self.assertIn("BTC 小时线日内计划强制结构", prompt)
         self.assertIn("dashboard.battle_plan.intraday_plan", prompt)
         self.assertIn("daily_constraint", prompt)
+        self.assertIn("BTC 波动触发上下文", prompt)
+        self.assertIn("volatility_spike", prompt)
+        self.assertIn("短窗口冲击", prompt)
+        self.assertIn("当前 1 小时 K 线可能尚未收线", prompt)
+        self.assertIn("2/2", prompt)
 
 
 class TestEnhanceContextRealtimeOverride(unittest.TestCase):

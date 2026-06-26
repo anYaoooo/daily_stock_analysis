@@ -206,6 +206,35 @@ class PipelineMarketPhaseContextTestCase(unittest.TestCase):
         self.assertNotIn("daily_market_context_summary", snapshot["enhanced_context"])
         self.assertNotIn("avg_cost", str(snapshot))
 
+    def test_context_snapshot_keeps_btc_volatility_trigger_context(self):
+        pipeline = _make_pipeline(agent_mode=False, save_context_snapshot=True)
+
+        snapshot = pipeline._build_context_snapshot(
+            enhanced_context={
+                "code": "BTC",
+                "stock_name": "Bitcoin",
+                "trigger_context": {
+                    "trigger_source": "btc_volatility",
+                    "trigger_reason": "volatility_spike",
+                    "change_pct": -1.2,
+                    "confirmation_count": 2,
+                    "confirmation_required": 2,
+                },
+            },
+            news_content=None,
+            realtime_quote=None,
+            chip_data=None,
+        )
+
+        self.assertEqual(
+            snapshot["enhanced_context"]["trigger_context"]["trigger_reason"],
+            "volatility_spike",
+        )
+        self.assertEqual(
+            snapshot["enhanced_context"]["trigger_context"]["confirmation_count"],
+            2,
+        )
+
     def test_agent_analysis_artifacts_helper_maps_initial_context_zero_fetch(self):
         pipeline = _make_pipeline(agent_mode=True, save_context_snapshot=True)
         pipeline.query_source = "system"

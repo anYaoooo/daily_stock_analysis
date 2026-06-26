@@ -5,22 +5,33 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import and_, select
 
 from src.config import get_config
 from src.core.backtest_engine import OVERALL_SENTINEL_CODE, BacktestEngine, EvaluationConfig
+from data_provider.crypto_fetcher import CryptoFetcher, is_crypto_code, normalize_crypto_symbol
 from src.market_phase_summary import extract_market_phase_summary, normalize_analysis_phase_bucket
 from src.repositories.backtest_repo import BacktestRepository
 from src.repositories.stock_repo import StockRepository
 from src.schemas.decision_action import build_action_fields
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager
 from src.utils.data_processing import parse_json_field
-from src.utils.timeframe import analysis_timeframe_label
+from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _BacktestBar:
+    timestamp: datetime
+    date: date
+    high: Optional[float]
+    low: Optional[float]
+    close: Optional[float]
 
 
 class BacktestService:
@@ -40,6 +51,7 @@ class BacktestService:
         force: bool = False,
         eval_window_days: Optional[int] = None,
         min_age_days: Optional[int] = None,
+        analysis_mode: Optional[str] = None,
         limit: int = 200,
     ) -> Dict[str, Any]:
         config = get_config()
@@ -64,6 +76,7 @@ class BacktestService:
             limit=int(limit),
             eval_window_days=int(eval_window_days),
             engine_version=str(engine_version),
+            analysis_mode=analysis_mode,
             force=force,
         )
 
@@ -76,6 +89,11 @@ class BacktestService:
         results_to_save: List[BacktestResult] = []
 
         for analysis in candidates:
+            record_analysis_mode = self._analysis_mode_from_snapshot(analysis)
+            requested_mode = normalize_analysis_mode(analysis_mode) if analysis_mode else None
+            if requested_mode is not None and record_analysis_mode != requested_mode:
+                continue
+
             processed += 1
             touched_codes.add(analysis.code)
 
@@ -89,27 +107,32 @@ class BacktestService:
                             code=analysis.code,
                             eval_window_days=int(eval_window_days),
                             engine_version=str(engine_version),
+                            analysis_mode=record_analysis_mode,
                             eval_status="error",
                             evaluated_at=datetime.now(),
                             operation_advice=analysis.operation_advice,
                         )
                     )
                     continue
-                start_daily = self.stock_repo.get_start_daily(code=analysis.code, analysis_date=analysis_date)
 
-                if start_daily is None or start_daily.close is None:
-                    self._try_fill_daily_data(code=analysis.code, analysis_date=analysis_date, eval_window_days=eval_window_days)
-                    start_daily = self.stock_repo.get_start_daily(code=analysis.code, analysis_date=analysis_date)
+                eval_inputs = self._prepare_evaluation_inputs(
+                    code=analysis.code,
+                    analysis_date=analysis_date,
+                    analysis_created_at=analysis.created_at,
+                    analysis_mode=record_analysis_mode,
+                    eval_window_days=int(eval_window_days),
+                )
 
-                if start_daily is None or start_daily.close is None:
+                if eval_inputs is None:
                     insufficient += 1
                     results_to_save.append(
                         BacktestResult(
                             analysis_history_id=analysis.id,
-                            code=analysis.code,
+                            code=normalize_crypto_symbol(analysis.code) or analysis.code,
                             analysis_date=analysis_date,
                             eval_window_days=int(eval_window_days),
                             engine_version=str(engine_version),
+                            analysis_mode=record_analysis_mode,
                             eval_status="insufficient_data",
                             evaluated_at=datetime.now(),
                             operation_advice=analysis.operation_advice,
@@ -117,25 +140,11 @@ class BacktestService:
                     )
                     continue
 
-                forward_bars = self.stock_repo.get_forward_bars(
-                    code=analysis.code,
-                    analysis_date=start_daily.date,
-                    eval_window_days=int(eval_window_days),
-                )
-
-                if len(forward_bars) < int(eval_window_days):
-                    self._try_fill_daily_data(code=analysis.code, analysis_date=start_daily.date, eval_window_days=eval_window_days)
-                    forward_bars = self.stock_repo.get_forward_bars(
-                        code=analysis.code,
-                        analysis_date=start_daily.date,
-                        eval_window_days=int(eval_window_days),
-                    )
-
                 evaluation = BacktestEngine.evaluate_single(
                     operation_advice=analysis.operation_advice,
-                    analysis_date=start_daily.date,
-                    start_price=float(start_daily.close),
-                    forward_bars=forward_bars,
+                    analysis_date=eval_inputs["analysis_date"],
+                    start_price=float(eval_inputs["start_price"]),
+                    forward_bars=eval_inputs["forward_bars"],
                     stop_loss=analysis.stop_loss,
                     take_profit=analysis.take_profit,
                     config=eval_config,
@@ -152,10 +161,11 @@ class BacktestService:
                 results_to_save.append(
                     BacktestResult(
                         analysis_history_id=analysis.id,
-                        code=analysis.code,
+                        code=normalize_crypto_symbol(analysis.code) or analysis.code,
                         analysis_date=evaluation.get("analysis_date"),
                         eval_window_days=int(evaluation.get("eval_window_days") or eval_window_days),
                         engine_version=str(evaluation.get("engine_version") or engine_version),
+                        analysis_mode=record_analysis_mode,
                         eval_status=str(evaluation.get("eval_status") or "error"),
                         evaluated_at=datetime.now(),
                         operation_advice=evaluation.get("operation_advice"),
@@ -192,6 +202,7 @@ class BacktestService:
                         analysis_date=self._resolve_analysis_date(analysis),
                         eval_window_days=int(eval_window_days),
                         engine_version=str(engine_version),
+                        analysis_mode=record_analysis_mode,
                         eval_status="error",
                         evaluated_at=datetime.now(),
                         operation_advice=analysis.operation_advice,
@@ -203,11 +214,19 @@ class BacktestService:
             saved = self.repo.save_results_batch(results_to_save, replace_existing=force)
 
         if saved:
-            self._recompute_summaries(
-                touched_codes=sorted(touched_codes),
-                eval_window_days=int(eval_window_days),
-                engine_version=str(engine_version),
-            )
+            saved_modes = sorted({row.analysis_mode or "daily" for row in results_to_save})
+            for saved_mode in saved_modes:
+                mode_codes = sorted({
+                    row.code
+                    for row in results_to_save
+                    if (row.analysis_mode or "daily") == saved_mode
+                })
+                self._recompute_summaries(
+                    touched_codes=mode_codes or sorted(touched_codes),
+                    eval_window_days=int(eval_window_days),
+                    engine_version=str(engine_version),
+                    analysis_mode=saved_mode,
+                )
 
         return {
             "processed": processed,
@@ -227,9 +246,11 @@ class BacktestService:
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
         analysis_phase: Optional[str] = None,
+        analysis_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         config = get_config()
         engine_version = str(getattr(config, "backtest_engine_version", "v1"))
+        normalized_mode = normalize_analysis_mode(analysis_mode) if analysis_mode else None
 
         phase_bucket = self._normalize_phase_filter(analysis_phase)
         if eval_window_days is None and (analysis_date_from is not None or analysis_date_to is not None or phase_bucket is not None):
@@ -238,12 +259,14 @@ class BacktestService:
                 engine_version=engine_version,
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
+                analysis_mode=normalized_mode,
             )
         if phase_bucket is not None:
             return self._get_recent_evaluations_by_phase(
                 code=code,
                 eval_window_days=eval_window_days,
                 engine_version=engine_version,
+                analysis_mode=normalized_mode,
                 limit=limit,
                 page=page,
                 analysis_date_from=analysis_date_from,
@@ -259,6 +282,7 @@ class BacktestService:
             analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to,
             days=None,
+            analysis_mode=normalized_mode,
             offset=offset,
             limit=limit,
         )
@@ -287,19 +311,22 @@ class BacktestService:
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
         analysis_phase: Optional[str] = None,
+        analysis_mode: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         config = get_config()
         engine_version = str(getattr(config, "backtest_engine_version", "v1"))
         lookup_code = OVERALL_SENTINEL_CODE if scope == "overall" else code
+        normalized_mode = normalize_analysis_mode(analysis_mode) if analysis_mode else None
 
         phase_bucket = self._normalize_phase_filter(analysis_phase)
-        if analysis_date_from is not None or analysis_date_to is not None or phase_bucket is not None:
+        if analysis_date_from is not None or analysis_date_to is not None or phase_bucket is not None or normalized_mode is not None:
             if eval_window_days is None:
                 eval_window_days = self._infer_eval_window_for_query(
                     code=code,
                     engine_version=engine_version,
                     analysis_date_from=analysis_date_from,
                     analysis_date_to=analysis_date_to,
+                    analysis_mode=normalized_mode,
                 )
             ew = int(eval_window_days) if eval_window_days is not None else None
             count = self.repo.count_results(
@@ -308,6 +335,7 @@ class BacktestService:
                 engine_version=engine_version,
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
+                analysis_mode=normalized_mode,
             )
             if count > self.MAX_DYNAMIC_SUMMARY_ROWS:
                 if phase_bucket is not None:
@@ -323,6 +351,7 @@ class BacktestService:
                     engine_version=engine_version,
                     analysis_date_from=analysis_date_from,
                     analysis_date_to=analysis_date_to,
+                    analysis_mode=normalized_mode,
                     limit=self.MAX_DYNAMIC_SUMMARY_ROWS + 1,
                 )
                 if len(rows_with_context) > self.MAX_DYNAMIC_SUMMARY_ROWS:
@@ -342,6 +371,7 @@ class BacktestService:
                     code=lookup_code,
                     eval_window_days=int(eval_window_days) if eval_window_days is not None else None,
                     engine_version=engine_version,
+                    analysis_mode=normalized_mode,
                     max_rows=self.MAX_DYNAMIC_SUMMARY_ROWS,
                     phase_breakdown=phase_counts["phase_breakdown"],
                     raw_phase_counts=phase_counts["raw_phase_counts"],
@@ -352,6 +382,7 @@ class BacktestService:
                 engine_version=engine_version,
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
+                analysis_mode=normalized_mode,
             )
             return self._build_dynamic_summary(
                 rows=rows,
@@ -359,6 +390,7 @@ class BacktestService:
                 code=lookup_code,
                 eval_window_days=int(eval_window_days) if eval_window_days is not None else None,
                 engine_version=engine_version,
+                analysis_mode=normalized_mode,
                 max_rows=self.MAX_DYNAMIC_SUMMARY_ROWS,
             )
 
@@ -367,6 +399,7 @@ class BacktestService:
             code=lookup_code,
             eval_window_days=eval_window_days,
             engine_version=engine_version,
+            analysis_mode=normalized_mode or "daily",
         )
         if summary is None:
             return None
@@ -408,19 +441,23 @@ class BacktestService:
         *,
         analysis_history_id: int,
         eval_window_days: int,
+        analysis_mode: Optional[str] = None,
     ) -> Dict[str, int]:
         config = get_config()
         engine_version = str(getattr(config, "backtest_engine_version", "v1"))
+        normalized_mode = normalize_analysis_mode(analysis_mode) if analysis_mode else "daily"
         deleted, code = self.repo.delete_result(
             analysis_history_id=int(analysis_history_id),
             eval_window_days=int(eval_window_days),
             engine_version=engine_version,
+            analysis_mode=normalized_mode,
         )
         if deleted and code:
             self._recompute_summaries(
                 touched_codes=[code],
                 eval_window_days=int(eval_window_days),
                 engine_version=engine_version,
+                analysis_mode=normalized_mode,
             )
         return {"deleted": int(deleted)}
 
@@ -431,12 +468,14 @@ class BacktestService:
         engine_version: str,
         analysis_date_from: Optional[date],
         analysis_date_to: Optional[date],
+        analysis_mode: Optional[str] = None,
     ) -> Optional[int]:
         windows = self.repo.get_distinct_eval_windows(
             code=code,
             engine_version=engine_version,
             analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to,
+            analysis_mode=analysis_mode,
         )
         return windows[0] if windows else None
 
@@ -446,6 +485,7 @@ class BacktestService:
         code: Optional[str],
         eval_window_days: Optional[int],
         engine_version: str,
+        analysis_mode: Optional[str],
         limit: int,
         page: int,
         analysis_date_from: Optional[date],
@@ -481,6 +521,7 @@ class BacktestService:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=None,
+                analysis_mode=analysis_mode,
                 offset=sql_offset,
                 limit=batch_limit,
             )
@@ -566,6 +607,173 @@ class BacktestService:
         logger.warning(f"无法确定分析日期，跳过记录: {analysis.code}#{getattr(analysis, 'id', '?')}")
         return None
 
+    @staticmethod
+    def _analysis_mode_from_snapshot(analysis) -> str:
+        snapshot = parse_json_field(getattr(analysis, "context_snapshot", None))
+        if not isinstance(snapshot, dict):
+            return "daily"
+        mode = snapshot.get("analysis_mode")
+        if not mode:
+            enhanced_context = snapshot.get("enhanced_context")
+            if isinstance(enhanced_context, dict):
+                mode = enhanced_context.get("analysis_mode")
+        return normalize_analysis_mode(mode)
+
+    def _prepare_evaluation_inputs(
+        self,
+        *,
+        code: str,
+        analysis_date: date,
+        analysis_created_at: Optional[datetime],
+        analysis_mode: str,
+        eval_window_days: int,
+    ) -> Optional[Dict[str, Any]]:
+        if analysis_mode == "hourly":
+            return self._prepare_hourly_evaluation_inputs(
+                code=code,
+                analysis_date=analysis_date,
+                analysis_created_at=analysis_created_at,
+                eval_window_days=eval_window_days,
+            )
+        return self._prepare_daily_evaluation_inputs(
+            code=code,
+            analysis_date=analysis_date,
+            eval_window_days=eval_window_days,
+        )
+
+    def _prepare_daily_evaluation_inputs(
+        self,
+        *,
+        code: str,
+        analysis_date: date,
+        eval_window_days: int,
+    ) -> Optional[Dict[str, Any]]:
+        start_daily = self.stock_repo.get_start_daily(code=code, analysis_date=analysis_date)
+
+        if start_daily is None or start_daily.close is None:
+            self._try_fill_daily_data(code=code, analysis_date=analysis_date, eval_window_days=eval_window_days)
+            start_daily = self.stock_repo.get_start_daily(code=code, analysis_date=analysis_date)
+
+        if start_daily is None or start_daily.close is None:
+            return None
+
+        forward_bars = self.stock_repo.get_forward_bars(
+            code=code,
+            analysis_date=start_daily.date,
+            eval_window_days=eval_window_days,
+        )
+
+        if len(forward_bars) < eval_window_days:
+            self._try_fill_daily_data(code=code, analysis_date=start_daily.date, eval_window_days=eval_window_days)
+            forward_bars = self.stock_repo.get_forward_bars(
+                code=code,
+                analysis_date=start_daily.date,
+                eval_window_days=eval_window_days,
+            )
+
+        return {
+            "analysis_date": start_daily.date,
+            "start_price": start_daily.close,
+            "forward_bars": forward_bars,
+        }
+
+    def _prepare_hourly_evaluation_inputs(
+        self,
+        *,
+        code: str,
+        analysis_date: date,
+        analysis_created_at: Optional[datetime],
+        eval_window_days: int,
+    ) -> Optional[Dict[str, Any]]:
+        if not is_crypto_code(code):
+            logger.info("普通股票小时线回测缺少小时 K 线数据源，标记为数据不足: %s", code)
+            return None
+
+        analysis_at = self._local_naive_to_utc_naive(
+            analysis_created_at or datetime.combine(analysis_date, datetime.min.time())
+        )
+        fetch_days = max(3, (datetime.now() - analysis_at).days + 3)
+        try:
+            df = CryptoFetcher().get_kline_data(code, period="hourly", days=fetch_days)
+        except Exception as exc:
+            logger.warning("获取小时线回测 K 线失败(%s): %s", code, exc)
+            return None
+
+        bars = self._bars_from_dataframe(df)
+        if not bars:
+            return None
+
+        window_start = analysis_at
+        window_end = analysis_at + timedelta(hours=24 * max(1, int(eval_window_days)))
+        candidate_bars = [bar for bar in bars if bar.timestamp > window_start]
+        forward_bars = [
+            bar
+            for bar in candidate_bars
+            if bar.timestamp <= window_end
+        ][: int(eval_window_days)]
+        if not forward_bars:
+            return None
+
+        start_bar = max(
+            (bar for bar in bars if bar.timestamp <= window_start),
+            key=lambda bar: bar.timestamp,
+            default=None,
+        )
+        if start_bar is None or start_bar.close is None:
+            start_bar = forward_bars[0]
+        if start_bar.close is None:
+            return None
+
+        return {
+            "analysis_date": start_bar.date,
+            "start_price": start_bar.close,
+            "forward_bars": forward_bars,
+        }
+
+    @staticmethod
+    def _bars_from_dataframe(df) -> List[_BacktestBar]:
+        if df is None or df.empty:
+            return []
+        bars: List[_BacktestBar] = []
+        for _, row in df.iterrows():
+            timestamp = BacktestService._parse_bar_timestamp(row.get("date"))
+            high = BacktestService._safe_float(row.get("high"))
+            low = BacktestService._safe_float(row.get("low"))
+            close = BacktestService._safe_float(row.get("close"))
+            if timestamp is None or high is None or low is None or close is None:
+                continue
+            bars.append(_BacktestBar(timestamp=timestamp, date=timestamp.date(), high=high, low=low, close=close))
+        return bars
+
+    @staticmethod
+    def _parse_bar_timestamp(value: Any) -> Optional[datetime]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text[:16] if "%H" in fmt else text[:10], fmt)
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed == parsed else None
+
+    @staticmethod
+    def _local_naive_to_utc_naive(value: datetime) -> datetime:
+        if value.tzinfo is not None and value.utcoffset() is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        local_tz = datetime.now().astimezone().tzinfo
+        if local_tz is None:
+            return value
+        return value.replace(tzinfo=local_tz).astimezone(timezone.utc).replace(tzinfo=None)
+
     def _try_fill_daily_data(self, *, code: str, analysis_date: date, eval_window_days: int) -> None:
         try:
             from data_provider.base import DataFetcherManager
@@ -585,7 +793,16 @@ class BacktestService:
         except Exception as exc:
             logger.warning(f"补全日线数据失败({code}): {exc}")
 
-    def _recompute_summaries(self, *, touched_codes: List[str], eval_window_days: int, engine_version: str) -> None:
+    def _recompute_summaries(
+        self,
+        *,
+        touched_codes: List[str],
+        eval_window_days: int,
+        engine_version: str,
+        analysis_mode: Optional[str] = None,
+    ) -> None:
+        normalized_mode = normalize_analysis_mode(analysis_mode) if analysis_mode else "daily"
+        persist_summary = normalized_mode == "daily"
         with self.db.get_session() as session:
             # overall
             overall_rows = session.execute(
@@ -593,6 +810,7 @@ class BacktestService:
                     and_(
                         BacktestResult.eval_window_days == eval_window_days,
                         BacktestResult.engine_version == engine_version,
+                        BacktestResult.analysis_mode == normalized_mode,
                     )
                 )
             ).scalars().all()
@@ -603,8 +821,10 @@ class BacktestService:
                 eval_window_days=eval_window_days,
                 engine_version=engine_version,
             )
-            overall_summary = self._build_summary_model(overall_data)
-            self.repo.upsert_summary(overall_summary)
+            overall_data["analysis_mode"] = normalized_mode
+            if persist_summary:
+                overall_summary = self._build_summary_model(overall_data)
+                self.repo.upsert_summary(overall_summary)
 
             for code in touched_codes:
                 rows = session.execute(
@@ -613,6 +833,7 @@ class BacktestService:
                             BacktestResult.code == code,
                             BacktestResult.eval_window_days == eval_window_days,
                             BacktestResult.engine_version == engine_version,
+                            BacktestResult.analysis_mode == normalized_mode,
                         )
                     )
                 ).scalars().all()
@@ -623,8 +844,10 @@ class BacktestService:
                     eval_window_days=eval_window_days,
                     engine_version=engine_version,
                 )
-                summary = self._build_summary_model(data)
-                self.repo.upsert_summary(summary)
+                data["analysis_mode"] = normalized_mode
+                if persist_summary:
+                    summary = self._build_summary_model(data)
+                    self.repo.upsert_summary(summary)
 
     @staticmethod
     def _build_summary_model(summary_data: Dict[str, Any]) -> BacktestSummary:
@@ -633,6 +856,7 @@ class BacktestService:
             code=summary_data.get("code"),
             eval_window_days=summary_data.get("eval_window_days"),
             engine_version=summary_data.get("engine_version"),
+            analysis_mode=summary_data.get("analysis_mode") or "daily",
             computed_at=datetime.now(),
             total_evaluations=summary_data.get("total_evaluations") or 0,
             completed_count=summary_data.get("completed_count") or 0,
@@ -678,8 +902,8 @@ class BacktestService:
             "code": row.code,
             "stock_name": stock_name,
             "analysis_date": row.analysis_date.isoformat() if row.analysis_date else None,
-            "analysis_mode": "daily",
-            "analysis_timeframe": analysis_timeframe_label("daily", raw.get("report_language") or "zh"),
+            "analysis_mode": row.analysis_mode or "daily",
+            "analysis_timeframe": analysis_timeframe_label(row.analysis_mode or "daily", raw.get("report_language") or "zh"),
             "eval_window_days": row.eval_window_days,
             "engine_version": row.engine_version,
             "eval_status": row.eval_status,
@@ -721,6 +945,8 @@ class BacktestService:
             "code": None if row.code == OVERALL_SENTINEL_CODE else row.code,
             "eval_window_days": row.eval_window_days,
             "engine_version": row.engine_version,
+            "analysis_mode": row.analysis_mode or "daily",
+            "analysis_timeframe": analysis_timeframe_label(row.analysis_mode or "daily"),
             "computed_at": row.computed_at.isoformat() if row.computed_at else None,
             "total_evaluations": row.total_evaluations,
             "completed_count": row.completed_count,
@@ -791,6 +1017,7 @@ class BacktestService:
         code: Optional[str],
         eval_window_days: Optional[int],
         engine_version: str,
+        analysis_mode: Optional[str] = None,
         max_rows: Optional[int] = None,
         phase_breakdown: Optional[Dict[str, int]] = None,
         raw_phase_counts: Optional[Dict[str, int]] = None,
@@ -820,6 +1047,11 @@ class BacktestService:
         filtered_rows = [
             row for row in filtered_rows if getattr(row, "eval_window_days", None) == summary_window_days
         ]
+        normalized_mode = normalize_analysis_mode(analysis_mode) if analysis_mode else None
+        if normalized_mode is not None:
+            filtered_rows = [
+                row for row in filtered_rows if getattr(row, "analysis_mode", "daily") == normalized_mode
+            ]
 
         if max_rows is not None and len(filtered_rows) > max_rows:
             raise ValueError(
@@ -841,6 +1073,8 @@ class BacktestService:
         if raw_phase_counts is not None:
             diagnostics["raw_phase_counts"] = raw_phase_counts
         summary["diagnostics"] = diagnostics
+        summary["analysis_mode"] = normalized_mode
+        summary["analysis_timeframe"] = analysis_timeframe_label(normalized_mode) if normalized_mode else None
         summary["code"] = None if summary.get("code") == OVERALL_SENTINEL_CODE else summary.get("code")
         summary["computed_at"] = datetime.now().isoformat()
         return summary

@@ -8,10 +8,12 @@ import type { DecisionAction, MarketPhaseSummary } from './analysis';
 
 export type BacktestAnalysisPhase = 'premarket' | 'intraday' | 'postmarket' | 'unknown';
 export type BacktestPhaseFilter = BacktestAnalysisPhase | 'all';
+export type BacktestTimeframeFilter = 'all' | 'daily' | 'hourly';
 
 export interface BacktestRunRequest {
   code?: string;
   force?: boolean;
+  analysisMode?: 'daily' | 'hourly';
   evalWindowDays?: number;
   minAgeDays?: number;
   limit?: number;

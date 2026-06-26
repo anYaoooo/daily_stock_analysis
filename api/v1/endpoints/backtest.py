@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 BacktestAnalysisPhaseQuery = Literal["premarket", "intraday", "postmarket", "unknown"]
+BacktestAnalysisModeQuery = Literal["daily", "hourly"]
 
 
 def _validate_analysis_date_range(
@@ -67,6 +68,7 @@ def run_backtest(
         stats = service.run_backtest(
             code=request.code,
             force=request.force,
+            analysis_mode=request.analysis_mode,
             eval_window_days=request.eval_window_days,
             min_age_days=request.min_age_days,
             limit=request.limit,
@@ -131,6 +133,7 @@ def get_backtest_results(
     analysis_date_from: Optional[date] = Query(None, description="分析日期起始（含）"),
     analysis_date_to: Optional[date] = Query(None, description="分析日期结束（含）"),
     analysis_phase: Optional[BacktestAnalysisPhaseQuery] = Query(None, description="分析阶段过滤：premarket/intraday/postmarket/unknown"),
+    analysis_mode: Optional[BacktestAnalysisModeQuery] = Query(None, description="分析周期过滤：daily/hourly"),
     page: int = Query(1, ge=1, description="页码"),
     limit: int = Query(20, ge=1, le=200, description="每页数量"),
     db_manager: DatabaseManager = Depends(get_database_manager),
@@ -146,6 +149,7 @@ def get_backtest_results(
             analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to,
             analysis_phase=analysis_phase,
+            analysis_mode=analysis_mode,
         )
         items = [BacktestResultItem(**item) for item in data.get("items", [])]
         return BacktestResultsResponse(
@@ -182,6 +186,7 @@ def get_backtest_results(
 def delete_backtest_result(
     analysis_history_id: int,
     eval_window_days: int = Query(..., ge=1, le=120, description="评估窗口"),
+    analysis_mode: BacktestAnalysisModeQuery = Query("daily", description="分析周期：daily/hourly"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> BacktestDeleteResponse:
     try:
@@ -189,6 +194,7 @@ def delete_backtest_result(
         result = service.delete_result(
             analysis_history_id=analysis_history_id,
             eval_window_days=eval_window_days,
+            analysis_mode=analysis_mode,
         )
         return BacktestDeleteResponse(**result)
     except Exception as exc:
@@ -327,6 +333,7 @@ def get_overall_performance(
     analysis_date_from: Optional[date] = Query(None, description="分析日期起始（含）"),
     analysis_date_to: Optional[date] = Query(None, description="分析日期结束（含）"),
     analysis_phase: Optional[BacktestAnalysisPhaseQuery] = Query(None, description="分析阶段过滤：premarket/intraday/postmarket/unknown"),
+    analysis_mode: Optional[BacktestAnalysisModeQuery] = Query(None, description="分析周期过滤：daily/hourly"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> PerformanceMetrics:
     try:
@@ -339,6 +346,7 @@ def get_overall_performance(
             analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to,
             analysis_phase=analysis_phase,
+            analysis_mode=analysis_mode,
         )
         if summary is None:
             raise HTTPException(
@@ -378,6 +386,7 @@ def get_stock_performance(
     analysis_date_from: Optional[date] = Query(None, description="分析日期起始（含）"),
     analysis_date_to: Optional[date] = Query(None, description="分析日期结束（含）"),
     analysis_phase: Optional[BacktestAnalysisPhaseQuery] = Query(None, description="分析阶段过滤：premarket/intraday/postmarket/unknown"),
+    analysis_mode: Optional[BacktestAnalysisModeQuery] = Query(None, description="分析周期过滤：daily/hourly"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> PerformanceMetrics:
     try:
@@ -390,6 +399,7 @@ def get_stock_performance(
             analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to,
             analysis_phase=analysis_phase,
+            analysis_mode=analysis_mode,
         )
         if summary is None:
             raise HTTPException(

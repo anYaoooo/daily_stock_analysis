@@ -14,6 +14,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy import and_, delete, desc, func, or_, select
 
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager, AnalysisHistory
+from src.utils.timeframe import normalize_analysis_mode
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class BacktestRepository:
         limit: int,
         eval_window_days: int,
         engine_version: str,
+        analysis_mode: Optional[str] = None,
         force: bool,
     ) -> List[AnalysisHistory]:
         """Return AnalysisHistory rows eligible for backtest."""
@@ -60,14 +62,16 @@ class BacktestRepository:
             )
 
             query = select(AnalysisHistory).where(and_(*conditions))
+            normalized_mode = normalize_analysis_mode(analysis_mode) if analysis_mode else None
 
             if not force:
-                existing_ids = select(BacktestResult.analysis_history_id).where(
-                    and_(
+                existing_conditions = [
                         BacktestResult.eval_window_days == eval_window_days,
                         BacktestResult.engine_version == engine_version,
-                    )
-                )
+                ]
+                if normalized_mode is not None:
+                    existing_conditions.append(BacktestResult.analysis_mode == normalized_mode)
+                existing_ids = select(BacktestResult.analysis_history_id).where(and_(*existing_conditions))
                 query = query.where(AnalysisHistory.id.not_in(existing_ids))
 
             query = query.order_by(desc(AnalysisHistory.created_at)).limit(limit)
@@ -87,16 +91,17 @@ class BacktestRepository:
             try:
                 if replace_existing:
                     analysis_ids = sorted({r.analysis_history_id for r in results if r.analysis_history_id is not None})
-                    key_pairs = sorted({(r.eval_window_days, r.engine_version) for r in results})
+                    key_triples = sorted({(r.eval_window_days, r.engine_version, r.analysis_mode) for r in results})
 
-                    if analysis_ids and key_pairs:
-                        for window_days, engine_version in key_pairs:
+                    if analysis_ids and key_triples:
+                        for window_days, engine_version, analysis_mode in key_triples:
                             session.execute(
                                 delete(BacktestResult).where(
                                     and_(
                                         BacktestResult.analysis_history_id.in_(analysis_ids),
                                         BacktestResult.eval_window_days == window_days,
                                         BacktestResult.engine_version == engine_version,
+                                        BacktestResult.analysis_mode == analysis_mode,
                                     )
                                 )
                             )
@@ -115,6 +120,7 @@ class BacktestRepository:
         analysis_history_id: int,
         eval_window_days: int,
         engine_version: str,
+        analysis_mode: Optional[str] = None,
     ) -> Tuple[int, Optional[str]]:
         with self.db.get_session() as session:
             row = session.execute(
@@ -123,6 +129,7 @@ class BacktestRepository:
                         BacktestResult.analysis_history_id == int(analysis_history_id),
                         BacktestResult.eval_window_days == int(eval_window_days),
                         BacktestResult.engine_version == engine_version,
+                        BacktestResult.analysis_mode == (normalize_analysis_mode(analysis_mode) if analysis_mode else "daily"),
                     )
                 )
             ).scalar_one_or_none()
@@ -142,6 +149,7 @@ class BacktestRepository:
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
         days: Optional[int],
+        analysis_mode: Optional[str] = None,
         offset: int,
         limit: int,
     ) -> Tuple[List[BacktestResultContextRow], int]:
@@ -153,6 +161,7 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=days,
+                analysis_mode=analysis_mode,
             )
 
             where_clause = and_(*conditions) if conditions else True
@@ -190,6 +199,7 @@ class BacktestRepository:
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
         days: Optional[int],
+        analysis_mode: Optional[str] = None,
         offset: int,
         limit: int,
     ) -> List[BacktestResultContextRow]:
@@ -202,6 +212,7 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=days,
+                analysis_mode=analysis_mode,
             )
             where_clause = and_(*conditions) if conditions else True
             rows = session.execute(
@@ -231,6 +242,7 @@ class BacktestRepository:
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
         days: Optional[int] = None,
+        analysis_mode: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> List[Tuple[BacktestResult, Optional[str]]]:
         with self.db.get_session() as session:
@@ -241,6 +253,7 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=days,
+                analysis_mode=analysis_mode,
             )
             where_clause = and_(*conditions) if conditions else True
             query = (
@@ -262,6 +275,7 @@ class BacktestRepository:
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
         days: Optional[int] = None,
+        analysis_mode: Optional[str] = None,
     ) -> int:
         """Return the number of matching BacktestResult rows without loading them."""
         with self.db.get_session() as session:
@@ -272,6 +286,7 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=days,
+                analysis_mode=analysis_mode,
             )
             where_clause = and_(*conditions) if conditions else True
             count = session.execute(
@@ -290,6 +305,7 @@ class BacktestRepository:
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
         days: Optional[int] = None,
+        analysis_mode: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> List[BacktestResult]:
         with self.db.get_session() as session:
@@ -300,6 +316,7 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=days,
+                analysis_mode=analysis_mode,
             )
             where_clause = and_(*conditions) if conditions else True
             query = (
@@ -323,6 +340,7 @@ class BacktestRepository:
                         BacktestSummary.code == summary.code,
                         BacktestSummary.eval_window_days == summary.eval_window_days,
                         BacktestSummary.engine_version == summary.engine_version,
+                        BacktestSummary.analysis_mode == summary.analysis_mode,
                     )
                 )
                 .limit(1)
@@ -365,12 +383,14 @@ class BacktestRepository:
         code: Optional[str],
         eval_window_days: Optional[int] = None,
         engine_version: str,
+        analysis_mode: Optional[str] = None,
     ) -> Optional[BacktestSummary]:
         with self.db.get_session() as session:
             conditions = [
                 BacktestSummary.scope == scope,
                 BacktestSummary.code == code,
                 BacktestSummary.engine_version == engine_version,
+                BacktestSummary.analysis_mode == (normalize_analysis_mode(analysis_mode) if analysis_mode else "daily"),
             ]
             if eval_window_days is not None:
                 conditions.append(BacktestSummary.eval_window_days == eval_window_days)
@@ -416,6 +436,7 @@ class BacktestRepository:
         engine_version: Optional[str] = None,
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
+        analysis_mode: Optional[str] = None,
     ) -> List[int]:
         """Return sorted distinct eval_window_days for matching results."""
         with self.db.get_session() as session:
@@ -426,6 +447,7 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=None,
+                analysis_mode=analysis_mode,
             )
             where_clause = and_(*conditions) if conditions else True
             rows = session.execute(
@@ -445,6 +467,7 @@ class BacktestRepository:
         analysis_date_from: Optional[date],
         analysis_date_to: Optional[date],
         days: Optional[int],
+        analysis_mode: Optional[str],
     ) -> List[object]:
         conditions = []
         if code:
@@ -453,6 +476,8 @@ class BacktestRepository:
             conditions.append(BacktestResult.eval_window_days == eval_window_days)
         if engine_version:
             conditions.append(BacktestResult.engine_version == engine_version)
+        if analysis_mode:
+            conditions.append(BacktestResult.analysis_mode == normalize_analysis_mode(analysis_mode))
         if analysis_date_from is not None:
             conditions.append(BacktestResult.analysis_date >= analysis_date_from)
         if analysis_date_to is not None:

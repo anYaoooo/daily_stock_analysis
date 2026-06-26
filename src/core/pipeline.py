@@ -118,6 +118,7 @@ class StockAnalysisPipeline:
         analysis_skills: Optional[List[str]] = None,
         analysis_phase: str = "auto",
         analysis_mode: str = "daily",
+        trigger_context: Optional[Dict[str, Any]] = None,
         portfolio_context: Optional[Dict[str, Any]] = None,
         daily_market_context_enabled: Optional[bool] = None,
         daily_market_context_allow_generate: bool = True,
@@ -144,6 +145,7 @@ class StockAnalysisPipeline:
         self.analysis_mode = str(analysis_mode or "daily").strip().lower()
         if self.analysis_mode not in {"daily", "hourly"}:
             self.analysis_mode = "daily"
+        self.trigger_context = dict(trigger_context) if isinstance(trigger_context, dict) else None
         self.portfolio_context = dict(portfolio_context) if isinstance(portfolio_context, dict) else None
         self.daily_market_context_enabled = (
             bool(getattr(self.config, "daily_market_context_enabled", True))
@@ -589,6 +591,8 @@ class StockAnalysisPipeline:
                 crypto_technical_context=crypto_technical_context,
             )
             enhanced_context["market_phase_context"] = market_phase_context_dict
+            if self.trigger_context is not None:
+                enhanced_context["trigger_context"] = dict(self.trigger_context)
             self._attach_daily_market_context(
                 enhanced_context,
                 daily_market_context,
@@ -1118,6 +1122,8 @@ class StockAnalysisPipeline:
             }
             if isinstance(portfolio_context, dict):
                 initial_context["portfolio_context"] = dict(portfolio_context)
+            if self.trigger_context is not None:
+                initial_context["trigger_context"] = dict(self.trigger_context)
             if self.analysis_skills is not None:
                 initial_context["skills"] = self.analysis_skills
             if market_phase_context is not None:

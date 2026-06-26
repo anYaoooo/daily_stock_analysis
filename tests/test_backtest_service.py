@@ -13,6 +13,8 @@ import unittest
 from datetime import date, datetime
 from unittest.mock import patch
 
+import pandas as pd
+
 from src.config import Config
 from src.core.backtest_engine import OVERALL_SENTINEL_CODE
 from src.services.backtest_service import BacktestService
@@ -93,12 +95,14 @@ class BacktestServiceTestCase(unittest.TestCase):
         start_close: float,
         forward_bars: list[StockDaily],
         phase: str = "intraday",
+        analysis_mode: str = "daily",
+        code: str = "600519",
     ) -> None:
         with self.db.get_session() as session:
             session.add(
                 AnalysisHistory(
                     query_id=query_id,
-                    code="600519",
+                    code=code,
                     name="贵州茅台",
                     report_type="simple",
                     sentiment_score=60,
@@ -110,7 +114,11 @@ class BacktestServiceTestCase(unittest.TestCase):
                     created_at=created_at,
                     context_snapshot=json.dumps(
                         {
-                            "enhanced_context": {"date": analysis_date.isoformat()},
+                            "analysis_mode": analysis_mode,
+                            "enhanced_context": {
+                                "date": analysis_date.isoformat(),
+                                "analysis_mode": analysis_mode,
+                            },
                             "market_phase_summary": {
                                 "phase": phase,
                                 "market": "cn",
@@ -122,7 +130,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             )
             session.add(
                 StockDaily(
-                    code="600519",
+                    code=code,
                     date=analysis_date,
                     open=start_close,
                     high=start_close,
@@ -931,6 +939,101 @@ class BacktestServiceTestCase(unittest.TestCase):
                 session.query(BacktestResult).filter(BacktestResult.code == "000858").count(),
                 1,
             )
+
+    def test_hourly_crypto_analysis_uses_hourly_bars(self) -> None:
+        with self.db.get_session() as session:
+            session.add(
+                AnalysisHistory(
+                    query_id="q-hourly-btc",
+                    code="BTC",
+                    name="Bitcoin",
+                    report_type="simple",
+                    sentiment_score=70,
+                    operation_advice="买入",
+                    trend_prediction="看多",
+                    analysis_summary="hourly btc",
+                    stop_loss=None,
+                    take_profit=None,
+                    created_at=datetime(2024, 1, 10, 10, 0, 0),
+                    context_snapshot=json.dumps(
+                        {
+                            "analysis_mode": "hourly",
+                            "enhanced_context": {"date": "2024-01-10", "analysis_mode": "hourly"},
+                        }
+                    ),
+                )
+            )
+            session.commit()
+
+        hourly_df = pd.DataFrame(
+            [
+                {"date": "2024-01-10 02:00", "high": 100.0, "low": 99.0, "close": 100.0},
+                {"date": "2024-01-10 03:00", "high": 103.0, "low": 100.0, "close": 102.0},
+            ]
+        )
+        service = BacktestService(self.db)
+        with patch("src.services.backtest_service.CryptoFetcher") as fetcher_cls:
+            fetcher_cls.return_value.get_kline_data.return_value = hourly_df
+            stats = service.run_backtest(
+                code="BTC",
+                force=False,
+                eval_window_days=1,
+                min_age_days=0,
+                limit=10,
+            )
+
+        self.assertEqual(stats["saved"], 1)
+        self.assertEqual(stats["completed"], 1)
+        with self.db.get_session() as session:
+            result = session.query(BacktestResult).filter(BacktestResult.code == "BTCUSDT").one()
+            self.assertEqual(result.analysis_mode, "hourly")
+            self.assertEqual(result.eval_status, "completed")
+            self.assertAlmostEqual(result.start_price, 100.0)
+            self.assertAlmostEqual(result.end_close, 102.0)
+
+        hourly_summary = service.get_summary(
+            scope="overall",
+            code=None,
+            eval_window_days=1,
+            analysis_mode="hourly",
+        )
+        self.assertIsNotNone(hourly_summary)
+        assert hourly_summary is not None
+        self.assertEqual(hourly_summary["analysis_mode"], "hourly")
+        self.assertEqual(hourly_summary["completed_count"], 1)
+
+    def test_hourly_non_crypto_analysis_is_insufficient_not_daily_fallback(self) -> None:
+        self._seed_analysis(
+            query_id="q-hourly-stock",
+            code="600519",
+            analysis_date=date(2024, 1, 20),
+            created_at=datetime(2024, 1, 20, 10, 0, 0),
+            operation_advice="买入",
+            trend_prediction="看多",
+            start_close=100.0,
+            forward_bars=[
+                StockDaily(code="600519", date=date(2024, 1, 21), high=110.0, low=99.0, close=108.0),
+            ],
+            analysis_mode="hourly",
+        )
+
+        service = BacktestService(self.db)
+        stats = service.run_backtest(
+            code="600519",
+            force=False,
+            eval_window_days=1,
+            min_age_days=0,
+            analysis_mode="hourly",
+            limit=10,
+        )
+
+        self.assertEqual(stats["saved"], 1)
+        self.assertEqual(stats["completed"], 0)
+        self.assertEqual(stats["insufficient"], 1)
+        with self.db.get_session() as session:
+            result = session.query(BacktestResult).filter(BacktestResult.analysis_mode == "hourly").one()
+            self.assertEqual(result.eval_status, "insufficient_data")
+            self.assertIsNone(result.start_price)
 
 
 if __name__ == "__main__":
