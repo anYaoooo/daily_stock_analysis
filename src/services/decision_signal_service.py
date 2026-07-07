@@ -29,6 +29,7 @@ SOURCE_TYPES = frozenset({"analysis", "agent", "alert", "market_review", "manual
 SIGNAL_STATUSES = frozenset({"active", "expired", "invalidated", "closed", "archived"})
 PLAN_QUALITIES = frozenset({"complete", "partial", "minimal", "unknown"})
 HORIZONS = frozenset({"intraday", "1d", "3d", "5d", "10d", "swing", "long"})
+DECISION_SIGNAL_MARKETS = frozenset({*VALID_MARKETS, "crypto"})
 MARKET_PHASES = frozenset(phase.value for phase in MarketPhase)
 DECISION_ACTIONS = frozenset(get_args(DecisionAction))
 REDACTION_MARKERS = ("[REDACTED]", "[REDACTED_URL]")
@@ -511,8 +512,8 @@ class DecisionSignalService:
     @staticmethod
     def _normalize_market(value: Any) -> str:
         market = str(value or "").strip().lower()
-        if market not in VALID_MARKETS:
-            raise ValueError("market must be one of cn, hk, us")
+        if market not in DECISION_SIGNAL_MARKETS:
+            raise ValueError("market must be one of cn, hk, us, crypto")
         return market
 
     @classmethod

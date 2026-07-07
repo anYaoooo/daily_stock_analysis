@@ -1880,6 +1880,8 @@ class GeminiAnalyzer:
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
 - 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
+- 报告必须去重：同一事实或同一风险不要在摘要、技术面、新闻、检查清单中反复改写；每个字段只保留会改变交易动作、触发条件、失效条件或仓位控制的信息。
+- 如果暂时没有交易机会，不要用长篇泛泛分析填充；必须直接写清“等待什么价格/量能/结构触发”以及“什么条件使该机会失效”。
 - 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
 - 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。"""
 
@@ -3405,23 +3407,31 @@ class GeminiAnalyzer:
             hourly_opportunity = intraday.get("opportunity", "N/A")
             if not hourly_crypto:
                 hourly_opportunity = "小时线数据缺失，日内交易计划必须设为 enabled=false、direction=\"wait\"，等待小时线数据恢复或新的日内触发。"
-            if isinstance(trigger_context, dict) and trigger_context.get("trigger_reason") == "volatility_spike":
+            if isinstance(trigger_context, dict) and trigger_context.get("trigger_reason") in {"volatility_spike", "entry_signal"}:
                 prompt += f"""
-### BTC 波动触发上下文（必须解释）
+### BTC 日内触发上下文（必须解释）
 | 字段 | 数值 |
 |------|------|
 | 触发来源 | {trigger_context.get('trigger_source', 'btc_volatility')} |
-| 触发原因 | {trigger_context.get('trigger_reason', 'volatility_spike')} |
+| 触发原因 | {trigger_context.get('trigger_reason', 'entry_signal')} |
 | 短窗口方向 | {trigger_context.get('direction', 'N/A')} |
 | 短窗口涨跌幅 | {trigger_context.get('change_pct', 'N/A')}% |
 | 当前价格 | {trigger_context.get('price', 'N/A')} |
 | 基准价格 | {trigger_context.get('baseline_price', 'N/A')} |
+| 机会价格 | {trigger_context.get('opportunity_price', 'N/A')} |
+| 建议交易方向 | {trigger_context.get('trade_direction', 'N/A')} |
+| 入场信号动作 | {trigger_context.get('suggested_trade_action', 'N/A')} |
+| 入场确认价 | {trigger_context.get('entry_price', 'N/A')} |
+| 入场确认幅度 | {trigger_context.get('entry_confirmation_pct', 'N/A')}% |
+| 失效价 | {trigger_context.get('invalidation_price', 'N/A')} |
+| 失效幅度 | {trigger_context.get('invalidation_pct', 'N/A')}% |
+| 观察秒数 | {trigger_context.get('watched_seconds', 'N/A')} |
 | 窗口秒数 | {trigger_context.get('window_seconds', 'N/A')} |
 | 触发阈值 | {trigger_context.get('threshold_pct', 'N/A')}% |
 | 确认采样 | {trigger_context.get('confirmation_count', 'N/A')}/{trigger_context.get('confirmation_required', 'N/A')} |
 | 行情时间 | {trigger_context.get('provider_timestamp', 'N/A')} |
 
-> 本轮小时线分析由短窗口价格剧烈波动触发，不是普通整点小时线复盘。必须在 `dashboard.battle_plan.intraday_plan.reason` 或 `trigger_condition` 中说明该短窗口冲击，并明确：当前 1 小时 K 线可能尚未收线，5 分钟级别冲击只能作为日内触发/风控上下文，不能直接升级为日线趋势反转结论。
+> 本轮小时线分析由日内价格机会监控触发，不是普通整点小时线复盘。若 `触发原因=entry_signal`，必须把“入场确认价、失效价、观察秒数、建议交易方向”写入 `dashboard.battle_plan.intraday_plan.trigger_condition`、`invalidation` 或 `reason`，形成可执行的多/空入场信号；若小时线结构不支持该方向，必须明确降级为等待，并解释为什么当前短窗口信号不足以交易。当前 1 小时 K 线可能尚未收线，短窗口冲击只能作为日内触发/风控上下文，不能直接升级为日线趋势反转结论。
 """
             prompt += f"""
 ### BTC 小时线日内交易机会（独立判断）

@@ -105,6 +105,8 @@ class MainScheduleModeTestCase(unittest.TestCase):
             "agent_event_monitor_enabled": False,
             "agent_event_alert_rules_json": "",
             "agent_event_monitor_interval_minutes": 5,
+            "btc_hourly_analysis_interval_hours": 4,
+            "btc_hourly_analysis_at_minute": 5,
             "btc_volatility_monitor_enabled": False,
             "btc_volatility_monitor_interval_seconds": 60,
             "btc_volatility_monitor_window_minutes": 5,
@@ -112,6 +114,9 @@ class MainScheduleModeTestCase(unittest.TestCase):
             "btc_volatility_monitor_cooldown_minutes": 30,
             "btc_volatility_monitor_symbol": "BTC",
             "btc_volatility_monitor_confirmation_samples": 2,
+            "btc_volatility_monitor_entry_confirmation_pct": 0.2,
+            "btc_volatility_monitor_invalidation_pct": 0.5,
+            "btc_volatility_monitor_max_watch_minutes": 20,
             "daily_market_context_enabled": True,
         }
         defaults.update(overrides)
@@ -121,6 +126,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(task["name"], "btc_hourly_analysis")
         self.assertEqual(task["interval_seconds"], 60 * 60)
         self.assertEqual(task["hourly_at_minute"], 5)
+        self.assertEqual(task["hourly_interval_hours"], 4)
         self.assertEqual(task["run_immediately"], False)
 
     def test_public_webui_bind_warns_when_auth_is_disabled(self) -> None:
@@ -370,10 +376,20 @@ class MainScheduleModeTestCase(unittest.TestCase):
         monitor = MagicMock()
         monitor.run_once.return_value = {
             "triggered": 1,
+            "reason": "entry_signal",
+            "trigger_reason": "entry_signal",
             "direction": "down",
+            "trade_direction": "short",
+            "suggested_trade_action": "short_entry",
             "change_pct": -1.2,
             "price": 59000,
             "baseline_price": 59800,
+            "opportunity_price": 59100,
+            "entry_price": 58981.8,
+            "entry_confirmation_pct": 0.2,
+            "invalidation_price": 59395.5,
+            "invalidation_pct": 0.5,
+            "watched_seconds": 60,
             "threshold_pct": 1.0,
             "window_seconds": 120,
             "confirmation_count": 2,
@@ -422,7 +438,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
                 call_args.kwargs["trigger_context"],
                 {
                     "trigger_source": "btc_volatility",
-                    "trigger_reason": "volatility_spike",
+                    "trigger_reason": "entry_signal",
                     "monitor": "btc_volatility_monitor",
                     "analysis_mode": "hourly",
                     "symbol": "BTC",
@@ -431,6 +447,14 @@ class MainScheduleModeTestCase(unittest.TestCase):
                     "change_pct": -1.2,
                     "threshold_pct": 1.0,
                     "direction": "down",
+                    "trade_direction": "short",
+                    "suggested_trade_action": "short_entry",
+                    "opportunity_price": 59100,
+                    "entry_price": 58981.8,
+                    "entry_confirmation_pct": 0.2,
+                    "invalidation_price": 59395.5,
+                    "invalidation_pct": 0.5,
+                    "watched_seconds": 60,
                     "window_seconds": 120,
                     "confirmation_count": 2,
                     "confirmation_required": 2,

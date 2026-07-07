@@ -1663,17 +1663,19 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 技术指标规则只使用日线 close 的边缘触发，partial bar 处理是服务器本地时区 + 16:00 的启发式，不做市场日历精确判定。`watchlist` 每轮刷新 `STOCK_LIST` 后展开，`portfolio_holdings` 从持仓快照的非零持仓按 symbol 去重展开，`portfolio_account` 复用持仓风险服务做账户级聚合评估。`market` 规则的 target 仅支持 `cn|hk|us`，使用结构化 `MarketLightSnapshot`；`trade_date` 来自当次 market overview，`data_quality=unavailable` 会跳过触发，非交易日会被交易日 gate 跳过，`market_light_score_drop` 只比较跨交易日 score。WebUI 的“告警”页面可以管理持久化规则、执行一次性 dry-run 测试，并查看触发历史、通知尝试结果和只读冷却状态；批量规则的列表冷却状态是父规则摘要，子目标冷却以触发历史为准。详细边界见 [实时告警中心](alerts.md)。
 
-## BTC 剧烈波动触发分析
+## BTC 交易机会触发分析
 
-`BTC_VOLATILITY_MONITOR_ENABLED=true` 后，schedule 模式会额外注册 `btc_volatility_monitor` 后台任务。它按实时 BTC 价格维护一个短窗口，窗口内绝对涨跌幅达到 `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT`，并连续满足 `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES` 次同向确认后，会立即触发一次 `analysis_mode=hourly` 的 BTC 分析并走现有 report 通知路由。该能力只生成分析和进场计划，不会自动下单；真实交易仍需通过手动交易接口确认。
+`BTC_VOLATILITY_MONITOR_ENABLED=true` 后，schedule 模式会额外注册 `btc_volatility_monitor` 后台任务。它按实时 BTC 价格维护一个短窗口，窗口内绝对涨跌幅达到 `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT` 时先进入“机会观察”状态；只有价格继续沿同方向满足 `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` 和 `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES` 后，才会触发一次 `analysis_mode=hourly` 的 BTC 分析并走现有 report 通知路由。该能力只生成分析和进场计划，不会自动下单；真实交易仍需通过手动交易接口确认。
 
-波动触发的小时线分析会向分析上下文传入 `trigger_reason=volatility_spike`、短窗口方向、涨跌幅、当前价、基准价、窗口秒数、阈值和确认采样信息。报告需要把这些信息解释为日内触发/风控上下文，并明确当前 1 小时 K 线可能尚未收线；短窗口冲击不能直接升级为日线趋势反转结论。
+交易机会触发的小时线分析会向分析上下文传入 `trigger_reason=entry_signal`、建议交易方向、入场确认价、失效价、观察秒数、短窗口方向、涨跌幅、当前价、基准价、阈值和确认采样信息。报告需要把这些信息解释为日内触发/风控上下文，并明确当前 1 小时 K 线可能尚未收线；短窗口冲击不能直接升级为日线趋势反转结论。若价格在观察期内反向触及 `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT`，或超过 `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES` 仍未确认，机会会失效且不会触发分析。
 
-当前实现使用 REST 轮询而不是 WebSocket 订阅，因此发现延迟最多可能接近 `BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS`。默认连续 2 次同向确认用于降低单次 Last Price 脏数据、瞬时插针或交易所异常报价导致的误触发；如果追求更快响应，可把确认次数设为 1，但误触发风险会升高。
+当前实现使用 REST 轮询而不是 WebSocket 订阅，因此发现延迟最多可能接近 `BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS`。默认连续 2 次同向确认用于降低单次 Last Price 脏数据、瞬时插针或交易所异常报价导致的误触发；如果追求更快响应，可把确认次数设为 1，但误触发风险会升高。普通小时线基线分析仍保留，但默认通过 `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4` 降为每 4 小时一次，真正的短线机会由事件监控捕捉。
 
-默认参数偏保守：每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 触发，触发后冷却 30 分钟。调度器后台任务最小轮询精度为 30 秒，因此低于 30 秒的间隔会被自动夹到 30 秒。
+默认参数偏保守：每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 后开始观察，继续同向推进 0.2% 才形成入场信号，反向 0.5% 或观察 20 分钟未确认则失效，触发后冷却 30 分钟。调度器后台任务最小轮询精度为 30 秒，因此低于 30 秒的间隔会被自动夹到 30 秒。
 
 ```env
+BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4
+BTC_HOURLY_ANALYSIS_AT_MINUTE=5
 BTC_VOLATILITY_MONITOR_ENABLED=true
 BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=60
 BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=5
@@ -1681,9 +1683,12 @@ BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
 BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
 BTC_VOLATILITY_MONITOR_SYMBOL=BTC
 BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES=2
+BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT=0.2
+BTC_VOLATILITY_MONITOR_INVALIDATION_PCT=0.5
+BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES=20
 ```
 
-回退方式是删除或设置 `BTC_VOLATILITY_MONITOR_ENABLED=false`；每小时 05 分的小时线分析和 `AGENT_EVENT_MONITOR_*` 告警中心不受影响。波动触发分析与定时小时线分析共用进程内互斥锁，若已有 BTC 分析正在运行，本次触发会记录日志并跳过，避免重复生成报告。
+回退方式是删除或设置 `BTC_VOLATILITY_MONITOR_ENABLED=false`；低频小时线基线分析和 `AGENT_EVENT_MONITOR_*` 告警中心不受影响。机会触发分析与定时小时线分析共用进程内互斥锁，若已有 BTC 分析正在运行，本次触发会记录日志并跳过，避免重复生成报告。
 
 ## 持仓管理说明
 

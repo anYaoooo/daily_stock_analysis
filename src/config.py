@@ -737,6 +737,8 @@ class Config:
     agent_event_monitor_enabled: bool = False  # Enable periodic event-driven alert checks in schedule mode
     agent_event_monitor_interval_minutes: int = 5  # Polling interval for event monitor background checks
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
+    btc_hourly_analysis_interval_hours: int = 4
+    btc_hourly_analysis_at_minute: int = 5
     btc_volatility_monitor_enabled: bool = False
     btc_volatility_monitor_interval_seconds: int = 60
     btc_volatility_monitor_window_minutes: int = 5
@@ -744,6 +746,9 @@ class Config:
     btc_volatility_monitor_cooldown_minutes: int = 30
     btc_volatility_monitor_symbol: str = "BTC"
     btc_volatility_monitor_confirmation_samples: int = 2
+    btc_volatility_monitor_entry_confirmation_pct: float = 0.2
+    btc_volatility_monitor_invalidation_pct: float = 0.5
+    btc_volatility_monitor_max_watch_minutes: int = 20
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -1568,6 +1573,19 @@ class Config:
                 minimum=1,
             ),
             agent_event_alert_rules_json=os.getenv('AGENT_EVENT_ALERT_RULES_JSON', ''),
+            btc_hourly_analysis_interval_hours=parse_env_int(
+                os.getenv('BTC_HOURLY_ANALYSIS_INTERVAL_HOURS'),
+                4,
+                field_name='BTC_HOURLY_ANALYSIS_INTERVAL_HOURS',
+                minimum=1,
+            ),
+            btc_hourly_analysis_at_minute=parse_env_int(
+                os.getenv('BTC_HOURLY_ANALYSIS_AT_MINUTE'),
+                5,
+                field_name='BTC_HOURLY_ANALYSIS_AT_MINUTE',
+                minimum=0,
+                maximum=59,
+            ),
             btc_volatility_monitor_enabled=parse_env_bool(
                 os.getenv('BTC_VOLATILITY_MONITOR_ENABLED'),
                 default=False,
@@ -1601,6 +1619,25 @@ class Config:
                 os.getenv('BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES'),
                 2,
                 field_name='BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES',
+                minimum=1,
+            ),
+            btc_volatility_monitor_entry_confirmation_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT'),
+                0.2,
+                field_name='BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT',
+                minimum=0.0,
+            ),
+            btc_volatility_monitor_invalidation_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_INVALIDATION_PCT'),
+                0.5,
+                field_name='BTC_VOLATILITY_MONITOR_INVALIDATION_PCT',
+                minimum=0.1,
+            ),
+            btc_volatility_monitor_max_watch_minutes=parse_env_int(
+                os.getenv('BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES'),
+                20,
+                field_name='BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES',
+                minimum=1,
             ),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),

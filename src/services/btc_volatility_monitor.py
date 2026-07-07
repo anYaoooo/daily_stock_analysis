@@ -20,8 +20,20 @@ class PriceSnapshot:
     provider_timestamp: Optional[str] = None
 
 
+@dataclass
+class ActiveOpportunity:
+    direction: str
+    detected_at: float
+    baseline_timestamp: float
+    baseline_price: float
+    opportunity_price: float
+    threshold_pct: float
+    initial_change_pct: float
+    provider_timestamp: Optional[str] = None
+
+
 class BTCVolatilityMonitor:
-    """Track recent BTC quotes and decide when a fresh hourly analysis is warranted."""
+    """Track BTC quotes and trigger hourly analysis only after an entry signal forms."""
 
     def __init__(
         self,
@@ -35,6 +47,7 @@ class BTCVolatilityMonitor:
         self._last_trigger_at: Optional[float] = None
         self._confirmation_direction: Optional[str] = None
         self._confirmation_count = 0
+        self._active_opportunity: Optional[ActiveOpportunity] = None
 
     @staticmethod
     def _fetch_quote(symbol: str) -> Any:
@@ -73,6 +86,18 @@ class BTCVolatilityMonitor:
             1,
             int(getattr(config, "btc_volatility_monitor_confirmation_samples", 2) or 2),
         )
+        entry_confirmation_pct = max(
+            0.0,
+            float(getattr(config, "btc_volatility_monitor_entry_confirmation_pct", 0.2) or 0.0),
+        )
+        invalidation_pct = max(
+            0.1,
+            float(getattr(config, "btc_volatility_monitor_invalidation_pct", 0.5) or 0.5),
+        )
+        max_watch_seconds = max(
+            60,
+            int(getattr(config, "btc_volatility_monitor_max_watch_minutes", 20) or 20) * 60,
+        )
         cooldown_seconds = max(
             0,
             int(getattr(config, "btc_volatility_monitor_cooldown_minutes", 30) or 30) * 60,
@@ -85,6 +110,19 @@ class BTCVolatilityMonitor:
         )
         self._snapshots.append(snapshot)
         self._prune(now=now, window_seconds=window_seconds)
+
+        active_stats = self._evaluate_active_opportunity(
+            snapshot=snapshot,
+            now=now,
+            confirmation_samples=confirmation_samples,
+            entry_confirmation_pct=entry_confirmation_pct,
+            invalidation_pct=invalidation_pct,
+            max_watch_seconds=max_watch_seconds,
+            cooldown_seconds=cooldown_seconds,
+        )
+        if active_stats is not None:
+            stats.update(active_stats)
+            return stats
 
         if len(self._snapshots) < 2:
             stats["reason"] = "warming_up"
@@ -107,52 +145,28 @@ class BTCVolatilityMonitor:
             return stats
 
         direction = "up" if change_pct > 0 else "down"
-        if self._confirmation_direction == direction:
-            self._confirmation_count += 1
-        else:
-            self._confirmation_direction = direction
-            self._confirmation_count = 1
+        self._active_opportunity = ActiveOpportunity(
+            direction=direction,
+            detected_at=now,
+            baseline_timestamp=baseline.timestamp,
+            baseline_price=baseline.price,
+            opportunity_price=snapshot.price,
+            threshold_pct=threshold_pct,
+            initial_change_pct=change_pct,
+            provider_timestamp=snapshot.provider_timestamp,
+        )
+        self._confirmation_direction = direction
+        self._confirmation_count = 1
 
-        if self._confirmation_count < confirmation_samples:
-            stats["reason"] = "awaiting_confirmation"
-            stats.update(
-                self._market_fields(
-                    snapshot=snapshot,
-                    baseline=baseline,
-                    change_pct=change_pct,
-                    threshold_pct=threshold_pct,
-                    confirmation_count=self._confirmation_count,
-                    confirmation_required=confirmation_samples,
-                )
-            )
-            return stats
-
-        if self._last_trigger_at is not None and now - self._last_trigger_at < cooldown_seconds:
-            stats["suppressed"] = 1
-            stats["reason"] = "cooldown"
-            stats.update(
-                self._market_fields(
-                    snapshot=snapshot,
-                    baseline=baseline,
-                    change_pct=change_pct,
-                    threshold_pct=threshold_pct,
-                    confirmation_count=self._confirmation_count,
-                    confirmation_required=confirmation_samples,
-                )
-            )
-            return stats
-
-        self._last_trigger_at = now
-        stats["triggered"] = 1
-        stats["reason"] = "volatility_threshold"
+        stats["reason"] = "awaiting_confirmation"
         stats.update(
-            self._market_fields(
+            self._opportunity_fields(
                 snapshot=snapshot,
-                baseline=baseline,
-                change_pct=change_pct,
-                threshold_pct=threshold_pct,
+                opportunity=self._active_opportunity,
                 confirmation_count=self._confirmation_count,
                 confirmation_required=confirmation_samples,
+                entry_confirmation_pct=entry_confirmation_pct,
+                invalidation_pct=invalidation_pct,
             )
         )
         return stats
@@ -160,6 +174,106 @@ class BTCVolatilityMonitor:
     def _reset_confirmation(self) -> None:
         self._confirmation_direction = None
         self._confirmation_count = 0
+        self._active_opportunity = None
+
+    def _evaluate_active_opportunity(
+        self,
+        *,
+        snapshot: PriceSnapshot,
+        now: float,
+        confirmation_samples: int,
+        entry_confirmation_pct: float,
+        invalidation_pct: float,
+        max_watch_seconds: int,
+        cooldown_seconds: int,
+    ) -> Optional[Dict[str, Any]]:
+        opportunity = self._active_opportunity
+        if opportunity is None:
+            return None
+
+        watched_seconds = max(0, int(now - opportunity.detected_at))
+        if watched_seconds > max_watch_seconds:
+            fields = self._opportunity_fields(
+                snapshot=snapshot,
+                opportunity=opportunity,
+                confirmation_count=self._confirmation_count,
+                confirmation_required=confirmation_samples,
+                entry_confirmation_pct=entry_confirmation_pct,
+                invalidation_pct=invalidation_pct,
+            )
+            fields["reason"] = "watch_expired"
+            self._reset_confirmation()
+            return fields
+
+        if self._is_opportunity_invalidated(snapshot, opportunity, invalidation_pct):
+            fields = self._opportunity_fields(
+                snapshot=snapshot,
+                opportunity=opportunity,
+                confirmation_count=self._confirmation_count,
+                confirmation_required=confirmation_samples,
+                entry_confirmation_pct=entry_confirmation_pct,
+                invalidation_pct=invalidation_pct,
+            )
+            fields["reason"] = "opportunity_invalidated"
+            self._reset_confirmation()
+            return fields
+
+        if self._entry_signal_confirmed(snapshot, opportunity, entry_confirmation_pct):
+            if self._confirmation_direction == opportunity.direction:
+                self._confirmation_count += 1
+            else:
+                self._confirmation_direction = opportunity.direction
+                self._confirmation_count = 1
+        else:
+            self._confirmation_count = max(1, self._confirmation_count)
+
+        fields = self._opportunity_fields(
+            snapshot=snapshot,
+            opportunity=opportunity,
+            confirmation_count=self._confirmation_count,
+            confirmation_required=confirmation_samples,
+            entry_confirmation_pct=entry_confirmation_pct,
+            invalidation_pct=invalidation_pct,
+        )
+        if self._confirmation_count < confirmation_samples:
+            fields["reason"] = "watching_opportunity"
+            return fields
+
+        if self._last_trigger_at is not None and now - self._last_trigger_at < cooldown_seconds:
+            fields["suppressed"] = 1
+            fields["reason"] = "cooldown"
+            return fields
+
+        self._last_trigger_at = now
+        fields["triggered"] = 1
+        fields["reason"] = "entry_signal"
+        fields["trigger_reason"] = "entry_signal"
+        self._reset_confirmation()
+        return fields
+
+    @staticmethod
+    def _entry_signal_confirmed(
+        snapshot: PriceSnapshot,
+        opportunity: ActiveOpportunity,
+        entry_confirmation_pct: float,
+    ) -> bool:
+        if opportunity.direction == "up":
+            required_price = opportunity.opportunity_price * (1 + entry_confirmation_pct / 100)
+            return snapshot.price >= required_price
+        required_price = opportunity.opportunity_price * (1 - entry_confirmation_pct / 100)
+        return snapshot.price <= required_price
+
+    @staticmethod
+    def _is_opportunity_invalidated(
+        snapshot: PriceSnapshot,
+        opportunity: ActiveOpportunity,
+        invalidation_pct: float,
+    ) -> bool:
+        if opportunity.direction == "up":
+            invalidation_price = opportunity.opportunity_price * (1 - invalidation_pct / 100)
+            return snapshot.price <= invalidation_price
+        invalidation_price = opportunity.opportunity_price * (1 + invalidation_pct / 100)
+        return snapshot.price >= invalidation_price
 
     def _prune(self, *, now: float, window_seconds: int) -> None:
         cutoff = now - window_seconds
@@ -218,4 +332,53 @@ class BTCVolatilityMonitor:
             fields["confirmation_count"] = int(confirmation_count)
         if confirmation_required is not None:
             fields["confirmation_required"] = int(confirmation_required)
+        return fields
+
+    @classmethod
+    def _opportunity_fields(
+        cls,
+        *,
+        snapshot: PriceSnapshot,
+        opportunity: ActiveOpportunity,
+        confirmation_count: int,
+        confirmation_required: int,
+        entry_confirmation_pct: float,
+        invalidation_pct: float,
+    ) -> Dict[str, Any]:
+        baseline = PriceSnapshot(
+            timestamp=opportunity.baseline_timestamp,
+            price=opportunity.baseline_price,
+            provider_timestamp=opportunity.provider_timestamp,
+        )
+        change_pct = (snapshot.price - opportunity.baseline_price) / opportunity.baseline_price * 100
+        fields = cls._market_fields(
+            snapshot=snapshot,
+            baseline=baseline,
+            change_pct=change_pct,
+            threshold_pct=opportunity.threshold_pct,
+            confirmation_count=confirmation_count,
+            confirmation_required=confirmation_required,
+        )
+        trade_direction = "long" if opportunity.direction == "up" else "short"
+        if opportunity.direction == "up":
+            entry_price = opportunity.opportunity_price * (1 + entry_confirmation_pct / 100)
+            invalidation_price = opportunity.opportunity_price * (1 - invalidation_pct / 100)
+        else:
+            entry_price = opportunity.opportunity_price * (1 - entry_confirmation_pct / 100)
+            invalidation_price = opportunity.opportunity_price * (1 + invalidation_pct / 100)
+        fields.update(
+            {
+                "opportunity_state": "active",
+                "opportunity_direction": opportunity.direction,
+                "trade_direction": trade_direction,
+                "suggested_trade_action": f"{trade_direction}_entry",
+                "opportunity_price": round(opportunity.opportunity_price, 4),
+                "initial_change_pct": round(opportunity.initial_change_pct, 4),
+                "entry_confirmation_pct": round(entry_confirmation_pct, 4),
+                "entry_price": round(entry_price, 4),
+                "invalidation_pct": round(invalidation_pct, 4),
+                "invalidation_price": round(invalidation_price, 4),
+                "watched_seconds": max(0, int(snapshot.timestamp - opportunity.detected_at)),
+            }
+        )
         return fields

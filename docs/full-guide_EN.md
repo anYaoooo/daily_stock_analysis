@@ -1503,15 +1503,17 @@ The worker writes `triggered`, `skipped`, `degraded`, and `failed` rows to `aler
 
 Technical indicator rules use daily-close edge triggers only. Partial-bar handling is a server-local-time + 16:00 heuristic and does not implement market-calendar precision. `watchlist` rules refresh and expand `STOCK_LIST` each worker run, `portfolio_holdings` expands non-zero snapshot positions with symbol de-duplication, and `portfolio_account` reuses the portfolio risk service for account-level aggregate evaluation. `market` rules accept only `cn|hk|us` targets and use structured `MarketLightSnapshot` data; `trade_date` comes from the current market overview, `data_quality=unavailable` skips triggering, non-trading days are skipped by the trading-day gate, and `market_light_score_drop` compares score across trading days only. The WebUI "Alerts" page can manage persisted rules, run one-shot dry-run tests, and view trigger history, notification attempts, and read-only cooldown state; cooldown on batch rules is a parent-rule summary, while child-target cooldown details are visible through trigger history. See [Real-Time Alert Center](alerts.md) for detailed boundaries.
 
-## BTC Volatility-Triggered Analysis
+## BTC Opportunity-Triggered Analysis
 
-When `BTC_VOLATILITY_MONITOR_ENABLED=true`, schedule mode also registers the `btc_volatility_monitor` background task. It keeps a short real-time BTC price window and triggers one `analysis_mode=hourly` BTC analysis when the absolute move reaches `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT` and the same direction is confirmed for `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES` consecutive samples. The analysis is routed through the existing report notification path. It only generates analysis and entry plans; it does not place orders automatically.
+When `BTC_VOLATILITY_MONITOR_ENABLED=true`, schedule mode also registers the `btc_volatility_monitor` background task. It keeps a short real-time BTC price window and enters an active opportunity state when the absolute move reaches `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT`. It triggers one `analysis_mode=hourly` BTC analysis only after price continues in the same direction and satisfies `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` plus `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES`. The analysis is routed through the existing report notification path. It only generates analysis and entry plans; it does not place orders automatically.
 
-Volatility-triggered hourly analysis receives `trigger_reason=volatility_spike` plus the short-window direction, change percentage, current price, baseline price, window seconds, threshold, and confirmation sample counts. Reports should treat this as intraday trigger/risk context and state that the current 1h candle may still be unfinished; a short-window shock must not be promoted directly into a daily trend reversal.
+Opportunity-triggered hourly analysis receives `trigger_reason=entry_signal`, suggested trade direction, entry confirmation price, invalidation price, watched seconds, short-window direction, change percentage, current price, baseline price, threshold, and confirmation sample counts. Reports should treat this as intraday trigger/risk context and state that the current 1h candle may still be unfinished; a short-window shock must not be promoted directly into a daily trend reversal. If price reverses by `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT` during the watch state, or no confirmation appears within `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES`, the opportunity expires without triggering analysis.
 
-The current implementation uses REST polling rather than WebSocket subscriptions, so detection latency can be close to `BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS`. The default two-sample confirmation reduces false positives from dirty Last Price ticks, one-off wicks, or abnormal exchange quotes. Setting confirmation samples to `1` improves response speed but increases false-trigger risk.
+The current implementation uses REST polling rather than WebSocket subscriptions, so detection latency can be close to `BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS`. The default two-sample confirmation reduces false positives from dirty Last Price ticks, one-off wicks, or abnormal exchange quotes. Setting confirmation samples to `1` improves response speed but increases false-trigger risk. Regular hourly baseline analysis remains available, but defaults to every 4 hours through `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4`; faster intraday opportunities are handled by the event monitor.
 
 ```env
+BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4
+BTC_HOURLY_ANALYSIS_AT_MINUTE=5
 BTC_VOLATILITY_MONITOR_ENABLED=true
 BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=60
 BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=5
@@ -1519,9 +1521,12 @@ BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
 BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
 BTC_VOLATILITY_MONITOR_SYMBOL=BTC
 BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES=2
+BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT=0.2
+BTC_VOLATILITY_MONITOR_INVALIDATION_PCT=0.5
+BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES=20
 ```
 
-Rollback is to remove the variables or set `BTC_VOLATILITY_MONITOR_ENABLED=false`. The regular hourly analysis at minute 05 and `AGENT_EVENT_MONITOR_*` alert center are unaffected. Volatility-triggered analysis shares the in-process BTC analysis lock with scheduled hourly analysis; if another BTC analysis is already running, the trigger is logged and skipped to avoid duplicate reports.
+Rollback is to remove the variables or set `BTC_VOLATILITY_MONITOR_ENABLED=false`. The lower-frequency hourly baseline analysis and `AGENT_EVENT_MONITOR_*` alert center are unaffected. Opportunity-triggered analysis shares the in-process BTC analysis lock with scheduled hourly analysis; if another BTC analysis is already running, the trigger is logged and skipped to avoid duplicate reports.
 
 ---
 

@@ -38,8 +38,8 @@ def isolated_db(tmp_path):
 
 def _result(**overrides) -> AnalysisResult:
     result = AnalysisResult(
-        code="600519",
-        name="贵州茅台",
+        code="BTC",
+        name="Bitcoin",
         sentiment_score=82,
         trend_prediction="看多",
         operation_advice="买入",
@@ -98,9 +98,9 @@ def test_build_payload_maps_report_context_and_price_plan() -> None:
     )
 
     assert payload is not None
-    assert payload["stock_code"] == "600519"
-    assert payload["stock_name"] == "贵州茅台"
-    assert payload["market"] == "cn"
+    assert payload["stock_code"] == "BTC"
+    assert payload["stock_name"] == "Bitcoin"
+    assert payload["market"] == "crypto"
     assert payload["source_type"] == "analysis"
     assert payload["source_report_id"] == 88
     assert payload["trace_id"] == "trace-88"
@@ -123,6 +123,74 @@ def test_build_payload_maps_report_context_and_price_plan() -> None:
         "session_date": "2026-06-15",
         "minutes_to_close": 120,
     }
+
+
+def test_build_payload_prefers_active_intraday_strategy_plan() -> None:
+    result = _result(
+        operation_advice="观望",
+        decision_type="hold",
+        confidence_level="中",
+    )
+    result.action = "watch"
+    result.dashboard = {
+        "battle_plan": {
+            "sniper_points": {
+                "ideal_buy": "1700",
+                "stop_loss": "1600",
+                "take_profit": "1850",
+            },
+            "intraday_plan": {
+                "plan_type": "intraday",
+                "enabled": True,
+                "direction": "long",
+                "entry_zone": "1710-1720",
+                "entry_price": "1715",
+                "stop_loss": "1688",
+                "take_profit": "1760",
+                "trigger_condition": "小时线放量突破 1720 后回踩不破",
+                "invalidation": "跌破 1688 或突破失败回落",
+                "invalid_condition": "小时线收盘跌破 1688",
+                "daily_constraint": "日线必须守住 1680",
+                "risk_reward": "1:2.1",
+                "position_hint": "单笔风险不超过 0.5%",
+                "confidence": "中：等待右侧确认",
+                "reason": "急跌后收复 VWAP，存在日内右侧机会",
+            },
+        },
+        "phase_decision": {
+            "watch_conditions": ["确认突破后再执行"],
+        },
+    }
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        context_snapshot={
+            "analysis_mode": "hourly",
+            "market_phase_summary": {"phase": "intraday", "minutes_to_close": 180},
+        },
+        source_report_id=188,
+        trace_id="trace-intraday",
+        query_source="btc_volatility",
+        report_type="simple",
+    )
+
+    assert payload is not None
+    assert payload["action"] == "buy"
+    assert payload["horizon"] == "intraday"
+    assert payload["entry_low"] == 1710.0
+    assert payload["entry_high"] == 1720.0
+    assert payload["stop_loss"] == 1688.0
+    assert payload["target_price"] == 1760.0
+    assert payload["invalidation"] == "小时线收盘跌破 1688"
+    assert payload["watch_conditions"] == [
+        "小时线放量突破 1720 后回踩不破",
+        "日线必须守住 1680",
+        "确认突破后再执行",
+    ]
+    assert payload["reason"] == "急跌后收复 VWAP，存在日内右侧机会"
+    assert payload["metadata"]["strategy_plan"]["source"] == "intraday_plan"
+    assert payload["metadata"]["strategy_plan"]["risk_reward"] == "1:2.1"
+    assert payload["evidence"]["strategy_plan"]["position_hint"] == "单笔风险不超过 0.5%"
 
 
 def test_build_payload_uses_result_fallbacks_and_optional_catalysts() -> None:

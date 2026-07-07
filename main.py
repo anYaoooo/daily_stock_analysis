@@ -1252,7 +1252,16 @@ def main() -> int:
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
             logger.info("BTC 日线分析执行时间: 北京时间 08:00")
-            logger.info("BTC 小时线分析执行时间: 每小时 05 分")
+            btc_hourly_interval_hours = max(1, int(getattr(config, 'btc_hourly_analysis_interval_hours', 4) or 4))
+            btc_hourly_at_minute = min(
+                59,
+                max(0, int(getattr(config, 'btc_hourly_analysis_at_minute', 5) or 5)),
+            )
+            logger.info(
+                "BTC 小时线基线分析执行时间: 每 %d 小时第 %02d 分",
+                btc_hourly_interval_hours,
+                btc_hourly_at_minute,
+            )
 
             # Determine whether to run immediately:
             # Command line arg --no-run-immediately overrides config if present.
@@ -1292,7 +1301,8 @@ def main() -> int:
             background_tasks.append({
                 "task": scheduled_hourly_task,
                 "interval_seconds": 60 * 60,
-                "hourly_at_minute": 5,
+                "hourly_at_minute": btc_hourly_at_minute,
+                "hourly_interval_hours": btc_hourly_interval_hours,
                 "run_immediately": False,
                 "name": "btc_hourly_analysis",
             })
@@ -1331,9 +1341,10 @@ def main() -> int:
                                 stats.get("threshold_pct"),
                             )
                         return
+                    trigger_reason = stats.get("trigger_reason") or stats.get("reason") or "entry_signal"
                     trigger_context = {
                         "trigger_source": "btc_volatility",
-                        "trigger_reason": "volatility_spike",
+                        "trigger_reason": trigger_reason,
                         "monitor": "btc_volatility_monitor",
                         "analysis_mode": "hourly",
                         "symbol": getattr(runtime_config, 'btc_volatility_monitor_symbol', 'BTC'),
@@ -1342,6 +1353,15 @@ def main() -> int:
                         "change_pct": stats.get("change_pct"),
                         "threshold_pct": stats.get("threshold_pct"),
                         "direction": stats.get("direction"),
+                        "opportunity_direction": stats.get("opportunity_direction"),
+                        "trade_direction": stats.get("trade_direction"),
+                        "suggested_trade_action": stats.get("suggested_trade_action"),
+                        "opportunity_price": stats.get("opportunity_price"),
+                        "entry_price": stats.get("entry_price"),
+                        "entry_confirmation_pct": stats.get("entry_confirmation_pct"),
+                        "invalidation_price": stats.get("invalidation_price"),
+                        "invalidation_pct": stats.get("invalidation_pct"),
+                        "watched_seconds": stats.get("watched_seconds"),
                         "window_seconds": stats.get("window_seconds"),
                         "provider_timestamp": stats.get("provider_timestamp"),
                         "confirmation_count": stats.get("confirmation_count"),
@@ -1354,11 +1374,12 @@ def main() -> int:
                         if value is not None
                     }
                     logger.info(
-                        "[BTCVolatility] 价格剧烈波动触发小时线分析: direction=%s change=%s%% price=%s baseline=%s",
-                        stats.get("direction"),
+                        "[BTCVolatility] 入场信号触发小时线分析: trade_direction=%s change=%s%% price=%s entry=%s invalidation=%s",
+                        stats.get("trade_direction") or stats.get("direction"),
                         stats.get("change_pct"),
                         stats.get("price"),
-                        stats.get("baseline_price"),
+                        stats.get("entry_price"),
+                        stats.get("invalidation_price"),
                     )
                     _run_btc_analysis_with_runtime_lock(
                         runtime_config,

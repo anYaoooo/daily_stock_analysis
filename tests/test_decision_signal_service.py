@@ -101,6 +101,34 @@ def test_service_normalizes_fields_and_partial_plan_quality(isolated_db) -> None
     assert item["plan_quality"] == "partial"
 
 
+def test_service_accepts_crypto_decision_signal_without_portfolio_market_change(isolated_db) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+
+    result = service.create_signal(
+        _payload(
+            stock_code="BTC",
+            stock_name="Bitcoin",
+            market="crypto",
+            source_report_id=102,
+            trace_id="trace-crypto-102",
+            horizon="intraday",
+            entry_low="65000",
+            entry_high="65200",
+            stop_loss="64500",
+            target_price="66200",
+            invalidation="跌破 64500",
+            watch_conditions=["小时线放量突破 65200"],
+        )
+    )
+
+    item = result["item"]
+    assert result["created"] is True
+    assert item["stock_code"] == "BTC"
+    assert item["market"] == "crypto"
+    assert item["horizon"] == "intraday"
+    assert item["plan_quality"] == "complete"
+
+
 def test_service_defaults_lifecycle_and_preserves_explicit_values(isolated_db) -> None:
     service = DecisionSignalService(db_manager=isolated_db)
 
