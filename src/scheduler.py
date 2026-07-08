@@ -219,8 +219,8 @@ class Scheduler:
     ) -> None:
         """Register a periodic background task executed inside the scheduler loop.
 
-        Note: The scheduler loop polls every 30 seconds, so *interval_seconds*
-        below 30 will be clamped to 30 to avoid promising unreachable precision.
+        Note: The scheduler loop polls every 5 seconds, so *interval_seconds*
+        below 5 will be clamped to 5 to avoid promising unreachable precision.
         """
         normalized_hourly_minute = None
         if hourly_at_minute is not None:
@@ -231,10 +231,10 @@ class Scheduler:
         if hourly_interval_hours is not None:
             normalized_hourly_interval = max(1, int(hourly_interval_hours))
 
-        clamped_interval = max(30, int(interval_seconds))
-        if int(interval_seconds) < 30:
+        clamped_interval = max(5, int(interval_seconds))
+        if int(interval_seconds) < 5:
             logger.warning(
-                "后台任务 %s 请求间隔 %ds，但调度循环每 30s 轮询一次，已自动调整为 30s",
+                "后台任务 %s 请求间隔 %ds，但调度循环每 5s 轮询一次，已自动调整为 5s",
                 name or getattr(task, "__name__", "background_task"),
                 interval_seconds,
             )
@@ -349,7 +349,7 @@ class Scheduler:
             self._refresh_daily_schedule_if_needed()
             self.schedule.run_pending()
             self._run_background_tasks()
-            time.sleep(30)  # 每30秒检查一次
+            time.sleep(5)  # 每5秒检查一次
 
             # 每小时打印一次心跳
             if datetime.now().minute == 0 and datetime.now().second < 30:

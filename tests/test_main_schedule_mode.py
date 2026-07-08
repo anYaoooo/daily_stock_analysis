@@ -108,6 +108,8 @@ class MainScheduleModeTestCase(unittest.TestCase):
             "btc_hourly_analysis_interval_hours": 4,
             "btc_hourly_analysis_at_minute": 5,
             "btc_volatility_monitor_enabled": False,
+            "btc_volatility_monitor_use_websocket": False,
+            "btc_volatility_monitor_ws_stale_seconds": 30,
             "btc_volatility_monitor_interval_seconds": 60,
             "btc_volatility_monitor_window_minutes": 5,
             "btc_volatility_monitor_threshold_pct": 1.0,
@@ -461,6 +463,45 @@ class MainScheduleModeTestCase(unittest.TestCase):
                     "poll_interval_seconds": 45,
                 },
             )
+
+    def test_schedule_mode_uses_websocket_quote_fetcher_when_enabled(self) -> None:
+        args = self._make_args(schedule=True)
+        config = self._make_config(
+            schedule_enabled=False,
+            btc_volatility_monitor_enabled=True,
+            btc_volatility_monitor_use_websocket=True,
+            btc_volatility_monitor_ws_stale_seconds=20,
+        )
+        monitor = MagicMock()
+        monitor.run_once.return_value = {"checked": 0, "triggered": 0, "reason": "warming_up"}
+        quote_fetcher = object()
+        scheduled_call = {}
+
+        def fake_run_with_schedule(
+            task,
+            schedule_time,
+            run_immediately,
+            background_tasks=None,
+            schedule_time_provider=None,
+            schedule_mode="daily",
+        ):
+            scheduled_call["background_tasks"] = background_tasks or []
+
+        with patch("main.parse_arguments", return_value=args), \
+             patch("main.get_config", return_value=config), \
+             patch.object(main, "_reload_runtime_config", return_value=config), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
+             patch("main.setup_logging"), \
+             patch("main.run_full_analysis"), \
+             patch("data_provider.crypto_ws_quote.BinanceTickerWebSocketQuoteFetcher", return_value=quote_fetcher) as ws_cls, \
+             patch("src.services.btc_volatility_monitor.BTCVolatilityMonitor", return_value=monitor) as monitor_cls, \
+             patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
+            exit_code = main.main()
+
+        self.assertEqual(exit_code, 0)
+        ws_cls.assert_called_once_with(stale_after_seconds=20)
+        monitor_cls.assert_called_once_with(quote_fetcher=quote_fetcher)
+        self.assertEqual(scheduled_call["background_tasks"][1]["name"], "btc_volatility_monitor")
 
     def test_check_notify_returns_before_other_modes(self) -> None:
         args = self._make_args(check_notify=True, serve=True, schedule=True, market_review=True)

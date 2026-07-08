@@ -3404,12 +3404,15 @@ class GeminiAnalyzer:
             hourly_trigger_reference = (
                 hourly_event.get("trigger_reference") if isinstance(hourly_event.get("trigger_reference"), dict) else {}
             )
+            derivatives = crypto_technical.get("derivatives") if isinstance(crypto_technical.get("derivatives"), dict) else {}
+            funding = derivatives.get("funding") if isinstance(derivatives.get("funding"), dict) else {}
+            open_interest = derivatives.get("open_interest") if isinstance(derivatives.get("open_interest"), dict) else {}
             hourly_opportunity = intraday.get("opportunity", "N/A")
             if not hourly_crypto:
                 hourly_opportunity = "小时线数据缺失，日内交易计划必须设为 enabled=false、direction=\"wait\"，等待小时线数据恢复或新的日内触发。"
             if isinstance(trigger_context, dict) and trigger_context.get("trigger_reason") in {"volatility_spike", "entry_signal"}:
                 prompt += f"""
-### BTC 日内触发上下文（必须解释）
+### BTC 波动触发上下文（日内触发，必须解释）
 | 字段 | 数值 |
 |------|------|
 | 触发来源 | {trigger_context.get('trigger_source', 'btc_volatility')} |
@@ -3444,9 +3447,11 @@ class GeminiAnalyzer:
 | 小时线 Volume/VWAP/EMA/ATR | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')}；ATR14={hourly_volatility.get('atr14', 'N/A')}；ATR14%={hourly_volatility.get('atr14_pct', 'N/A')}% | 判断日内触发是否有量价、均线和波动率确认；止损不得落在小时线常规 ATR 噪音内 |
 | 小时线急跌/扫低事件 | 类型={hourly_event.get('type', 'N/A')}；建议方向={hourly_event.get('suggested_direction', 'N/A')}；紧急度={hourly_event.get('urgency', 'N/A')}；参考高点={hourly_event.get('reference_high', 'N/A')}；事件低点={hourly_event.get('event_low', 'N/A')}；事件K高点={hourly_event.get('event_bar_high', 'N/A')}；高点到低点跌幅={hourly_event.get('drop_from_reference_high_pct', 'N/A')}%；低点反弹={hourly_event.get('rebound_from_event_low_pct', 'N/A')}%；ATR位移={hourly_event.get('atr_move', 'N/A')}；多单确认价={hourly_trigger_reference.get('long_confirmation_price', 'N/A')}；多单失效价={hourly_trigger_reference.get('long_invalidation_price', 'N/A')}；空单跌破价={hourly_trigger_reference.get('short_breakdown_price', 'N/A')} | 若出现 `sharp_selloff_*`、`selloff_rebound_*` 或 `liquidity_sweep_low_reversal_candidate`，不得只写泛泛观望；必须给出“上破多单确认价才进场”和“跌破空单跌破价则放弃抄底/转空”的明确二选一条件 |
 | 日内机会 | {hourly_opportunity} | 必须写清是否有日内交易机会；没有机会时说明等待什么小时线条件 |
+| 衍生品杠杆环境 | 数据质量={derivatives.get('data_quality', 'N/A')}；资金费率={funding.get('rate_pct', 'N/A')}%；资金费率状态={funding.get('state', 'N/A')}；持仓量={open_interest.get('value', 'N/A')} BTC；名义规模={open_interest.get('notional_usdt', 'N/A')} USDT；持仓状态={open_interest.get('state', 'N/A')}；杠杆压力={derivatives.get('leverage_pressure', 'N/A')} | Funding 为正且偏高时警惕多头拥挤和追多回撤；Funding 为负且偏深时警惕空头拥挤和 short squeeze；OI 高企时降低追涨追空置信度，数据缺失必须标记为不确定而不是中性 |
 
 > BTC 小时线约束：小时线是独立的日内机会层，不再强制服从日线方向。日线偏空但小时线出现多单机会、或日线偏多但小时线出现空单机会时，可以给出逆日线短线计划，但必须明确这是日内/短线机会，止损更严格、仓位更轻、有效期更短，并写清触发价、止损、目标、失效条件和 `daily_constraint`。必须写入 `dashboard.battle_plan.intraday_plan`；若小时线数据缺失或没有日内机会，`enabled=false`、`direction="wait"`，并说明等待条件。
 > BTC 急跌机会约束：当“小时线急跌/扫低事件”的类型不是 `none` 时，`dashboard.battle_plan.intraday_plan.trigger_condition` 必须引用“多单确认价”或“空单跌破价”中的具体数值；`invalidation` 必须引用“多单失效价”或事件低点；`reason` 必须说明这是急跌后的右侧确认/假跌破反弹/跌破延续，禁止只输出“暂无明确信号”而不给可执行等待价位。
+> BTC 衍生品约束：Funding/OI 只作为杠杆拥挤度和风控降权信息，不得单独作为入场依据；当 `leverage_pressure` 显示 long/short crowding risk 时，必须在对应方向计划中降低仓位、等待更强价格确认，或解释为什么当前结构足以抵消拥挤风险。
 """
         
         # 添加昨日对比数据

@@ -1509,14 +1509,16 @@ When `BTC_VOLATILITY_MONITOR_ENABLED=true`, schedule mode also registers the `bt
 
 Opportunity-triggered hourly analysis receives `trigger_reason=entry_signal`, suggested trade direction, entry confirmation price, invalidation price, watched seconds, short-window direction, change percentage, current price, baseline price, threshold, and confirmation sample counts. Reports should treat this as intraday trigger/risk context and state that the current 1h candle may still be unfinished; a short-window shock must not be promoted directly into a daily trend reversal. If price reverses by `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT` during the watch state, or no confirmation appears within `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES`, the opportunity expires without triggering analysis.
 
-The current implementation uses REST polling rather than WebSocket subscriptions, so detection latency can be close to `BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS`. The default two-sample confirmation reduces false positives from dirty Last Price ticks, one-off wicks, or abnormal exchange quotes. Setting confirmation samples to `1` improves response speed but increases false-trigger risk. Regular hourly baseline analysis remains available, but defaults to every 4 hours through `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4`; faster intraday opportunities are handled by the event monitor.
+When `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true`, the monitor prefers the Binance public ticker WebSocket cache and automatically falls back to REST when the cache is missing, stale, or the WebSocket dependency is unavailable. The default two-sample confirmation reduces false positives from dirty Last Price ticks, one-off wicks, or abnormal exchange quotes. Setting confirmation samples to `1` improves response speed but increases false-trigger risk. Regular hourly baseline analysis remains available, but defaults to every 4 hours through `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4`; faster intraday opportunities are handled by the event monitor.
 
 ```env
 BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4
 BTC_HOURLY_ANALYSIS_AT_MINUTE=5
 BTC_VOLATILITY_MONITOR_ENABLED=true
-BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=60
-BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=5
+BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true
+BTC_VOLATILITY_MONITOR_WS_STALE_SECONDS=20
+BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=15
+BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=1
 BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
 BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
 BTC_VOLATILITY_MONITOR_SYMBOL=BTC

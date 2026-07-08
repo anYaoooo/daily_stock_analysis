@@ -740,6 +740,8 @@ class Config:
     btc_hourly_analysis_interval_hours: int = 4
     btc_hourly_analysis_at_minute: int = 5
     btc_volatility_monitor_enabled: bool = False
+    btc_volatility_monitor_use_websocket: bool = False
+    btc_volatility_monitor_ws_stale_seconds: int = 30
     btc_volatility_monitor_interval_seconds: int = 60
     btc_volatility_monitor_window_minutes: int = 5
     btc_volatility_monitor_threshold_pct: float = 1.0
@@ -1590,11 +1592,21 @@ class Config:
                 os.getenv('BTC_VOLATILITY_MONITOR_ENABLED'),
                 default=False,
             ),
+            btc_volatility_monitor_use_websocket=parse_env_bool(
+                os.getenv('BTC_VOLATILITY_MONITOR_USE_WEBSOCKET'),
+                default=False,
+            ),
+            btc_volatility_monitor_ws_stale_seconds=parse_env_int(
+                os.getenv('BTC_VOLATILITY_MONITOR_WS_STALE_SECONDS'),
+                30,
+                field_name='BTC_VOLATILITY_MONITOR_WS_STALE_SECONDS',
+                minimum=5,
+            ),
             btc_volatility_monitor_interval_seconds=parse_env_int(
                 os.getenv('BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS'),
                 60,
                 field_name='BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS',
-                minimum=30,
+                minimum=5,
             ),
             btc_volatility_monitor_window_minutes=parse_env_int(
                 os.getenv('BTC_VOLATILITY_MONITOR_WINDOW_MINUTES'),

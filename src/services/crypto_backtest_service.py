@@ -700,6 +700,11 @@ class CryptoBacktestService:
         hourly_context = timeframes.get("hourly") if isinstance(timeframes.get("hourly"), dict) else {}
         source_context = hourly_context if plan.horizon == "intraday" and hourly_context else daily_context
         intraday = crypto_context.get("intraday") if isinstance(crypto_context.get("intraday"), dict) else {}
+        derivatives = crypto_context.get("derivatives") if isinstance(crypto_context.get("derivatives"), dict) else {}
+        funding = derivatives.get("funding") if isinstance(derivatives.get("funding"), dict) else {}
+        open_interest = (
+            derivatives.get("open_interest") if isinstance(derivatives.get("open_interest"), dict) else {}
+        )
         event = source_context.get("event") if isinstance(source_context.get("event"), dict) else {}
         volatility = source_context.get("volatility") if isinstance(source_context.get("volatility"), dict) else {}
 
@@ -728,6 +733,13 @@ class CryptoBacktestService:
             },
             "event": {
                 "type": cls._clean_tag_value(event.get("type")),
+            },
+            "derivatives": {
+                "data_quality": cls._clean_tag_value(derivatives.get("data_quality")),
+                "funding_state": cls._clean_tag_value(funding.get("state")),
+                "funding_rate_pct": cls._safe_float(funding.get("rate_pct")),
+                "open_interest_state": cls._clean_tag_value(open_interest.get("state")),
+                "leverage_pressure": cls._clean_tag_value(derivatives.get("leverage_pressure")),
             },
         }
 

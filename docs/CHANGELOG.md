@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] BTC 波动机会监控支持优先使用 Binance WebSocket ticker 缓存并保留 REST 兜底，后台任务最小间隔降至 5 秒，默认示例改为 15 秒检查与 1 分钟观察窗口。
+- [改进] BTC 分析接入 Binance Futures 公共资金费率和持仓量上下文，并将 Funding/OI 杠杆环境写入计划级回测指标标签。
 - [改进] BTC 小时线基线分析支持配置为每 N 小时执行，并将 BTC 波动监控升级为“机会观察 -> 入场确认 -> 失效/触发”的日内交易信号流程。
 - [改进] DecisionSignal 提取优先读取结构化交易计划中的触发条件、失效条件、风险收益比和日内机会，减少报告长文与可复盘信号脱节。
 - [改进] BTC 回测页新增分析模式、方向、计划类型和结果状态筛选，并在汇总区展示日线主计划、小时线日内计划和指标标签分组表现。

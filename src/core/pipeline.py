@@ -83,6 +83,7 @@ from src.core.trading_calendar import (
     is_market_open,
 )
 from data_provider.crypto_fetcher import CryptoFetcher, is_crypto_code
+from data_provider.crypto_derivatives_fetcher import CryptoDerivativesFetcher
 from data_provider.us_index_mapping import is_us_stock_code
 from bot.models import BotMessage
 
@@ -481,6 +482,18 @@ class StockAnalysisPipeline:
                         except Exception as exc:
                             logger.warning("%s(%s) BTC 小时线数据获取失败，仅使用日线分析: %s", stock_name, code, exc)
                     crypto_technical_context = build_crypto_multi_timeframe_context(df, hourly_df, code)
+                    if crypto_technical_context and is_crypto_code(code):
+                        try:
+                            derivatives_context = CryptoDerivativesFetcher().get_btc_derivatives_context(code)
+                            if isinstance(derivatives_context, dict):
+                                crypto_technical_context["derivatives"] = derivatives_context
+                        except Exception as exc:
+                            logger.warning(
+                                "%s(%s) BTC 衍生品数据获取失败，继续使用技术面上下文: %s",
+                                stock_name,
+                                code,
+                                exc,
+                            )
                     logger.info(f"{stock_name}({code}) 趋势分析: {trend_result.trend_status.value}, "
                               f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
             except Exception as e:

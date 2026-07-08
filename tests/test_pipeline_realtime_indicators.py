@@ -353,6 +353,16 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
                     "alignment": "aligned_long",
                     "opportunity": "小时线与日线偏多共振，可寻找顺日线的日内多单触发。",
                 },
+                "derivatives": {
+                    "data_quality": "available",
+                    "funding": {"rate_pct": 0.063, "state": "positive_crowded"},
+                    "open_interest": {
+                        "value": 180000,
+                        "state": "high_notional",
+                        "notional_usdt": 11700000000,
+                    },
+                    "leverage_pressure": "long_crowding_risk",
+                },
             },
         }
 
@@ -373,6 +383,10 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         self.assertIn("多单失效价=98574", prompt)
         self.assertIn("空单跌破价=98700", prompt)
         self.assertIn("BTC 急跌机会约束", prompt)
+        self.assertIn("衍生品杠杆环境", prompt)
+        self.assertIn("资金费率=0.063%", prompt)
+        self.assertIn("long_crowding_risk", prompt)
+        self.assertIn("Funding/OI 只作为杠杆拥挤度和风控降权信息", prompt)
         self.assertIn("BTC 小时线日内计划强制结构", prompt)
         self.assertIn("dashboard.battle_plan.intraday_plan", prompt)
         self.assertIn("daily_constraint", prompt)

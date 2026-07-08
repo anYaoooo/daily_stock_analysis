@@ -56,6 +56,9 @@
 | `volatility.atr14_pct` | 同上 | 记录当时 ATR14% 波动环境 |
 | `intraday.alignment` | 多周期上下文 | 区分顺日线、逆日线短线和等待触发 |
 | `event.type` | 日线或小时线事件上下文 | 标记急跌、扫低、反弹候选等事件 |
+| `derivatives.funding_state` | Binance Futures 公共 funding rate 上下文 | 标记多空资金费率拥挤度 |
+| `derivatives.open_interest_state` | Binance Futures 公共 open interest 上下文 | 标记持仓量/名义规模可用性和高持仓环境 |
+| `derivatives.leverage_pressure` | funding + OI 派生摘要 | 标记多头拥挤、空头拥挤或中性杠杆压力 |
 
 这些标签只保存结构化摘要，不保存 prompt 或新闻原文，用于后续按指标组合复盘和风控降权。
 

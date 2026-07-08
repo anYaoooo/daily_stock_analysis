@@ -249,6 +249,17 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                                 "daily_bias": "short",
                                 "hourly_bias": "long",
                             },
+                            "derivatives": {
+                                "data_quality": "available",
+                                "funding": {
+                                    "state": "positive_crowded",
+                                    "rate_pct": 0.063,
+                                },
+                                "open_interest": {
+                                    "state": "high_notional",
+                                },
+                                "leverage_pressure": "long_crowding_risk",
+                            },
                         }
                     }
                 }
@@ -273,6 +284,11 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         self.assertEqual(tags["volume"]["confirmation"], "high")
         self.assertEqual(tags["volatility"]["atr14_pct"], 0.8)
         self.assertEqual(tags["intraday"]["alignment"], "countertrend_long")
+        self.assertEqual(tags["derivatives"]["data_quality"], "available")
+        self.assertEqual(tags["derivatives"]["funding_state"], "positive_crowded")
+        self.assertEqual(tags["derivatives"]["funding_rate_pct"], 0.063)
+        self.assertEqual(tags["derivatives"]["open_interest_state"], "high_notional")
+        self.assertEqual(tags["derivatives"]["leverage_pressure"], "long_crowding_risk")
         self.assertEqual(tags["event"]["type"], "liquidity_sweep_low_reversal_candidate")
 
     def test_indicator_group_breakdown_groups_by_existing_tags(self):

@@ -1669,16 +1669,18 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 交易机会触发的小时线分析会向分析上下文传入 `trigger_reason=entry_signal`、建议交易方向、入场确认价、失效价、观察秒数、短窗口方向、涨跌幅、当前价、基准价、阈值和确认采样信息。报告需要把这些信息解释为日内触发/风控上下文，并明确当前 1 小时 K 线可能尚未收线；短窗口冲击不能直接升级为日线趋势反转结论。若价格在观察期内反向触及 `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT`，或超过 `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES` 仍未确认，机会会失效且不会触发分析。
 
-当前实现使用 REST 轮询而不是 WebSocket 订阅，因此发现延迟最多可能接近 `BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS`。默认连续 2 次同向确认用于降低单次 Last Price 脏数据、瞬时插针或交易所异常报价导致的误触发；如果追求更快响应，可把确认次数设为 1，但误触发风险会升高。普通小时线基线分析仍保留，但默认通过 `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4` 降为每 4 小时一次，真正的短线机会由事件监控捕捉。
+启用 `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true` 后，监控会优先读取 Binance 公共 ticker WebSocket 缓存；缓存缺失、过期或 WebSocket 依赖不可用时自动回退到 REST 行情，避免监控链路中断。默认连续 2 次同向确认用于降低单次 Last Price 脏数据、瞬时插针或交易所异常报价导致的误触发；如果追求更快响应，可把确认次数设为 1，但误触发风险会升高。普通小时线基线分析仍保留，但默认通过 `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4` 降为每 4 小时一次，真正的短线机会由事件监控捕捉。
 
-默认参数偏保守：每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 后开始观察，继续同向推进 0.2% 才形成入场信号，反向 0.5% 或观察 20 分钟未确认则失效，触发后冷却 30 分钟。调度器后台任务最小轮询精度为 30 秒，因此低于 30 秒的间隔会被自动夹到 30 秒。
+默认参数偏保守：每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 后开始观察，继续同向推进 0.2% 才形成入场信号，反向 0.5% 或观察 20 分钟未确认则失效，触发后冷却 30 分钟。若开启 WebSocket，可把检查间隔下调到 15 秒、观察窗口下调到 1 分钟以更快捕捉日内机会；调度器后台任务最小轮询精度为 5 秒，因此低于 5 秒的间隔会被自动夹到 5 秒。
 
 ```env
 BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4
 BTC_HOURLY_ANALYSIS_AT_MINUTE=5
 BTC_VOLATILITY_MONITOR_ENABLED=true
-BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=60
-BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=5
+BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true
+BTC_VOLATILITY_MONITOR_WS_STALE_SECONDS=20
+BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=15
+BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=1
 BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
 BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
 BTC_VOLATILITY_MONITOR_SYMBOL=BTC

@@ -1328,7 +1328,22 @@ def main() -> int:
             if getattr(config, 'btc_volatility_monitor_enabled', False):
                 from src.services.btc_volatility_monitor import BTCVolatilityMonitor
 
-                volatility_monitor = BTCVolatilityMonitor()
+                quote_fetcher = None
+                if getattr(config, 'btc_volatility_monitor_use_websocket', False):
+                    from data_provider.crypto_ws_quote import BinanceTickerWebSocketQuoteFetcher
+
+                    quote_fetcher = BinanceTickerWebSocketQuoteFetcher(
+                        stale_after_seconds=getattr(
+                            config,
+                            'btc_volatility_monitor_ws_stale_seconds',
+                            30,
+                        )
+                    )
+                volatility_monitor = (
+                    BTCVolatilityMonitor(quote_fetcher=quote_fetcher)
+                    if quote_fetcher is not None
+                    else BTCVolatilityMonitor()
+                )
 
                 def btc_volatility_monitor_task():
                     runtime_config = _reload_runtime_config()
