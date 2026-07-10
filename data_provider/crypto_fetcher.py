@@ -17,13 +17,8 @@ logger = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT_SECONDS = 10
 
-_CCXT_EXCHANGE_ID = "binance"
-_BINANCE_REST_BASE_URLS = (
-    "https://api.binance.com",
-    "https://api1.binance.com",
-    "https://data-api.binance.vision",
-    "https://api.binance.us",
-)
+_CCXT_EXCHANGE_ID = "okx"
+_OKX_REST_BASE_URL = "https://www.okx.com"
 _CCXT_TIMEFRAME_BY_PERIOD = {
     "hourly": "1h",
     "four_hour": "4h",
@@ -174,12 +169,12 @@ class CryptoFetcher(BaseFetcher):
             payload = exchange.fetch_ticker(market_symbol)
         except Exception as exc:
             logger.warning(
-                "CCXT %s 获取 %s 实时行情失败，尝试 Binance REST 兜底: %s",
+                "CCXT %s 获取 %s 实时行情失败，尝试 OKX REST 兜底: %s",
                 _CCXT_EXCHANGE_ID,
                 market_symbol,
                 exc,
             )
-            payload = self._fetch_rest_ticker(symbol, exc)
+            payload = self._fetch_okx_rest_ticker(symbol, exc)
         if not isinstance(payload, dict):
             raise DataFetchError(f"CCXT {_CCXT_EXCHANGE_ID} returned invalid ticker payload for {market_symbol}")
 
@@ -200,7 +195,7 @@ class CryptoFetcher(BaseFetcher):
         return UnifiedRealtimeQuote(
             code=symbol,
             name=crypto_display_name(symbol),
-            source=RealtimeSource.BINANCE,
+            source=RealtimeSource.OKX,
             provider_timestamp=provider_timestamp,
             price=price,
             change_pct=(
@@ -229,30 +224,27 @@ class CryptoFetcher(BaseFetcher):
         return crypto_display_name(stock_code)
 
     @staticmethod
-    def _fetch_rest_ticker(symbol: str, original_error: Exception) -> dict:
-        errors = []
-        for base_url in _BINANCE_REST_BASE_URLS:
-            url = f"{base_url}/api/v3/ticker/24hr"
-            try:
-                response = requests.get(
-                    url,
-                    params={"symbol": symbol},
-                    timeout=_HTTP_TIMEOUT_SECONDS,
-                )
-                response.raise_for_status()
-                payload = response.json()
-                if isinstance(payload, dict):
-                    logger.info("Binance REST 兜底获取 %s 实时行情成功: endpoint=%s", symbol, base_url)
-                    return payload
-                errors.append(f"{base_url}: invalid payload")
-            except Exception as exc:
-                errors.append(f"{base_url}: {exc}")
-
-        error_summary = "; ".join(errors)
-        raise DataFetchError(
-            f"CCXT {_CCXT_EXCHANGE_ID} returned ticker error for {symbol}: {original_error}; "
-            f"Binance REST fallback failed: {error_summary}"
-        ) from original_error
+    def _fetch_okx_rest_ticker(symbol: str, original_error: Exception) -> dict:
+        inst_id = _to_okx_inst_id(symbol)
+        url = f"{_OKX_REST_BASE_URL}/api/v5/market/ticker"
+        try:
+            response = requests.get(
+                url,
+                params={"instId": inst_id},
+                timeout=_HTTP_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            ticker = _extract_okx_ticker(payload)
+            if ticker is None:
+                raise DataFetchError(f"OKX REST returned invalid ticker payload for {inst_id}")
+            logger.info("OKX REST 兜底获取 %s 实时行情成功", inst_id)
+            return _okx_ticker_to_unified_payload(ticker)
+        except Exception as exc:
+            raise DataFetchError(
+                f"CCXT {_CCXT_EXCHANGE_ID} returned ticker error for {symbol}: {original_error}; "
+                f"OKX REST fallback failed: {exc}"
+            ) from original_error
 
     @staticmethod
     def _create_exchange() -> Any:
@@ -284,3 +276,39 @@ def _millis_to_iso(value: Any) -> Optional[str]:
     if millis is None:
         return None
     return datetime.fromtimestamp(millis / 1000, tz=timezone.utc).isoformat()
+
+
+def _to_okx_inst_id(symbol: str) -> str:
+    normalized = normalize_crypto_symbol(symbol) or symbol
+    if normalized.endswith("USDT"):
+        return f"{normalized[:-4]}-USDT"
+    return normalized.replace("/", "-")
+
+
+def _extract_okx_ticker(payload: Any) -> Optional[dict]:
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        return None
+    return data[0]
+
+
+def _okx_ticker_to_unified_payload(ticker: dict) -> dict:
+    last = safe_float(ticker.get("last"))
+    open_24h = safe_float(ticker.get("open24h"))
+    change = last - open_24h if last is not None and open_24h not in (None, 0) else None
+    change_pct = (change / open_24h * 100) if change is not None and open_24h else None
+    return {
+        "last": last,
+        "change": change,
+        "percentage": change_pct,
+        "baseVolume": safe_float(ticker.get("vol24h")),
+        "quoteVolume": safe_float(ticker.get("volCcy24h")),
+        "open": open_24h,
+        "high": safe_float(ticker.get("high24h")),
+        "low": safe_float(ticker.get("low24h")),
+        "previousClose": open_24h,
+        "timestamp": safe_int(ticker.get("ts")),
+        "info": ticker,
+    }

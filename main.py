@@ -1330,9 +1330,9 @@ def main() -> int:
 
                 quote_fetcher = None
                 if getattr(config, 'btc_volatility_monitor_use_websocket', False):
-                    from data_provider.crypto_ws_quote import BinanceTickerWebSocketQuoteFetcher
+                    from data_provider.crypto_ws_quote import OKXTickerWebSocketQuoteFetcher
 
-                    quote_fetcher = BinanceTickerWebSocketQuoteFetcher(
+                    quote_fetcher = OKXTickerWebSocketQuoteFetcher(
                         stale_after_seconds=getattr(
                             config,
                             'btc_volatility_monitor_ws_stale_seconds',

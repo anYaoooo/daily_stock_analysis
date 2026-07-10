@@ -103,6 +103,7 @@ class RealtimeSource(Enum):
     STOOQ = "stooq"                 # Stooq 美股兜底
     LONGBRIDGE = "longbridge"       # 长桥（美股/港股兜底）
     BINANCE = "binance"             # Binance 加密货币行情
+    OKX = "okx"                     # OKX 加密货币行情
     FALLBACK = "fallback"           # 降级兜底
 
 

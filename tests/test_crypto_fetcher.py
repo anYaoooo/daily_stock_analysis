@@ -20,7 +20,7 @@ def test_normalize_crypto_symbol_accepts_common_btc_aliases() -> None:
     assert normalize_crypto_symbol("AAPL") is None
 
 
-def test_crypto_fetcher_parses_binance_daily_klines() -> None:
+def test_crypto_fetcher_parses_okx_daily_klines() -> None:
     payload = [
         [1717200000000, 67400.0, 68000.0, 66000.0, 67100.0, 123.45],
         [1717286400000, 67100.0, 69000.0, 67000.0, 68500.0, 234.56],
@@ -57,7 +57,7 @@ def test_crypto_fetcher_parses_binance_daily_klines() -> None:
     assert float(df.iloc[1]["amount"]) == 68500.0 * 234.56
 
 
-def test_crypto_fetcher_parses_binance_realtime_quote() -> None:
+def test_crypto_fetcher_parses_okx_realtime_quote() -> None:
     payload = {
         "last": 68500.0,
         "change": 1400.0,
@@ -81,24 +81,28 @@ def test_crypto_fetcher_parses_binance_realtime_quote() -> None:
     assert quote is not None
     assert quote.code == "BTCUSDT"
     assert quote.name == "Bitcoin"
-    assert quote.source == RealtimeSource.BINANCE
+    assert quote.source == RealtimeSource.OKX
     assert quote.price == 68500.0
     assert quote.change_pct == 2.086
     assert quote.amount == 16067960.0
 
 
-def test_crypto_fetcher_falls_back_to_binance_rest_when_ccxt_ticker_fails() -> None:
+def test_crypto_fetcher_falls_back_to_okx_rest_when_ccxt_ticker_fails() -> None:
     rest_payload = {
-        "lastPrice": "68500.0",
-        "priceChange": "1400.0",
-        "priceChangePercent": "2.086",
-        "volume": "234.56",
-        "quoteVolume": "16067960.0",
-        "openPrice": "67100.0",
-        "highPrice": "69000.0",
-        "lowPrice": "67000.0",
-        "prevClosePrice": "67100.0",
-        "closeTime": 1717372799999,
+        "code": "0",
+        "msg": "",
+        "data": [
+            {
+                "instId": "BTC-USDT",
+                "last": "68500.0",
+                "open24h": "67100.0",
+                "high24h": "69000.0",
+                "low24h": "67000.0",
+                "vol24h": "234.56",
+                "volCcy24h": "16067960.0",
+                "ts": "1717372799999",
+            }
+        ],
     }
     exchange = Mock()
     exchange.fetch_ticker.side_effect = Exception("404 Not Found")
@@ -118,9 +122,9 @@ def test_crypto_fetcher_falls_back_to_binance_rest_when_ccxt_ticker_fails() -> N
     get_mock.assert_called_once()
     assert quote is not None
     assert quote.code == "BTCUSDT"
-    assert quote.source == RealtimeSource.BINANCE
+    assert quote.source == RealtimeSource.OKX
     assert quote.price == 68500.0
-    assert quote.change_pct == 2.086
+    assert quote.change_pct == ((68500.0 - 67100.0) / 67100.0 * 100)
     assert quote.amount == 16067960.0
 
 

@@ -493,7 +493,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
              patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
              patch("main.setup_logging"), \
              patch("main.run_full_analysis"), \
-             patch("data_provider.crypto_ws_quote.BinanceTickerWebSocketQuoteFetcher", return_value=quote_fetcher) as ws_cls, \
+             patch("data_provider.crypto_ws_quote.OKXTickerWebSocketQuoteFetcher", return_value=quote_fetcher) as ws_cls, \
              patch("src.services.btc_volatility_monitor.BTCVolatilityMonitor", return_value=monitor) as monitor_cls, \
              patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
             exit_code = main.main()
