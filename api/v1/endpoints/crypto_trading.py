@@ -156,7 +156,10 @@ def get_crypto_order(
     response_model=CryptoCreateOrderResponse,
     responses={400: {"description": "配置或参数错误", "model": ErrorResponse}},
     summary="创建加密货币订单",
-    description="默认 dry-run，仅返回订单预览；需 CRYPTO_TRADING_ENABLED=true 且 CRYPTO_TRADING_DRY_RUN=false 才会真实下单。",
+    description=(
+        "默认 dry-run，仅返回 BTC 订单预览；需 CRYPTO_TRADING_ENABLED=true、"
+        "CRYPTO_TRADING_DRY_RUN=false 且 ADMIN_AUTH_ENABLED=true 才会真实下单。"
+    ),
 )
 def create_crypto_order(request: CryptoCreateOrderRequest) -> CryptoCreateOrderResponse:
     try:

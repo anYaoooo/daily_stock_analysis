@@ -20,6 +20,7 @@ from src.core.crypto_backtest_engine import (
     CryptoPlanBacktestConfig,
 )
 from src.repositories.crypto_backtest_repo import CryptoBacktestRepository
+from src.schemas.crypto_instrument import resolve_crypto_instrument
 from src.storage import (
     AnalysisHistory,
     CryptoBacktestResult,
@@ -32,7 +33,7 @@ from src.utils.timeframe import analysis_timeframe_label, horizon_to_analysis_mo
 
 logger = logging.getLogger(__name__)
 
-BTC_PLAN_ENGINE_VERSION = "btc-plan-v2"
+BTC_PLAN_ENGINE_VERSION = "btc-plan-v4"
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,20 @@ class _Bar:
     high: float
     low: float
     close: float
+    open: Optional[float] = None
+    volume: Optional[float] = None
+    volume_ratio: Optional[float] = None
+    vwap: Optional[float] = None
+    execution_open: Optional[float] = None
+    execution_high: Optional[float] = None
+    execution_low: Optional[float] = None
+    execution_close: Optional[float] = None
+    mark_open: Optional[float] = None
+    mark_high: Optional[float] = None
+    mark_low: Optional[float] = None
+    mark_close: Optional[float] = None
+    funding_rates: tuple[float, ...] = ()
+    funding_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -53,9 +68,14 @@ class CryptoBacktestService:
     """Run and query BTC report plan backtests."""
 
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
+        config = get_config()
         self.db = db_manager or DatabaseManager.get_instance()
         self.repo = CryptoBacktestRepository(self.db)
-        self.fetcher = CryptoFetcher()
+        self.fetcher = CryptoFetcher(
+            fetch_budget_seconds=float(getattr(config, "crypto_market_fetch_budget_seconds", 60.0)),
+            fetch_max_pages=int(getattr(config, "crypto_market_fetch_max_pages", 200)),
+            fetch_retry_count=int(getattr(config, "crypto_market_fetch_retry_count", 2)),
+        )
 
     def run_backtest(
         self,
@@ -86,8 +106,16 @@ class CryptoBacktestService:
         errors = 0
         results: list[CryptoBacktestResult] = []
 
-        bars_cache: dict[tuple[str, str, int], _BarBatch] = {}
+        bars_cache: dict[tuple[str, str, str, str, int], _BarBatch] = {}
         eval_config = self._eval_config(config, engine_version)
+        existing_keys = {
+            (int(row.analysis_history_id), str(row.plan_type))
+            for row in self.repo.get_results_for_history_ids(
+                analysis_history_ids=[int(row.id) for row in candidates if row.id is not None],
+                engine_version=engine_version,
+            )
+            if row.eval_status not in {"pending", "insufficient_data"}
+        }
 
         for analysis in candidates:
             processed += 1
@@ -97,6 +125,7 @@ class CryptoBacktestService:
                     engine_version=engine_version,
                     eval_config=eval_config,
                     bars_cache=bars_cache,
+                    existing_keys=existing_keys,
                 )
                 if not evaluated:
                     skipped += 1
@@ -148,6 +177,7 @@ class CryptoBacktestService:
                     analysis_history_ids=ids,
                     engine_version=engine_version,
                 )
+                if row.eval_status not in {"pending", "insufficient_data"}
             }
 
         processed = 0
@@ -156,7 +186,7 @@ class CryptoBacktestService:
         skipped = 0
         errors = 0
         results: list[CryptoBacktestResult] = []
-        bars_cache: dict[tuple[str, str, int], _BarBatch] = {}
+        bars_cache: dict[tuple[str, str, str, str, int], _BarBatch] = {}
 
         for record_id in ids:
             analysis = by_id.get(record_id)
@@ -321,6 +351,15 @@ class CryptoBacktestService:
             engine_version=engine_version,
         )
         if summary is None:
+            self._recompute_summaries(engine_version=engine_version)
+            summary = self.repo.get_summary(
+                scope=scope,
+                code=normalize_crypto_symbol(code) if code else None,
+                horizon=horizon,
+                plan_type=plan_type,
+                engine_version=engine_version,
+            )
+        if summary is None:
             return None
         return self._summary_to_dict(summary)
 
@@ -351,6 +390,9 @@ class CryptoBacktestService:
             leverage=float(getattr(config, "crypto_backtest_leverage", 1.0)),
             fee_rate_bps=float(getattr(config, "crypto_backtest_fee_rate_bps", 5.0)),
             slippage_bps=float(getattr(config, "crypto_backtest_slippage_bps", 2.0)),
+            maker_fee_rate_bps=float(getattr(config, "crypto_backtest_maker_fee_rate_bps", 2.0)),
+            taker_fee_rate_bps=float(getattr(config, "crypto_backtest_taker_fee_rate_bps", 5.0)),
+            maintenance_margin_rate=float(getattr(config, "crypto_backtest_maintenance_margin_rate", 0.005)),
         )
 
     def _evaluate_analysis_record(
@@ -359,7 +401,7 @@ class CryptoBacktestService:
         analysis: AnalysisHistory,
         engine_version: str,
         eval_config: CryptoPlanBacktestConfig,
-        bars_cache: dict[tuple[str, str, int], _BarBatch],
+        bars_cache: dict[tuple[str, str, str, str, int], _BarBatch],
         plan_types: Optional[set[str]] = None,
         existing_keys: Optional[set[tuple[int, str]]] = None,
     ) -> tuple[list[CryptoBacktestResult], dict[str, int]]:
@@ -377,29 +419,42 @@ class CryptoBacktestService:
 
         analysis_at = analysis.created_at or datetime.now()
         market_analysis_at = self._local_naive_to_utc_naive(analysis_at)
-        fetch_days = max(3, (datetime.now() - analysis_at).days + 3)
+        fetch_days = max(30, (datetime.now() - analysis_at).days + 30)
         results: list[CryptoBacktestResult] = []
         counts = {"completed": 0, "insufficient": 0, "skipped": 0, "errors": 0}
 
         for plan in plans:
+            contract_window_bars = self._contract_window_bars(plan)
+            normalized_contract, _contract_errors = CryptoBacktestEngine._validated_contract(
+                plan.execution_contract,
+                direction=plan.direction,
+            )
+            instrument_contract = normalized_contract.get("instrument") or resolve_crypto_instrument(
+                "BTC-USDT-PERP",
+                default_type="perpetual",
+                venue=str(getattr(get_config(), "crypto_trading_exchange", "okx") or "okx"),
+                margin_mode="isolated",
+            ).to_contract()
             if plan.horizon == "intraday":
                 batch = self._get_cached_bars(
                     bars_cache,
                     analysis.code,
                     period="hourly",
                     days=max(fetch_days, 3),
+                    instrument=instrument_contract,
                 )
                 window_start = market_analysis_at
-                window_end = market_analysis_at + timedelta(hours=24)
+                window_end = market_analysis_at + timedelta(hours=contract_window_bars or 24)
             else:
                 batch = self._get_cached_bars(
                     bars_cache,
                     analysis.code,
                     period="daily",
                     days=max(fetch_days, 5),
+                    instrument=instrument_contract,
                 )
                 window_start = datetime.combine(market_analysis_at.date() + timedelta(days=1), time.min)
-                window_end = window_start + timedelta(days=1)
+                window_end = window_start + timedelta(days=contract_window_bars or 1)
 
             forward_bars = [
                 bar
@@ -417,6 +472,10 @@ class CryptoBacktestService:
                     plan=plan,
                     forward_bars=forward_bars,
                     config=eval_config,
+                    evaluation_complete=self._evaluation_window_complete(
+                        window_end=window_end,
+                        data_snapshot=batch.metadata,
+                    ),
                 )
             else:
                 evaluation = self._skipped_evaluation(plan, "lookahead_bias_detected")
@@ -453,6 +512,23 @@ class CryptoBacktestService:
 
         return results, counts
 
+    @staticmethod
+    def _contract_window_bars(plan: CryptoPlan) -> Optional[int]:
+        contract, errors = CryptoBacktestEngine._validated_contract(
+            plan.execution_contract,
+            direction=plan.direction,
+        )
+        if errors:
+            return None
+        entry = contract["entry"]
+        exit_config = contract["exit"]
+        return (
+            int(entry["max_wait_bars"])
+            + int(entry["confirmation_bars"])
+            + 1
+            + int(exit_config["max_holding_bars"])
+        )
+
     def _extract_plans(self, analysis: AnalysisHistory) -> list[CryptoPlan]:
         if not is_crypto_code(analysis.code):
             return []
@@ -472,9 +548,11 @@ class CryptoBacktestService:
         if plans.get("intraday_plan"):
             intraday_plan = plans["intraday_plan"] or {}
             direction = self._normalize_direction(intraday_plan.get("direction"))
-            enabled = self._parse_enabled(intraday_plan.get("enabled"))
-            if not enabled or direction not in {"long", "short"}:
-                direction = direction if direction in {"long", "short"} else "wait"
+            raw_enabled = intraday_plan.get("enabled")
+            if raw_enabled is not None and not self._parse_enabled(raw_enabled):
+                direction = "wait"
+            elif direction not in {"long", "short"}:
+                direction = "wait"
             extracted.append(self._plan_from_payload("intraday", "intraday", direction, intraday_plan))
         return extracted
 
@@ -493,6 +571,7 @@ class CryptoBacktestService:
 
     @staticmethod
     def _plan_from_payload(plan_type: str, horizon: str, direction: str, payload: dict[str, Any]) -> CryptoPlan:
+        execution_contract = payload.get("execution_contract")
         return CryptoPlan(
             plan_type=plan_type,
             horizon=horizon,
@@ -501,6 +580,7 @@ class CryptoBacktestService:
             stop_loss=parse_sniper_value(payload.get("stop_loss")),
             take_profit=parse_sniper_value(payload.get("take_profit")),
             raw_plan=dict(payload),
+            execution_contract=dict(execution_contract) if isinstance(execution_contract, dict) else None,
         )
 
     @staticmethod
@@ -523,18 +603,35 @@ class CryptoBacktestService:
 
     def _get_cached_bars(
         self,
-        cache: dict[tuple[str, str, int], _BarBatch],
+        cache: dict[tuple[str, str, str, str, int], _BarBatch],
         code: str,
         *,
         period: str,
         days: int,
+        instrument: dict[str, Any],
     ) -> _BarBatch:
         normalized_code = normalize_crypto_symbol(code) or code
-        key = (normalized_code, period, int(days))
+        instrument_type = str(instrument.get("type") or "perpetual")
+        venue = str(instrument.get("venue") or "okx")
+        key = (normalized_code, instrument_type, venue, period, int(days))
         if key not in cache:
             fetched_at = datetime.now(timezone.utc)
-            df = self.fetcher.get_kline_data(normalized_code, period=period, days=int(days))
+            if instrument_type == "perpetual":
+                df = self.fetcher.get_perpetual_kline_data(
+                    normalized_code,
+                    period=period,
+                    days=int(days),
+                    venue=venue,
+                    margin_mode=str(instrument.get("margin_mode") or "isolated"),
+                )
+            else:
+                df = self.fetcher.get_kline_data(normalized_code, period=period, days=int(days))
             bars = self._bars_from_dataframe(df, period=period)
+            bars = [
+                bar
+                for bar in bars
+                if self._bar_is_closed(bar.timestamp, period=period, fetched_at=fetched_at)
+            ]
             cache[key] = _BarBatch(
                 bars=bars,
                 metadata=self._kline_metadata(
@@ -543,24 +640,100 @@ class CryptoBacktestService:
                     days=int(days),
                     fetched_at=fetched_at,
                     bars=bars,
+                    dataframe_attrs=dict(df.attrs),
                 ),
             )
         return cache[key]
 
     @staticmethod
+    def _bar_is_closed(timestamp: datetime, *, period: str, fetched_at: datetime) -> bool:
+        fetched_at_utc = fetched_at.astimezone(timezone.utc).replace(tzinfo=None)
+        duration = timedelta(days=1) if period == "daily" else timedelta(hours=1)
+        return timestamp + duration <= fetched_at_utc
+
+    @staticmethod
     def _bars_from_dataframe(df: pd.DataFrame, *, period: str) -> list[_Bar]:
         if df is None or df.empty:
             return []
-        bars: list[_Bar] = []
+        raw_bars: list[dict[str, Any]] = []
         for _, row in df.iterrows():
             timestamp = CryptoBacktestService._parse_bar_timestamp(row.get("date"), period=period)
+            open_price = CryptoBacktestService._safe_float(row.get("open"))
             high = CryptoBacktestService._safe_float(row.get("high"))
             low = CryptoBacktestService._safe_float(row.get("low"))
             close = CryptoBacktestService._safe_float(row.get("close"))
-            if timestamp is None or high is None or low is None or close is None:
+            volume = CryptoBacktestService._safe_float(row.get("volume"))
+            if timestamp is None or open_price is None or high is None or low is None or close is None:
                 continue
-            bars.append(_Bar(timestamp=timestamp, high=high, low=low, close=close))
+            raw_bars.append(
+                {
+                    "timestamp": timestamp,
+                    "open": open_price,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": volume,
+                    "execution_open": CryptoBacktestService._safe_float(row.get("execution_open")),
+                    "execution_high": CryptoBacktestService._safe_float(row.get("execution_high")),
+                    "execution_low": CryptoBacktestService._safe_float(row.get("execution_low")),
+                    "execution_close": CryptoBacktestService._safe_float(row.get("execution_close")),
+                    "mark_open": CryptoBacktestService._safe_float(row.get("mark_open")),
+                    "mark_high": CryptoBacktestService._safe_float(row.get("mark_high")),
+                    "mark_low": CryptoBacktestService._safe_float(row.get("mark_low")),
+                    "mark_close": CryptoBacktestService._safe_float(row.get("mark_close")),
+                    "funding_rates": CryptoBacktestService._funding_rates(row.get("funding_rates")),
+                    "funding_complete": bool(row.get("funding_complete", False)),
+                }
+            )
+
+        bars: list[_Bar] = []
+        for index, item in enumerate(raw_bars):
+            lookback = raw_bars[max(0, index - 19):index + 1]
+            prior = raw_bars[max(0, index - 20):index]
+            prior_volumes = [float(bar["volume"]) for bar in prior if bar["volume"] is not None]
+            volume_ratio = None
+            if item["volume"] is not None and prior_volumes:
+                average_volume = sum(prior_volumes) / len(prior_volumes)
+                volume_ratio = float(item["volume"]) / average_volume if average_volume > 0 else None
+            weighted = [
+                (((float(bar["high"]) + float(bar["low"]) + float(bar["close"])) / 3), float(bar["volume"]))
+                for bar in lookback
+                if bar["volume"] is not None and float(bar["volume"]) > 0
+            ]
+            total_volume = sum(volume for _price, volume in weighted)
+            vwap = sum(price * volume for price, volume in weighted) / total_volume if total_volume else None
+            bars.append(
+                _Bar(
+                    timestamp=item["timestamp"],
+                    open=float(item["open"]),
+                    high=float(item["high"]),
+                    low=float(item["low"]),
+                    close=float(item["close"]),
+                    volume=item["volume"],
+                    volume_ratio=volume_ratio,
+                    vwap=vwap,
+                    execution_open=item["execution_open"],
+                    execution_high=item["execution_high"],
+                    execution_low=item["execution_low"],
+                    execution_close=item["execution_close"],
+                    mark_open=item["mark_open"],
+                    mark_high=item["mark_high"],
+                    mark_low=item["mark_low"],
+                    mark_close=item["mark_close"],
+                    funding_rates=item["funding_rates"],
+                    funding_complete=bool(item["funding_complete"]),
+                )
+            )
         return bars
+
+    @staticmethod
+    def _evaluation_window_complete(*, window_end: datetime, data_snapshot: dict[str, Any]) -> bool:
+        raw_fetched_at = data_snapshot.get("fetched_at")
+        try:
+            fetched_at = datetime.fromisoformat(str(raw_fetched_at)).astimezone(timezone.utc).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            return False
+        return fetched_at >= window_end
 
     @staticmethod
     def _parse_bar_timestamp(value: Any, *, period: str) -> Optional[datetime]:
@@ -593,6 +766,17 @@ class CryptoBacktestService:
         return parsed if parsed == parsed else None
 
     @staticmethod
+    def _funding_rates(value: Any) -> tuple[float, ...]:
+        if not isinstance(value, (list, tuple)):
+            return ()
+        rates = []
+        for item in value:
+            parsed = CryptoBacktestService._safe_float(item)
+            if parsed is not None:
+                rates.append(parsed)
+        return tuple(rates)
+
+    @staticmethod
     def _kline_metadata(
         *,
         code: str,
@@ -600,9 +784,18 @@ class CryptoBacktestService:
         days: int,
         fetched_at: datetime,
         bars: list[_Bar],
+        dataframe_attrs: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
+        attrs = dataframe_attrs or {}
         return {
-            "source": "CryptoFetcher",
+            "source": attrs.get("source") or "CryptoFetcher",
+            "venue": attrs.get("venue"),
+            "instrument_type": attrs.get("instrument_type") or "spot",
+            "canonical_symbol": attrs.get("canonical_symbol"),
+            "market_symbol": attrs.get("market_symbol"),
+            "price_type": attrs.get("price_type"),
+            "funding_event_count": attrs.get("funding_event_count"),
+            "funding_complete": attrs.get("funding_complete"),
             "code": code,
             "period": period,
             "requested_days": int(days),
@@ -618,7 +811,13 @@ class CryptoBacktestService:
         digest = hashlib.sha256()
         for bar in bars:
             digest.update(
-                f"{bar.timestamp.isoformat()}|{bar.high:.10g}|{bar.low:.10g}|{bar.close:.10g}\n".encode("utf-8")
+                (
+                    f"{bar.timestamp.isoformat()}|{float(bar.open if bar.open is not None else bar.close):.10g}|{bar.high:.10g}|"
+                    f"{bar.low:.10g}|{bar.close:.10g}|{bar.volume}|{bar.volume_ratio}|{bar.vwap}|"
+                    f"{bar.execution_open}|{bar.execution_high}|{bar.execution_low}|{bar.execution_close}|"
+                    f"{bar.mark_open}|{bar.mark_high}|{bar.mark_low}|{bar.mark_close}|"
+                    f"{bar.funding_rates}|{bar.funding_complete}\n"
+                ).encode("utf-8")
             )
         return f"sha256:{digest.hexdigest()}"
 
@@ -656,6 +855,7 @@ class CryptoBacktestService:
             "entry_price": plan.entry_price,
             "stop_loss": plan.stop_loss,
             "take_profit": plan.take_profit,
+            "execution_contract": plan.execution_contract,
             "eval_status": "skipped",
             "outcome": "skipped",
             "direction_correct": None,
@@ -705,6 +905,17 @@ class CryptoBacktestService:
         open_interest = (
             derivatives.get("open_interest") if isinstance(derivatives.get("open_interest"), dict) else {}
         )
+        funding_history = funding.get("history_7d") if isinstance(funding.get("history_7d"), dict) else {}
+        oi_history = open_interest.get("history_24h") if isinstance(open_interest.get("history_24h"), dict) else {}
+        basis = derivatives.get("basis") if isinstance(derivatives.get("basis"), dict) else {}
+        long_short_ratio = derivatives.get("long_short_ratio") if isinstance(derivatives.get("long_short_ratio"), dict) else {}
+        cross_exchange = derivatives.get("cross_exchange") if isinstance(derivatives.get("cross_exchange"), dict) else {}
+        macro_correlation = crypto_context.get("macro_correlation") if isinstance(crypto_context.get("macro_correlation"), dict) else {}
+        macro_assets = macro_correlation.get("assets") if isinstance(macro_correlation.get("assets"), dict) else {}
+        nasdaq_macro = macro_assets.get("nasdaq") if isinstance(macro_assets.get("nasdaq"), dict) else {}
+        dxy_macro = macro_assets.get("dxy") if isinstance(macro_assets.get("dxy"), dict) else {}
+        us10y_macro = macro_assets.get("us10y") if isinstance(macro_assets.get("us10y"), dict) else {}
+        gold_macro = macro_assets.get("gold") if isinstance(macro_assets.get("gold"), dict) else {}
         event = source_context.get("event") if isinstance(source_context.get("event"), dict) else {}
         volatility = source_context.get("volatility") if isinstance(source_context.get("volatility"), dict) else {}
 
@@ -738,8 +949,25 @@ class CryptoBacktestService:
                 "data_quality": cls._clean_tag_value(derivatives.get("data_quality")),
                 "funding_state": cls._clean_tag_value(funding.get("state")),
                 "funding_rate_pct": cls._safe_float(funding.get("rate_pct")),
+                "funding_7d_trend": cls._clean_tag_value(funding_history.get("trend")),
+                "funding_7d_avg_rate_pct": cls._safe_float(funding_history.get("avg_rate_pct")),
                 "open_interest_state": cls._clean_tag_value(open_interest.get("state")),
+                "open_interest_24h_state": cls._clean_tag_value(oi_history.get("state")),
+                "open_interest_24h_change_pct": cls._safe_float(oi_history.get("change_pct")),
+                "basis_state": cls._clean_tag_value(basis.get("state")),
+                "basis_pct": cls._safe_float(basis.get("perpetual_premium_pct")),
+                "long_short_state": cls._clean_tag_value(long_short_ratio.get("state")),
+                "cross_exchange_quality": cls._clean_tag_value(cross_exchange.get("data_quality")),
                 "leverage_pressure": cls._clean_tag_value(derivatives.get("leverage_pressure")),
+            },
+            "macro_correlation": {
+                "data_quality": cls._clean_tag_value(macro_correlation.get("data_quality")),
+                "nasdaq_state": cls._clean_tag_value(nasdaq_macro.get("state")),
+                "nasdaq_30d": cls._safe_float(nasdaq_macro.get("correlation_30d")),
+                "dxy_state": cls._clean_tag_value(dxy_macro.get("state")),
+                "dxy_30d": cls._safe_float(dxy_macro.get("correlation_30d")),
+                "us10y_state": cls._clean_tag_value(us10y_macro.get("state")),
+                "gold_state": cls._clean_tag_value(gold_macro.get("state")),
             },
         }
 
@@ -822,6 +1050,7 @@ class CryptoBacktestService:
 
     def _recompute_summaries(self, *, engine_version: str) -> None:
         rows = self.repo.list_results(engine_version=engine_version)
+        self.repo.delete_summaries(engine_version=engine_version)
         summary_specs: list[tuple[str, Optional[str], Optional[str], Optional[str], list[CryptoBacktestResult]]] = [
             ("overall", None, None, None, rows),
         ]
@@ -953,6 +1182,20 @@ class CryptoBacktestService:
 
     @classmethod
     def _indicator_group_breakdown(cls, rows: list[CryptoBacktestResult]) -> dict[str, Any]:
+        if any(str(row.engine_version).lower() in {"btc-plan-v3", "btc-plan-v4"} for row in rows):
+            triggered = [
+                row
+                for row in rows
+                if row.eval_status == "completed" and row.entry_triggered is True
+            ]
+            independent, _excluded = CryptoBacktestEngine._independent_triggered_rows(triggered)
+            triggered_ids = {id(row) for row in triggered}
+            independent_ids = {id(row) for row in independent}
+            rows = [
+                row
+                for row in rows
+                if id(row) not in triggered_ids or id(row) in independent_ids
+            ]
         dimensions: list[tuple[str, str, Any]] = [
             ("plan_type", "计划类型", lambda row, _tags: getattr(row, "plan_type", None)),
             ("direction", "方向", lambda row, _tags: getattr(row, "direction", None)),
@@ -981,7 +1224,7 @@ class CryptoBacktestService:
                 for key, bucket_rows in sorted(buckets.items())
             ]
         return {
-            "minimum_sample_count": 30,
+            "minimum_sample_count": 100,
             "groups": grouped,
         }
 
@@ -1067,9 +1310,11 @@ class CryptoBacktestService:
         ]
         if any((direction_filter, plan_type_filter, result_status_filter)) and not plan_items:
             return None
-        terminal_statuses = {"completed", "win", "loss", "neutral", "no_entry", "skipped", "insufficient_data"}
+        terminal_statuses = {"completed", "win", "loss", "neutral", "no_entry", "skipped"}
         if not plan_items:
             backtest_status = "no_plan"
+        elif all(item["backtest_status"] == "skipped" for item in plan_items):
+            backtest_status = "skipped"
         elif all(item["backtest_status"] in terminal_statuses for item in plan_items):
             backtest_status = "completed"
         elif any(item["backtest_status"] in {"completed", "no_entry", "win", "loss", "neutral"} for item in plan_items):
@@ -1122,14 +1367,17 @@ class CryptoBacktestService:
         result: Optional[CryptoBacktestResult],
     ) -> dict[str, Any]:
         missing_fields = self._missing_plan_fields(plan)
+        no_trade_plan = plan.direction == "wait" and not missing_fields
         backtestable = not missing_fields and plan.direction in {"long", "short"}
         latest_result = self._result_to_dict(result) if result else None
-        if result:
-            backtest_status = self._plan_result_status(result)
-        elif backtestable:
-            backtest_status = "pending"
-        else:
+        if no_trade_plan:
+            backtest_status = self._plan_result_status(result) if result else "skipped"
+        elif not backtestable:
             backtest_status = "invalid_plan"
+        elif result:
+            backtest_status = self._plan_result_status(result)
+        else:
+            backtest_status = "pending"
         analysis_mode = horizon_to_analysis_mode(plan.horizon)
         return {
             "plan_type": plan.plan_type,
@@ -1140,12 +1388,19 @@ class CryptoBacktestService:
             "entry_price": plan.entry_price,
             "stop_loss": plan.stop_loss,
             "take_profit": plan.take_profit,
+            "execution_contract": plan.execution_contract,
             "invalid_condition": self._raw_plan_text(plan, "invalid_condition", "invalidation"),
             "risk_reward": self._raw_plan_text(plan, "risk_reward"),
             "position_hint": self._raw_plan_text(plan, "position_hint"),
             "confidence": self._raw_plan_text(plan, "confidence"),
             "backtestable": backtestable,
-            "quality_status": "ok" if backtestable else "missing_required_fields",
+            "quality_status": (
+                "executable_contract"
+                if backtestable
+                else "no_trade_plan"
+                if no_trade_plan
+                else "missing_required_fields"
+            ),
             "missing_fields": missing_fields,
             "no_trade_reason": self._no_trade_reason(plan),
             "backtest_status": backtest_status,
@@ -1153,10 +1408,15 @@ class CryptoBacktestService:
             "indicator_tags": (latest_result or {}).get("diagnostics", {}).get("indicator_tags") if latest_result else None,
         }
 
-    @staticmethod
-    def _missing_plan_fields(plan: CryptoPlan) -> list[str]:
+    def _missing_plan_fields(self, plan: CryptoPlan) -> list[str]:
         missing = []
         if plan.direction not in {"long", "short"}:
+            raw_plan = plan.raw_plan or {}
+            raw_direction = str(raw_plan.get("direction") or "").strip().lower()
+            raw_enabled = raw_plan.get("enabled")
+            explicitly_disabled = raw_enabled is not None and not self._parse_enabled(raw_enabled)
+            if explicitly_disabled or raw_direction in {"wait", "neutral", "none", "观望", "等待"}:
+                return missing
             missing.append("direction")
         if plan.entry_price is None:
             missing.append("entry_zone")
@@ -1164,6 +1424,13 @@ class CryptoBacktestService:
             missing.append("stop_loss")
         if plan.take_profit is None:
             missing.append("take_profit")
+        if self._engine_version().strip().lower() in {"btc-plan-v3", "btc-plan-v4"}:
+            _contract, contract_errors = CryptoBacktestEngine._validated_contract(
+                plan.execution_contract,
+                direction=plan.direction,
+            )
+            if contract_errors:
+                missing.append("execution_contract")
         return missing
 
     @staticmethod

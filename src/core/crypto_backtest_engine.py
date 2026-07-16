@@ -11,14 +11,30 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable, Optional, Protocol, Sequence
 
+from src.schemas.crypto_instrument import resolve_crypto_instrument
+
 
 class CryptoBarLike(Protocol):
     """Protocol for OHLC bars used by BTC plan backtests."""
 
     timestamp: datetime
+    open: Optional[float]
     high: Optional[float]
     low: Optional[float]
     close: Optional[float]
+    volume: Optional[float]
+    volume_ratio: Optional[float]
+    vwap: Optional[float]
+    execution_open: Optional[float]
+    execution_high: Optional[float]
+    execution_low: Optional[float]
+    execution_close: Optional[float]
+    mark_open: Optional[float]
+    mark_high: Optional[float]
+    mark_low: Optional[float]
+    mark_close: Optional[float]
+    funding_rates: Sequence[float]
+    funding_complete: bool
 
 
 @dataclass(frozen=True)
@@ -30,6 +46,7 @@ class CryptoPlan:
     stop_loss: Optional[float]
     take_profit: Optional[float]
     raw_plan: dict[str, Any]
+    execution_contract: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +59,9 @@ class CryptoPlanBacktestConfig:
     leverage: float = 1.0
     fee_rate_bps: float = 5.0
     slippage_bps: float = 2.0
+    maker_fee_rate_bps: float = 2.0
+    taker_fee_rate_bps: float = 5.0
+    maintenance_margin_rate: float = 0.005
 
 
 class CryptoBacktestEngine:
@@ -49,6 +69,25 @@ class CryptoBacktestEngine:
 
     @classmethod
     def evaluate_plan(
+        cls,
+        *,
+        plan: CryptoPlan,
+        forward_bars: Sequence[CryptoBarLike],
+        config: CryptoPlanBacktestConfig,
+        evaluation_complete: bool = True,
+    ) -> dict[str, Any]:
+        if str(config.engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4"}:
+            return cls._evaluate_contract_plan(
+                plan=plan,
+                forward_bars=forward_bars,
+                config=config,
+                evaluation_complete=evaluation_complete,
+            )
+
+        return cls._evaluate_legacy_plan(plan=plan, forward_bars=forward_bars, config=config)
+
+    @classmethod
+    def _evaluate_legacy_plan(
         cls,
         *,
         plan: CryptoPlan,
@@ -152,6 +191,374 @@ class CryptoBacktestEngine:
         }
 
     @classmethod
+    def _evaluate_contract_plan(
+        cls,
+        *,
+        plan: CryptoPlan,
+        forward_bars: Sequence[CryptoBarLike],
+        config: CryptoPlanBacktestConfig,
+        evaluation_complete: bool,
+    ) -> dict[str, Any]:
+        direction = (plan.direction or "").strip().lower()
+        if direction not in {"long", "short"}:
+            return cls._skipped(plan, "unsupported_direction")
+        if plan.entry_price is None or plan.entry_price <= 0:
+            return cls._skipped(plan, "missing_entry_price")
+        if plan.stop_loss is None or plan.take_profit is None:
+            return cls._skipped(plan, "missing_exit_prices")
+
+        contract, errors = cls._validated_contract(plan.execution_contract, direction=direction)
+        if errors:
+            result = cls._skipped(plan, "invalid_execution_contract")
+            result["diagnostics"]["contract_errors"] = errors
+            return result
+
+        is_v4 = str(config.engine_version).strip().lower() == "btc-plan-v4"
+        instrument = contract["instrument"]
+
+        window_bars = [bar for bar in forward_bars if cls._valid_contract_bar(bar)]
+        if not window_bars:
+            return cls._insufficient(plan, "no_closed_forward_bars")
+        if is_v4 and instrument.get("type") == "perpetual":
+            if not all(cls._valid_perpetual_bar(bar) for bar in window_bars):
+                result = cls._insufficient(plan, "incomplete_perpetual_trade_mark_data")
+                result["diagnostics"]["execution_contract"] = contract
+                return result
+            if not all(bool(getattr(bar, "funding_complete", False)) for bar in window_bars):
+                result = cls._insufficient(plan, "incomplete_funding_history")
+                result["diagnostics"]["execution_contract"] = contract
+                return result
+
+        entry = contract["entry"]
+        max_wait_bars = int(entry["max_wait_bars"])
+        candidate_bars = window_bars[:max_wait_bars]
+        trigger_index = cls._find_contract_trigger_index(
+            bars=candidate_bars,
+            conditions=entry["conditions"],
+            confirmation_bars=int(entry["confirmation_bars"]),
+            price_type=str(instrument.get("trigger_price_type") or "trade"),
+        )
+        if trigger_index is None:
+            if not evaluation_complete and len(window_bars) < max_wait_bars:
+                result = cls._insufficient(plan, "evaluation_window_open")
+                result["diagnostics"].update(
+                    {
+                        "evaluated_bars": len(window_bars),
+                        "execution_contract": contract,
+                    }
+                )
+                return result
+            return {
+                **cls._base(plan, eval_status="completed"),
+                "entry_triggered": False,
+                "outcome": "no_entry",
+                "direction_correct": None,
+                "start_price": plan.entry_price,
+                "end_close": cls._execution_price(window_bars[-1], "close"),
+                "max_high": cls._max_value(bar.high for bar in window_bars),
+                "min_low": cls._min_value(bar.low for bar in window_bars),
+                "simulated_entry_price": None,
+                "simulated_exit_price": None,
+                "simulated_exit_reason": "conditions_not_met",
+                "simulated_return_pct": None,
+                "diagnostics": {
+                    "reason": "entry_conditions_not_met",
+                    "evaluated_bars": len(window_bars),
+                    "execution_contract": contract,
+                    "execution": cls._execution_config(config),
+                },
+            }
+
+        fill_index = trigger_index + 1
+        if fill_index >= len(window_bars):
+            result = cls._insufficient(plan, "entry_confirmed_awaiting_fill_bar")
+            result["diagnostics"].update(
+                {
+                    "triggered_at": window_bars[trigger_index].timestamp.isoformat(),
+                    "execution_contract": contract,
+                }
+            )
+            return result
+
+        fill_bar = window_bars[fill_index]
+        fill_price = cls._execution_price(fill_bar, "open")
+        max_holding_bars = int(contract["exit"]["max_holding_bars"])
+        available_trade_bars = list(window_bars[fill_index:])
+        trade_bars = available_trade_bars[:max_holding_bars]
+        end_close = cls._execution_price(trade_bars[-1], "close")
+        target_result = cls._evaluate_targets(
+            direction=direction,
+            stop_loss=plan.stop_loss,
+            take_profit=plan.take_profit,
+            trade_bars=trade_bars,
+            end_close=end_close,
+        )
+        (
+            hit_stop_loss,
+            hit_take_profit,
+            first_hit,
+            first_hit_at,
+            first_hit_bars,
+            exit_price,
+            exit_reason,
+        ) = target_result
+        sizing = cls._position_sizing(
+            entry_price=fill_price,
+            stop_loss=plan.stop_loss,
+            config=config,
+        )
+        if is_v4 and instrument.get("type") == "perpetual":
+            liquidation = cls._evaluate_liquidation(
+                direction=direction,
+                entry_price=fill_price,
+                trade_bars=trade_bars,
+                quantity=sizing["quantity"],
+                margin_mode=str(instrument.get("margin_mode") or "isolated"),
+                config=config,
+            )
+            if liquidation is not None:
+                liquidation_at, liquidation_bars, liquidation_price = liquidation
+                if first_hit_bars is None or liquidation_bars <= first_hit_bars:
+                    first_hit = "liquidation"
+                    first_hit_at = liquidation_at
+                    first_hit_bars = liquidation_bars
+                    exit_price = liquidation_price
+                    exit_reason = "liquidation"
+        holding_complete = len(available_trade_bars) >= max_holding_bars
+        target_hit = exit_reason != "window_end"
+        if not target_hit and not holding_complete and not evaluation_complete:
+            return {
+                **cls._base(plan, eval_status="insufficient_data"),
+                "entry_triggered": True,
+                "entry_triggered_at": fill_bar.timestamp,
+                "start_price": fill_price,
+                "end_close": end_close,
+                "max_high": cls._max_value(bar.high for bar in trade_bars),
+                "min_low": cls._min_value(bar.low for bar in trade_bars),
+                "direction_correct": None,
+                "outcome": "provisional",
+                "simulated_entry_price": fill_price,
+                "simulated_exit_price": None,
+                "simulated_exit_reason": "position_open",
+                "simulated_return_pct": None,
+                "diagnostics": {
+                    "reason": "evaluation_window_open",
+                    "evaluated_bars": len(window_bars),
+                    "trade_bars": len(trade_bars),
+                    "triggered_at": window_bars[trigger_index].timestamp.isoformat(),
+                    "execution_contract": contract,
+                    "execution": cls._execution_config(config),
+                },
+            }
+
+        funding_bar_count = first_hit_bars or len(trade_bars)
+        funding_cost = (
+            cls._funding_cost(
+                direction=direction,
+                quantity=sizing["quantity"],
+                trade_bars=trade_bars[:funding_bar_count],
+            )
+            if is_v4 and instrument.get("type") == "perpetual"
+            else 0.0
+        )
+        trade = cls._simulate_trade(
+            direction=direction,
+            entry_price=fill_price,
+            exit_price=exit_price,
+            stop_loss=plan.stop_loss,
+            config=config,
+            sizing=sizing,
+            funding_cost=funding_cost,
+            entry_order_type=str(contract["entry"].get("order_type") or "market"),
+            exit_order_type=str(contract["exit"].get("order_type") or "market"),
+        )
+        simulated_return_pct = trade["net_return_pct"]
+        outcome, direction_correct = cls._classify_return(
+            simulated_return_pct=simulated_return_pct,
+            neutral_band_pct=config.neutral_band_pct,
+        )
+        return {
+            **cls._base(plan, eval_status="completed"),
+            "entry_triggered": True,
+            "entry_triggered_at": fill_bar.timestamp,
+            "start_price": fill_price,
+            "end_close": end_close,
+            "max_high": cls._max_value(bar.high for bar in trade_bars),
+            "min_low": cls._min_value(bar.low for bar in trade_bars),
+            "direction_correct": direction_correct,
+            "outcome": outcome,
+            "hit_stop_loss": hit_stop_loss,
+            "hit_take_profit": hit_take_profit,
+            "first_hit": first_hit,
+            "first_hit_at": first_hit_at,
+            "first_hit_bars": first_hit_bars,
+            "simulated_entry_price": fill_price,
+            "simulated_exit_price": exit_price,
+            "simulated_exit_reason": exit_reason,
+            "simulated_return_pct": simulated_return_pct,
+            "diagnostics": {
+                "evaluated_bars": len(window_bars),
+                "trade_bars": len(trade_bars),
+                "triggered_at": window_bars[trigger_index].timestamp.isoformat(),
+                "execution_contract": contract,
+                "execution": cls._execution_config(config),
+                "trade": trade,
+            },
+        }
+
+    @staticmethod
+    def _validated_contract(
+        value: Any,
+        *,
+        direction: Optional[str] = None,
+    ) -> tuple[dict[str, Any], list[str]]:
+        if not isinstance(value, dict):
+            return {}, ["missing_execution_contract"]
+        errors: list[str] = []
+        if value.get("version") != "btc-execution-v1":
+            errors.append("unsupported_contract_version")
+        raw_instrument = value.get("instrument")
+        instrument = resolve_crypto_instrument(
+            raw_instrument or "BTC-USDT-PERP",
+            default_type="perpetual",
+            venue=(raw_instrument or {}).get("venue", "okx") if isinstance(raw_instrument, dict) else "okx",
+            margin_mode=(raw_instrument or {}).get("margin_mode", "isolated") if isinstance(raw_instrument, dict) else "isolated",
+        )
+        if instrument is None:
+            errors.append("invalid_instrument_contract")
+        elif instrument.instrument_type == "spot" and str(direction or "").strip().lower() == "short":
+            errors.append("spot_short_not_supported")
+        elif instrument.trigger_price_type == "index":
+            errors.append("index_trigger_price_not_supported")
+        entry = value.get("entry")
+        exit_config = value.get("exit")
+        if not isinstance(entry, dict):
+            errors.append("missing_entry_contract")
+            entry = {}
+        if not isinstance(exit_config, dict):
+            errors.append("missing_exit_contract")
+            exit_config = {}
+
+        conditions = entry.get("conditions")
+        if not isinstance(conditions, list) or not conditions:
+            errors.append("missing_entry_conditions")
+            conditions = []
+        supported = {
+            "close_above",
+            "close_below",
+            "volume_ratio_gte",
+            "volume_ratio_lte",
+            "close_above_vwap",
+            "close_below_vwap",
+        }
+        normalized_conditions: list[dict[str, Any]] = []
+        for condition in conditions:
+            if not isinstance(condition, dict):
+                errors.append("invalid_entry_condition")
+                continue
+            condition_type = str(condition.get("type") or "").strip().lower()
+            if condition_type not in supported:
+                errors.append(f"unsupported_condition:{condition_type or 'missing'}")
+                continue
+            normalized = {"type": condition_type}
+            if condition_type in {"close_above", "close_below", "volume_ratio_gte", "volume_ratio_lte"}:
+                try:
+                    normalized["value"] = float(condition.get("value"))
+                except (TypeError, ValueError):
+                    errors.append(f"missing_condition_value:{condition_type}")
+                    continue
+            normalized_conditions.append(normalized)
+
+        if entry.get("logic", "all") != "all":
+            errors.append("unsupported_entry_logic")
+        if entry.get("fill", "next_bar_open") != "next_bar_open":
+            errors.append("unsupported_fill_mode")
+        entry_order_type = str(entry.get("order_type") or "market").strip().lower()
+        exit_order_type = str(exit_config.get("order_type") or "market").strip().lower()
+        if entry_order_type not in {"market", "limit"}:
+            errors.append("unsupported_entry_order_type")
+        if exit_order_type not in {"market", "limit"}:
+            errors.append("unsupported_exit_order_type")
+        try:
+            confirmation_bars = int(entry.get("confirmation_bars", 1))
+            max_wait_bars = int(entry.get("max_wait_bars", 24))
+            max_holding_bars = int(exit_config.get("max_holding_bars", 24))
+        except (TypeError, ValueError):
+            errors.append("invalid_bar_limit")
+            confirmation_bars, max_wait_bars, max_holding_bars = 1, 24, 24
+        if not 1 <= confirmation_bars <= 3:
+            errors.append("confirmation_bars_out_of_range")
+        if max_wait_bars < 1 or max_holding_bars < 1:
+            errors.append("bar_limit_must_be_positive")
+
+        normalized_contract = {
+            "version": "btc-execution-v1",
+            "instrument": instrument.to_contract() if instrument is not None else {},
+            "entry": {
+                "logic": "all",
+                "conditions": normalized_conditions,
+                "confirmation_bars": confirmation_bars,
+                "fill": "next_bar_open",
+                "order_type": entry_order_type,
+                "max_wait_bars": max_wait_bars,
+            },
+            "exit": {
+                "max_holding_bars": max_holding_bars,
+                "order_type": exit_order_type,
+            },
+        }
+        return normalized_contract, errors
+
+    @classmethod
+    def _find_contract_trigger_index(
+        cls,
+        *,
+        bars: Sequence[CryptoBarLike],
+        conditions: Sequence[dict[str, Any]],
+        confirmation_bars: int,
+        price_type: str = "trade",
+    ) -> Optional[int]:
+        consecutive = 0
+        for index, bar in enumerate(bars):
+            if all(cls._condition_matches(bar, condition, price_type=price_type) for condition in conditions):
+                consecutive += 1
+                if consecutive >= confirmation_bars:
+                    return index
+            else:
+                consecutive = 0
+        return None
+
+    @staticmethod
+    def _condition_matches(
+        bar: CryptoBarLike,
+        condition: dict[str, Any],
+        *,
+        price_type: str = "trade",
+    ) -> bool:
+        condition_type = condition["type"]
+        if price_type == "mark":
+            mark_close = getattr(bar, "mark_close", None)
+            if mark_close is None:
+                return False
+            close = float(mark_close)
+        else:
+            execution_close = getattr(bar, "execution_close", None)
+            close = float(execution_close if execution_close is not None else bar.close)
+        if condition_type == "close_above":
+            return close > float(condition["value"])
+        if condition_type == "close_below":
+            return close < float(condition["value"])
+        if condition_type == "volume_ratio_gte":
+            return bar.volume_ratio is not None and float(bar.volume_ratio) >= float(condition["value"])
+        if condition_type == "volume_ratio_lte":
+            return bar.volume_ratio is not None and float(bar.volume_ratio) <= float(condition["value"])
+        if condition_type == "close_above_vwap":
+            return bar.vwap is not None and close > float(bar.vwap)
+        if condition_type == "close_below_vwap":
+            return bar.vwap is not None and close < float(bar.vwap)
+        return False
+
+    @classmethod
     def compute_summary(
         cls,
         *,
@@ -162,7 +569,13 @@ class CryptoBacktestEngine:
     ) -> dict[str, Any]:
         rows = list(results)
         completed = [row for row in rows if getattr(row, "eval_status", None) == "completed"]
-        triggered = [row for row in completed if getattr(row, "entry_triggered", None) is True]
+        raw_triggered = [row for row in completed if getattr(row, "entry_triggered", None) is True]
+        structured_engine = str(engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4"}
+        if structured_engine:
+            triggered, overlap_excluded = cls._independent_triggered_rows(raw_triggered)
+        else:
+            triggered, overlap_excluded = raw_triggered, []
+        independent_ids = {id(row) for row in triggered}
         wins = [row for row in triggered if getattr(row, "outcome", None) == "win"]
         losses = [row for row in triggered if getattr(row, "outcome", None) == "loss"]
         neutral = [row for row in triggered if getattr(row, "outcome", None) == "neutral"]
@@ -184,11 +597,11 @@ class CryptoBacktestEngine:
             bucket["total"] += 1
             if getattr(row, "eval_status", None) == "completed":
                 bucket["completed"] += 1
-            if getattr(row, "entry_triggered", None) is True:
+            if id(row) in independent_ids:
                 bucket["triggered"] += 1
-            if getattr(row, "outcome", None) == "win":
+            if id(row) in independent_ids and getattr(row, "outcome", None) == "win":
                 bucket["wins"] += 1
-            if getattr(row, "outcome", None) == "loss":
+            if id(row) in independent_ids and getattr(row, "outcome", None) == "loss":
                 bucket["losses"] += 1
 
         for bucket in by_plan_type.values():
@@ -214,6 +627,13 @@ class CryptoBacktestEngine:
             )
             if value is not None
         )
+        total_funding_cost = sum(
+            value
+            for value in (
+                cls._diagnostic_number(row, "trade", "funding_cost") for row in triggered
+            )
+            if value is not None
+        )
         equity_curve = cls._equity_curve(triggered)
         risk_metrics = cls._portfolio_risk_metrics(
             returns=[value for value in returns if value is not None],
@@ -222,10 +642,11 @@ class CryptoBacktestEngine:
             equity_curve=equity_curve,
             initial_equity=cls._summary_initial_equity(triggered),
             total_fees=total_fees,
+            total_funding_cost=total_funding_cost,
         )
         sample_confidence = cls._sample_confidence(
             sample_count=len(triggered),
-            minimum_sample_count=30,
+            minimum_sample_count=100 if structured_engine else 30,
         )
 
         return {
@@ -251,8 +672,42 @@ class CryptoBacktestEngine:
             "equity_curve": equity_curve,
             "diagnostics": {
                 "sample_confidence": sample_confidence,
+                "metric_semantics": (
+                    "structured_execution_contract"
+                    if structured_engine
+                    else "entry_price_touch_proxy"
+                ),
+                "raw_triggered_count": len(raw_triggered),
+                "overlap_excluded_count": len(overlap_excluded),
             },
         }
+
+    @staticmethod
+    def _independent_triggered_rows(rows: Sequence[Any]) -> tuple[list[Any], list[Any]]:
+        accepted: list[Any] = []
+        excluded: list[Any] = []
+        active_until_by_code: dict[str, datetime] = {}
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                getattr(row, "entry_triggered_at", None) or datetime.max,
+                getattr(row, "analysis_created_at", None) or datetime.max,
+            ),
+        )
+        for row in ordered:
+            entry_at = getattr(row, "entry_triggered_at", None)
+            code = str(getattr(row, "code", "") or "unknown")
+            if entry_at is None:
+                excluded.append(row)
+                continue
+            active_until = active_until_by_code.get(code)
+            if active_until is not None and entry_at < active_until:
+                excluded.append(row)
+                continue
+            exit_at = getattr(row, "first_hit_at", None) or getattr(row, "evaluation_end", None) or entry_at
+            accepted.append(row)
+            active_until_by_code[code] = max(entry_at, exit_at)
+        return accepted, excluded
 
     @staticmethod
     def _base(plan: CryptoPlan, *, eval_status: str) -> dict[str, Any]:
@@ -293,6 +748,130 @@ class CryptoBacktestEngine:
             and getattr(bar, "low", None) is not None
             and getattr(bar, "close", None) is not None
         )
+
+    @classmethod
+    def _valid_contract_bar(cls, bar: CryptoBarLike) -> bool:
+        return cls._valid_bar(bar) and getattr(bar, "open", None) is not None
+
+    @staticmethod
+    def _valid_perpetual_bar(bar: CryptoBarLike) -> bool:
+        return all(
+            getattr(bar, field, None) is not None
+            for field in (
+                "execution_open",
+                "execution_high",
+                "execution_low",
+                "execution_close",
+                "mark_open",
+                "mark_high",
+                "mark_low",
+                "mark_close",
+            )
+        )
+
+    @staticmethod
+    def _execution_price(bar: CryptoBarLike, field: str) -> float:
+        value = getattr(bar, f"execution_{field}", None)
+        if value is None:
+            value = getattr(bar, field, None)
+        return float(value)
+
+    @staticmethod
+    def _mark_price(bar: CryptoBarLike, field: str) -> float:
+        value = getattr(bar, f"mark_{field}", None)
+        if value is None:
+            value = getattr(bar, field, None)
+        return float(value)
+
+    @classmethod
+    def _position_sizing(
+        cls,
+        *,
+        entry_price: float,
+        stop_loss: Optional[float],
+        config: CryptoPlanBacktestConfig,
+    ) -> dict[str, Any]:
+        initial_equity = max(float(config.initial_equity), 0.0)
+        risk_budget = initial_equity * max(float(config.risk_per_trade_pct), 0.0) / 100.0
+        max_notional = (
+            initial_equity
+            * max(float(config.max_notional_pct), 0.0)
+            / 100.0
+            * max(float(config.leverage), 0.0)
+        )
+        if stop_loss is not None and stop_loss > 0 and stop_loss != entry_price:
+            stop_distance = abs(entry_price - float(stop_loss))
+            risk_sized_qty = risk_budget / stop_distance if stop_distance > 0 else 0.0
+            sizing_method = "risk"
+        else:
+            risk_sized_qty = max_notional / entry_price if entry_price > 0 else 0.0
+            sizing_method = "notional"
+        max_qty = max_notional / entry_price if entry_price > 0 else 0.0
+        quantity = max(0.0, min(risk_sized_qty, max_qty))
+        return {
+            "initial_equity": initial_equity,
+            "risk_budget": risk_budget,
+            "max_notional": max_notional,
+            "quantity": quantity,
+            "position_notional": quantity * entry_price,
+            "sizing_method": sizing_method,
+        }
+
+    @classmethod
+    def _evaluate_liquidation(
+        cls,
+        *,
+        direction: str,
+        entry_price: float,
+        trade_bars: Sequence[CryptoBarLike],
+        quantity: float,
+        margin_mode: str,
+        config: CryptoPlanBacktestConfig,
+    ) -> Optional[tuple[datetime, int, float]]:
+        leverage = max(float(config.leverage), 0.0)
+        maintenance_rate = max(float(config.maintenance_margin_rate), 0.0)
+        if leverage <= 1.0 or quantity <= 0 or maintenance_rate >= 1.0:
+            return None
+
+        if margin_mode == "cross":
+            initial_equity = max(float(config.initial_equity), 0.0)
+            if direction == "short":
+                liquidation_price = (
+                    initial_equity + quantity * entry_price
+                ) / (quantity * (1 + maintenance_rate))
+            else:
+                numerator = quantity * entry_price - initial_equity
+                if numerator <= 0:
+                    return None
+                liquidation_price = numerator / (quantity * (1 - maintenance_rate))
+        elif direction == "short":
+            liquidation_price = entry_price * (1 + 1 / leverage) / (1 + maintenance_rate)
+        else:
+            liquidation_price = entry_price * (1 - 1 / leverage) / (1 - maintenance_rate)
+
+        for index, bar in enumerate(trade_bars, start=1):
+            if direction == "short":
+                liquidated = cls._mark_price(bar, "high") >= liquidation_price
+            else:
+                liquidated = cls._mark_price(bar, "low") <= liquidation_price
+            if liquidated:
+                return bar.timestamp, index, float(liquidation_price)
+        return None
+
+    @classmethod
+    def _funding_cost(
+        cls,
+        *,
+        direction: str,
+        quantity: float,
+        trade_bars: Sequence[CryptoBarLike],
+    ) -> float:
+        direction_sign = 1.0 if direction == "long" else -1.0
+        total = 0.0
+        for bar in trade_bars:
+            rates = getattr(bar, "funding_rates", ()) or ()
+            total += quantity * cls._mark_price(bar, "close") * sum(float(rate) for rate in rates) * direction_sign
+        return total
 
     @staticmethod
     def _find_entry_index(bars: Sequence[CryptoBarLike], entry_price: float) -> Optional[int]:
@@ -366,25 +945,31 @@ class CryptoBacktestEngine:
         exit_price: float,
         stop_loss: Optional[float],
         config: CryptoPlanBacktestConfig,
+        sizing: Optional[dict[str, Any]] = None,
+        funding_cost: float = 0.0,
+        entry_order_type: str = "market",
+        exit_order_type: str = "market",
     ) -> dict[str, Any]:
-        initial_equity = max(float(config.initial_equity), 0.0)
-        risk_budget = initial_equity * max(float(config.risk_per_trade_pct), 0.0) / 100.0
-        max_notional = initial_equity * max(float(config.max_notional_pct), 0.0) / 100.0 * max(float(config.leverage), 0.0)
-
-        if stop_loss is not None and stop_loss > 0 and stop_loss != entry_price:
-            stop_distance = abs(entry_price - float(stop_loss))
-            risk_sized_qty = risk_budget / stop_distance if stop_distance > 0 else 0.0
-            sizing_method = "risk"
-        else:
-            risk_sized_qty = max_notional / entry_price if entry_price > 0 else 0.0
-            sizing_method = "notional"
-
-        max_qty = max_notional / entry_price if entry_price > 0 else 0.0
-        quantity = max(0.0, min(risk_sized_qty, max_qty))
-        notional = quantity * entry_price
+        sizing = sizing or cls._position_sizing(
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            config=config,
+        )
+        initial_equity = float(sizing["initial_equity"])
+        risk_budget = float(sizing["risk_budget"])
+        quantity = float(sizing["quantity"])
+        notional = float(sizing["position_notional"])
+        sizing_method = str(sizing["sizing_method"])
 
         slippage_rate = max(float(config.slippage_bps), 0.0) / 10000.0
-        fee_rate = max(float(config.fee_rate_bps), 0.0) / 10000.0
+        is_v4 = str(config.engine_version).strip().lower() == "btc-plan-v4"
+        if is_v4:
+            maker_rate = max(float(config.maker_fee_rate_bps), 0.0) / 10000.0
+            taker_rate = max(float(config.taker_fee_rate_bps), 0.0) / 10000.0
+            entry_fee_rate = maker_rate if entry_order_type == "limit" else taker_rate
+            exit_fee_rate = maker_rate if exit_order_type == "limit" else taker_rate
+        else:
+            entry_fee_rate = exit_fee_rate = max(float(config.fee_rate_bps), 0.0) / 10000.0
         if direction == "short":
             executed_entry_price = entry_price * (1 - slippage_rate)
             executed_exit_price = exit_price * (1 + slippage_rate)
@@ -394,10 +979,10 @@ class CryptoBacktestEngine:
             executed_exit_price = exit_price * (1 - slippage_rate)
             gross_pnl = (executed_exit_price - executed_entry_price) * quantity
 
-        entry_fee = abs(executed_entry_price * quantity) * fee_rate
-        exit_fee = abs(executed_exit_price * quantity) * fee_rate
+        entry_fee = abs(executed_entry_price * quantity) * entry_fee_rate
+        exit_fee = abs(executed_exit_price * quantity) * exit_fee_rate
         total_fee = entry_fee + exit_fee
-        net_pnl = gross_pnl - total_fee
+        net_pnl = gross_pnl - total_fee - float(funding_cost)
         r_multiple = round(net_pnl / risk_budget, 4) if risk_budget > 0 else None
         return {
             "initial_equity": round(initial_equity, 4),
@@ -411,6 +996,7 @@ class CryptoBacktestEngine:
             "entry_fee": round(entry_fee, 4),
             "exit_fee": round(exit_fee, 4),
             "total_fee": round(total_fee, 4),
+            "funding_cost": round(float(funding_cost), 4),
             "net_pnl": round(net_pnl, 4),
             "r_multiple": r_multiple,
             "net_return_pct": round(net_pnl / initial_equity * 100, 4) if initial_equity else 0.0,
@@ -430,6 +1016,9 @@ class CryptoBacktestEngine:
             "leverage": float(config.leverage),
             "fee_rate_bps": float(config.fee_rate_bps),
             "slippage_bps": float(config.slippage_bps),
+            "maker_fee_rate_bps": float(config.maker_fee_rate_bps),
+            "taker_fee_rate_bps": float(config.taker_fee_rate_bps),
+            "maintenance_margin_rate": float(config.maintenance_margin_rate),
         }
 
     @staticmethod
@@ -540,6 +1129,7 @@ class CryptoBacktestEngine:
         equity_curve: Sequence[dict[str, Any]],
         initial_equity: float,
         total_fees: float,
+        total_funding_cost: float,
     ) -> dict[str, Any]:
         final_equity = float(equity_curve[-1]["equity"]) if equity_curve else initial_equity
         total_return_pct = (
@@ -557,6 +1147,7 @@ class CryptoBacktestEngine:
             "total_return_pct": total_return_pct,
             "total_net_pnl": round(sum(pnl_values), 4) if pnl_values else 0.0,
             "total_fees": round(total_fees, 4),
+            "total_funding_cost": round(total_funding_cost, 4),
             "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss else None,
             "avg_trade_net_pnl": cls._average(pnl_values),
             "best_trade_return_pct": round(max(returns), 4) if returns else None,

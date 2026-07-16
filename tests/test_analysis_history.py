@@ -35,7 +35,14 @@ except ModuleNotFoundError:
     get_stock_bar = None
 
 from src.config import Config
-from src.storage import DatabaseManager, AnalysisHistory, BacktestResult, DecisionSignalRecord
+from src.storage import (
+    DatabaseManager,
+    AnalysisHistory,
+    BacktestResult,
+    CryptoBacktestResult,
+    CryptoBacktestSummary,
+    DecisionSignalRecord,
+)
 from src.analyzer import AnalysisResult
 from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
 from src.services.history_service import HistoryService
@@ -1633,6 +1640,20 @@ class AnalysisHistoryTestCase(unittest.TestCase):
                 engine_version="v1",
                 eval_status="pending",
             ))
+            session.add(CryptoBacktestResult(
+                analysis_history_id=record_id,
+                code="BTCUSDT",
+                plan_type="daily_long",
+                horizon="daily",
+                direction="long",
+                engine_version="btc-plan-v2",
+                eval_status="completed",
+            ))
+            session.add(CryptoBacktestSummary(
+                scope="overall",
+                engine_version="btc-plan-v2",
+                total_evaluations=1,
+            ))
             session.add(DecisionSignalRecord(
                 stock_code="600519",
                 stock_name="贵州茅台",
@@ -1671,6 +1692,18 @@ class AnalysisHistoryTestCase(unittest.TestCase):
             self.assertIsNone(session.query(AnalysisHistory).filter(AnalysisHistory.id == record_id).first())
             self.assertEqual(
                 session.query(BacktestResult).filter(BacktestResult.analysis_history_id == record_id).count(),
+                0,
+            )
+            self.assertEqual(
+                session.query(CryptoBacktestResult).filter(
+                    CryptoBacktestResult.analysis_history_id == record_id
+                ).count(),
+                0,
+            )
+            self.assertEqual(
+                session.query(CryptoBacktestSummary).filter(
+                    CryptoBacktestSummary.engine_version == "btc-plan-v2"
+                ).count(),
                 0,
             )
             self.assertEqual(

@@ -86,4 +86,46 @@ describe('ReportBacktestSummary', () => {
     });
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('distinguishes open windows, legacy contracts, and no-trade plans', async () => {
+    vi.mocked(backtestApi.getHistoryRecord).mockResolvedValueOnce({
+      ...historyRecord,
+      backtestStatus: 'pending',
+      plans: [
+        {
+          ...historyRecord.plans[0],
+          backtestStatus: 'insufficient_data',
+        },
+        {
+          ...historyRecord.plans[0],
+          planType: 'daily_short',
+          backtestable: false,
+          missingFields: ['execution_contract'],
+          backtestStatus: 'invalid_plan',
+          latestResult: null,
+        },
+        {
+          ...historyRecord.plans[0],
+          planType: 'intraday',
+          direction: 'wait',
+          backtestable: false,
+          qualityStatus: 'no_trade_plan',
+          missingFields: [],
+          noTradeReason: '小时线结构尚未确认',
+          backtestStatus: 'skipped',
+          latestResult: null,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <ReportBacktestSummary recordId={7} stockCode="BTC" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('等待评估数据')).toBeInTheDocument();
+    expect(screen.getByText('旧报告没有 v3 执行契约，不计入有效样本')).toBeInTheDocument();
+    expect(screen.getByText('观望计划，不计入有效样本：小时线结构尚未确认')).toBeInTheDocument();
+  });
 });

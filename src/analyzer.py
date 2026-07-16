@@ -63,6 +63,7 @@ from src.report_language import (
 )
 from src.schemas.decision_action import build_action_fields
 from src.schemas.report_schema import AnalysisReportSchema
+from src.schemas.crypto_instrument import resolve_crypto_instrument
 from src.core.trading_calendar import get_market_for_stock
 from src.market_context import get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
@@ -1968,6 +1969,31 @@ class GeminiAnalyzer:
                 "entry_price": "多单入场价：XX（突破确认/回踩确认）",
                 "stop_loss": "多单止损：XX",
                 "take_profit": "多单目标：XX",
+                "execution_contract": {
+                    "version": "btc-execution-v1",
+                    "instrument": {
+                        "type": "{crypto_execution_instrument_type}",
+                        "venue": "{crypto_execution_venue}",
+                        "symbol": "{crypto_execution_canonical_symbol}",
+                        "market_symbol": "{crypto_execution_market_symbol}",
+                        "trigger_price_type": "trade",
+                        "fill_price_type": "trade",
+                        "liquidation_price_type": "{crypto_execution_liquidation_price_type}",
+                        "margin_mode": "{crypto_execution_margin_mode}"
+                    },
+                    "entry": {
+                        "logic": "all",
+                        "conditions": [
+                            {"type": "close_above", "value": 多单确认价数值},
+                            {"type": "volume_ratio_gte", "value": 最低量比数值},
+                            {"type": "close_above_vwap"}
+                        ],
+                        "confirmation_bars": 1,
+                        "fill": "next_bar_open",
+                        "max_wait_bars": 3
+                    },
+                    "exit": {"max_holding_bars": 5}
+                },
                 "trigger_condition": "多单触发条件",
                 "invalidation": "多单失效条件",
                 "invalid_condition": "多单失效条件（结构化字段，和 invalidation 保持一致或更精确）",
@@ -1984,6 +2010,31 @@ class GeminiAnalyzer:
                 "entry_price": "空单入场价：XX（跌破确认/反抽确认）",
                 "stop_loss": "空单止损：XX",
                 "take_profit": "空单目标：XX",
+                "execution_contract": {
+                    "version": "btc-execution-v1",
+                    "instrument": {
+                        "type": "{crypto_execution_instrument_type}",
+                        "venue": "{crypto_execution_venue}",
+                        "symbol": "{crypto_execution_canonical_symbol}",
+                        "market_symbol": "{crypto_execution_market_symbol}",
+                        "trigger_price_type": "trade",
+                        "fill_price_type": "trade",
+                        "liquidation_price_type": "{crypto_execution_liquidation_price_type}",
+                        "margin_mode": "{crypto_execution_margin_mode}"
+                    },
+                    "entry": {
+                        "logic": "all",
+                        "conditions": [
+                            {"type": "close_below", "value": 空单确认价数值},
+                            {"type": "volume_ratio_gte", "value": 最低量比数值},
+                            {"type": "close_below_vwap"}
+                        ],
+                        "confirmation_bars": 1,
+                        "fill": "next_bar_open",
+                        "max_wait_bars": 3
+                    },
+                    "exit": {"max_holding_bars": 5}
+                },
                 "trigger_condition": "空单触发条件",
                 "invalidation": "空单失效条件",
                 "invalid_condition": "空单失效条件（结构化字段，和 invalidation 保持一致或更精确）",
@@ -2001,6 +2052,31 @@ class GeminiAnalyzer:
                 "entry_price": "小时线日内入场价：XX；无机会则写等待",
                 "stop_loss": "小时线日内止损：XX；必须受日线失效位约束",
                 "take_profit": "小时线日内目标：XX",
+                "execution_contract": {
+                    "version": "btc-execution-v1",
+                    "instrument": {
+                        "type": "{crypto_execution_instrument_type}",
+                        "venue": "{crypto_execution_venue}",
+                        "symbol": "{crypto_execution_canonical_symbol}",
+                        "market_symbol": "{crypto_execution_market_symbol}",
+                        "trigger_price_type": "trade",
+                        "fill_price_type": "trade",
+                        "liquidation_price_type": "{crypto_execution_liquidation_price_type}",
+                        "margin_mode": "{crypto_execution_margin_mode}"
+                    },
+                    "entry": {
+                        "logic": "all",
+                        "conditions": [
+                            {"type": "close_above/close_below", "value": 日内确认价数值},
+                            {"type": "volume_ratio_gte", "value": 最低量比数值},
+                            {"type": "close_above_vwap/close_below_vwap"}
+                        ],
+                        "confirmation_bars": 1,
+                        "fill": "next_bar_open",
+                        "max_wait_bars": 8
+                    },
+                    "exit": {"max_holding_bars": 12}
+                },
                 "trigger_condition": "小时线触发条件",
                 "invalidation": "小时线失效条件",
                 "invalid_condition": "小时线失效条件（结构化字段，和 invalidation 保持一致或更精确）",
@@ -2239,6 +2315,40 @@ class GeminiAnalyzer:
                 .replace("{default_skill_policy_section}", default_skill_policy_section)
                 .replace("{skills_section}", skills_section)
             )
+        runtime_config = self._get_runtime_config()
+        execution_venue = str(
+            getattr(runtime_config, "crypto_trading_exchange", "okx") or "okx"
+        ).strip().lower()
+        execution_symbol = str(
+            getattr(runtime_config, "crypto_trading_default_symbol", "BTC/USDT:USDT")
+            or "BTC/USDT:USDT"
+        ).strip()
+        execution_margin_mode = (
+            getattr(runtime_config, "okx_td_mode", "cross")
+            if execution_venue == "okx"
+            else getattr(runtime_config, "bybit_margin_mode", "isolated")
+        )
+        execution_instrument = resolve_crypto_instrument(
+            execution_symbol,
+            default_type="perpetual" if execution_symbol.upper().endswith(":USDT") else "spot",
+            venue=execution_venue,
+            margin_mode=execution_margin_mode,
+        ) or resolve_crypto_instrument(
+            "BTC-USDT-PERP",
+            default_type="perpetual",
+            venue="okx",
+            margin_mode="isolated",
+        )
+        instrument_values = {
+            "{crypto_execution_instrument_type}": execution_instrument.instrument_type,
+            "{crypto_execution_venue}": execution_instrument.venue,
+            "{crypto_execution_canonical_symbol}": execution_instrument.canonical_symbol,
+            "{crypto_execution_market_symbol}": execution_instrument.market_symbol,
+            "{crypto_execution_liquidation_price_type}": execution_instrument.liquidation_price_type or "",
+            "{crypto_execution_margin_mode}": execution_instrument.margin_mode or "",
+        }
+        for placeholder, value in instrument_values.items():
+            base_prompt = base_prompt.replace(placeholder, value)
         if lang == "en":
             return base_prompt + """
 
@@ -3390,8 +3500,10 @@ class GeminiAnalyzer:
 > BTC 冲突判定规则：当短线 Price Action 与中线 EMA/VWAP 冲突时，定义为“反弹/回调或短线推进”，不得直接升级为趋势反转；只有 Price Action、VWAP、EMA、Volume 至少三项同向确认，才可称为趋势延续或反转。
 > BTC 本轮分析模式：{mode_instruction}
 > BTC 双向交易要求：BTC 支持多单和空单，分析时必须同时评估 Long/多单与 Short/空单，不得只给多单买入视角。若多头条件更强，给出多单入场、止损、目标和失效条件；若空头条件更强，给出空单入场/做空开仓、止损、目标和失效条件；若多空都不满足，明确“不做多也不做空，等待确认”。
-> BTC 日线策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 只承载日线级主策略，必须同时输出，分别包含 `plan_type`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件和 `no_trade_reason`，不要省略该方向。
-> BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `plan_type`、`enabled`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`invalid_condition`、`daily_constraint`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件和 `no_trade_reason`。
+> BTC 日线策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 只承载日线级主策略，必须同时输出，分别包含 `plan_type`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`execution_contract`、`trigger_condition`、`invalidation`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件和 `no_trade_reason`，不要省略该方向。
+> BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `plan_type`、`enabled`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`execution_contract`、`trigger_condition`、`invalidation`、`invalid_condition`、`daily_constraint`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件和 `no_trade_reason`。
+> BTC 可回测执行契约：所有 `direction=long/short` 且可交易的 BTC 计划必须同时输出 `execution_contract`，版本固定为 `btc-execution-v1`。`instrument` 必须完整保留系统给出的 `type`、`venue`、`symbol`、`market_symbol`、成交/触发/强平价格类型和保证金模式，不得把现货与永续互换。入场条件只允许 `close_above`、`close_below`、`volume_ratio_gte`、`volume_ratio_lte`、`close_above_vwap`、`close_below_vwap`；`logic` 固定为 `all`，`fill` 固定为 `next_bar_open`，并给出 `confirmation_bars`、`max_wait_bars` 和 `exit.max_holding_bars`。契约必须完整表达 `trigger_condition`，禁止把“站稳、放量、企稳”等额外条件只写在自然语言里。无法用这些原语完整表达时必须设为不交易，不得输出会被降级为触价成交的计划。
+> `execution_contract.entry.conditions[].type` 必须从上述单个枚举值中选择，禁止输出带 `/` 的组合占位字符串；多单通常使用 `close_above`/`close_above_vwap`，空单通常使用 `close_below`/`close_below_vwap`。
 > BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。
 > BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；为避免合约语义歧义，`buy` 仅表示 Long / 多单开仓或加多，`sell` 仅表示 Short / 空单开仓、加空或多单风控退出，`hold` 表示 Flat / 空仓等待、持仓观望或区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”；若是平空或平多，必须在文字中明确写“平空/平多”，不要只依赖 `buy`/`sell`。
 """
@@ -3407,6 +3519,17 @@ class GeminiAnalyzer:
             derivatives = crypto_technical.get("derivatives") if isinstance(crypto_technical.get("derivatives"), dict) else {}
             funding = derivatives.get("funding") if isinstance(derivatives.get("funding"), dict) else {}
             open_interest = derivatives.get("open_interest") if isinstance(derivatives.get("open_interest"), dict) else {}
+            funding_history = funding.get("history_7d") if isinstance(funding.get("history_7d"), dict) else {}
+            oi_history = open_interest.get("history_24h") if isinstance(open_interest.get("history_24h"), dict) else {}
+            basis = derivatives.get("basis") if isinstance(derivatives.get("basis"), dict) else {}
+            long_short_ratio = derivatives.get("long_short_ratio") if isinstance(derivatives.get("long_short_ratio"), dict) else {}
+            cross_exchange = derivatives.get("cross_exchange") if isinstance(derivatives.get("cross_exchange"), dict) else {}
+            macro_correlation = crypto_technical.get("macro_correlation") if isinstance(crypto_technical.get("macro_correlation"), dict) else {}
+            macro_assets = macro_correlation.get("assets") if isinstance(macro_correlation.get("assets"), dict) else {}
+            nasdaq_corr = macro_assets.get("nasdaq") if isinstance(macro_assets.get("nasdaq"), dict) else {}
+            dxy_corr = macro_assets.get("dxy") if isinstance(macro_assets.get("dxy"), dict) else {}
+            us10y_corr = macro_assets.get("us10y") if isinstance(macro_assets.get("us10y"), dict) else {}
+            gold_corr = macro_assets.get("gold") if isinstance(macro_assets.get("gold"), dict) else {}
             hourly_opportunity = intraday.get("opportunity", "N/A")
             if not hourly_crypto:
                 hourly_opportunity = "小时线数据缺失，日内交易计划必须设为 enabled=false、direction=\"wait\"，等待小时线数据恢复或新的日内触发。"
@@ -3447,7 +3570,8 @@ class GeminiAnalyzer:
 | 小时线 Volume/VWAP/EMA/ATR | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')}；ATR14={hourly_volatility.get('atr14', 'N/A')}；ATR14%={hourly_volatility.get('atr14_pct', 'N/A')}% | 判断日内触发是否有量价、均线和波动率确认；止损不得落在小时线常规 ATR 噪音内 |
 | 小时线急跌/扫低事件 | 类型={hourly_event.get('type', 'N/A')}；建议方向={hourly_event.get('suggested_direction', 'N/A')}；紧急度={hourly_event.get('urgency', 'N/A')}；参考高点={hourly_event.get('reference_high', 'N/A')}；事件低点={hourly_event.get('event_low', 'N/A')}；事件K高点={hourly_event.get('event_bar_high', 'N/A')}；高点到低点跌幅={hourly_event.get('drop_from_reference_high_pct', 'N/A')}%；低点反弹={hourly_event.get('rebound_from_event_low_pct', 'N/A')}%；ATR位移={hourly_event.get('atr_move', 'N/A')}；多单确认价={hourly_trigger_reference.get('long_confirmation_price', 'N/A')}；多单失效价={hourly_trigger_reference.get('long_invalidation_price', 'N/A')}；空单跌破价={hourly_trigger_reference.get('short_breakdown_price', 'N/A')} | 若出现 `sharp_selloff_*`、`selloff_rebound_*` 或 `liquidity_sweep_low_reversal_candidate`，不得只写泛泛观望；必须给出“上破多单确认价才进场”和“跌破空单跌破价则放弃抄底/转空”的明确二选一条件 |
 | 日内机会 | {hourly_opportunity} | 必须写清是否有日内交易机会；没有机会时说明等待什么小时线条件 |
-| 衍生品杠杆环境 | 数据质量={derivatives.get('data_quality', 'N/A')}；资金费率={funding.get('rate_pct', 'N/A')}%；资金费率状态={funding.get('state', 'N/A')}；持仓量={open_interest.get('value', 'N/A')} BTC；名义规模={open_interest.get('notional_usdt', 'N/A')} USDT；持仓状态={open_interest.get('state', 'N/A')}；杠杆压力={derivatives.get('leverage_pressure', 'N/A')} | Funding 为正且偏高时警惕多头拥挤和追多回撤；Funding 为负且偏深时警惕空头拥挤和 short squeeze；OI 高企时降低追涨追空置信度，数据缺失必须标记为不确定而不是中性 |
+| 衍生品杠杆环境 | 数据质量={derivatives.get('data_quality', 'N/A')}；资金费率={funding.get('rate_pct', 'N/A')}%；状态={funding.get('state', 'N/A')}；7日均值={funding_history.get('avg_rate_pct', 'N/A')}%；趋势={funding_history.get('trend', 'N/A')}；持仓量={open_interest.get('value', 'N/A')} BTC；名义规模={open_interest.get('notional_usdt', 'N/A')} USDT；OI 24h变化={oi_history.get('change_pct', 'N/A')}%；OI趋势={oi_history.get('state', 'N/A')}；永续基差={basis.get('perpetual_premium_pct', 'N/A')}%；基差状态={basis.get('state', 'N/A')}；多空比={long_short_ratio.get('current', 'N/A')}；多空比状态={long_short_ratio.get('state', 'N/A')}；跨所质量={cross_exchange.get('data_quality', 'N/A')}；跨所Funding差={cross_exchange.get('funding_spread_pct', 'N/A')}%；杠杆压力={derivatives.get('leverage_pressure', 'N/A')} | Funding 为正且偏高时警惕多头拥挤和追多回撤；Funding 为负且偏深时警惕空头拥挤和 short squeeze；结合 Funding 趋势、OI 变化、基差和多空比判断杠杆扩张/去杠杆，跨所只有单源时必须降置信度；数据缺失必须标记为不确定而不是中性 |
+| 跨市场相关性 | 数据质量={macro_correlation.get('data_quality', 'N/A')}；纳指30/60日={nasdaq_corr.get('correlation_30d', 'N/A')}/{nasdaq_corr.get('correlation_60d', 'N/A')}，状态={nasdaq_corr.get('state', 'N/A')}；DXY30/60日={dxy_corr.get('correlation_30d', 'N/A')}/{dxy_corr.get('correlation_60d', 'N/A')}，状态={dxy_corr.get('state', 'N/A')}；美债10Y30/60日={us10y_corr.get('correlation_30d', 'N/A')}/{us10y_corr.get('correlation_60d', 'N/A')}，状态={us10y_corr.get('state', 'N/A')}；黄金30/60日={gold_corr.get('correlation_30d', 'N/A')}/{gold_corr.get('correlation_60d', 'N/A')}，状态={gold_corr.get('state', 'N/A')} | 相关性只用于识别风险因子暴露和仓位降权，不作为单独入场依据；纳指高正相关时视为科技风险资产暴露，DXY/美债相关性突变时降低方向置信度；样本不足不得推断 |
 
 > BTC 小时线约束：小时线是独立的日内机会层，不再强制服从日线方向。日线偏空但小时线出现多单机会、或日线偏多但小时线出现空单机会时，可以给出逆日线短线计划，但必须明确这是日内/短线机会，止损更严格、仓位更轻、有效期更短，并写清触发价、止损、目标、失效条件和 `daily_constraint`。必须写入 `dashboard.battle_plan.intraday_plan`；若小时线数据缺失或没有日内机会，`enabled=false`、`direction="wait"`，并说明等待条件。
 > BTC 急跌机会约束：当“小时线急跌/扫低事件”的类型不是 `none` 时，`dashboard.battle_plan.intraday_plan.trigger_condition` 必须引用“多单确认价”或“空单跌破价”中的具体数值；`invalidation` 必须引用“多单失效价”或事件低点；`reason` 必须说明这是急跌后的右侧确认/假跌破反弹/跌破延续，禁止只输出“暂无明确信号”而不给可执行等待价位。

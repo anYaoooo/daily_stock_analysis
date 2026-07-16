@@ -84,6 +84,7 @@ from src.core.trading_calendar import (
 )
 from data_provider.crypto_fetcher import CryptoFetcher, is_crypto_code
 from data_provider.crypto_derivatives_fetcher import CryptoDerivativesFetcher
+from data_provider.crypto_macro_fetcher import CryptoMacroContextFetcher
 from data_provider.us_index_mapping import is_us_stock_code
 from bot.models import BotMessage
 
@@ -170,7 +171,6 @@ class StockAnalysisPipeline:
             self.search_service = SearchService(
                 bocha_keys=self.config.bocha_api_keys,
                 tavily_keys=self.config.tavily_api_keys,
-                anspire_keys=self.config.anspire_api_keys,
                 brave_keys=self.config.brave_api_keys,
                 serpapi_keys=self.config.serpapi_keys,
                 minimax_keys=self.config.minimax_api_keys,
@@ -490,6 +490,17 @@ class StockAnalysisPipeline:
                         except Exception as exc:
                             logger.warning(
                                 "%s(%s) BTC 衍生品数据获取失败，继续使用技术面上下文: %s",
+                                stock_name,
+                                code,
+                                exc,
+                            )
+                        try:
+                            macro_context = CryptoMacroContextFetcher().get_btc_macro_context(df)
+                            if isinstance(macro_context, dict):
+                                crypto_technical_context["macro_correlation"] = macro_context
+                        except Exception as exc:
+                            logger.warning(
+                                "%s(%s) BTC 宏观相关性数据获取失败，继续使用技术面上下文: %s",
                                 stock_name,
                                 code,
                                 exc,

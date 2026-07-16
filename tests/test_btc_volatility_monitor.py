@@ -127,3 +127,16 @@ def test_btc_volatility_monitor_expires_unconfirmed_opportunity() -> None:
 
     assert expired["reason"] == "watch_expired"
     assert expired["triggered"] == 0
+
+
+def test_btc_volatility_monitor_contains_quote_provider_errors() -> None:
+    monitor = BTCVolatilityMonitor(
+        quote_fetcher=lambda _symbol: (_ for _ in ()).throw(RuntimeError("all providers unavailable")),
+        now_provider=lambda: 1000.0,
+    )
+
+    result = monitor.run_once(_config())
+
+    assert result["reason"] == "quote_error"
+    assert result["error_type"] == "RuntimeError"
+    assert result["triggered"] == 0

@@ -891,7 +891,7 @@ class Config:
     backtest_engine_version: str = "v1"
     backtest_neutral_band_pct: float = 2.0
     crypto_backtest_min_age_hours: int = 24
-    crypto_backtest_engine_version: str = "btc-plan-v2"
+    crypto_backtest_engine_version: str = "btc-plan-v4"
     crypto_backtest_neutral_band_pct: float = 0.2
     crypto_backtest_initial_equity: float = 10000.0
     crypto_backtest_risk_per_trade_pct: float = 1.0
@@ -899,6 +899,12 @@ class Config:
     crypto_backtest_leverage: float = 1.0
     crypto_backtest_fee_rate_bps: float = 5.0
     crypto_backtest_slippage_bps: float = 2.0
+    crypto_backtest_maker_fee_rate_bps: float = 2.0
+    crypto_backtest_taker_fee_rate_bps: float = 5.0
+    crypto_backtest_maintenance_margin_rate: float = 0.005
+    crypto_market_fetch_budget_seconds: float = 60.0
+    crypto_market_fetch_max_pages: int = 200
+    crypto_market_fetch_retry_count: int = 2
     
     # === 日志配置 ===
     log_dir: str = "./logs"  # 日志文件目录
@@ -932,7 +938,7 @@ class Config:
     enable_chip_distribution: bool = True
     # 东财接口补丁开关
     enable_eastmoney_patch: bool = False
-    # BTC-only 模式固定使用 CryptoFetcher；底层通过 CCXT 对接 Binance 公共行情。
+    # BTC-only 模式固定使用 CryptoFetcher；底层以 OKX 为主并跨交易所降级。
     realtime_source_priority: str = "crypto"
     # 实时行情缓存时间（秒）
     realtime_cache_ttl: int = 600
@@ -1786,7 +1792,7 @@ class Config:
                 field_name='CRYPTO_BACKTEST_MIN_AGE_HOURS',
                 minimum=1,
             ),
-            crypto_backtest_engine_version=os.getenv('CRYPTO_BACKTEST_ENGINE_VERSION', 'btc-plan-v2'),
+            crypto_backtest_engine_version=os.getenv('CRYPTO_BACKTEST_ENGINE_VERSION', 'btc-plan-v4'),
             crypto_backtest_neutral_band_pct=parse_env_float(
                 os.getenv('CRYPTO_BACKTEST_NEUTRAL_BAND_PCT'),
                 0.2,
@@ -1828,6 +1834,43 @@ class Config:
                 2.0,
                 field_name='CRYPTO_BACKTEST_SLIPPAGE_BPS',
                 minimum=0.0,
+            ),
+            crypto_backtest_maker_fee_rate_bps=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_MAKER_FEE_RATE_BPS'),
+                2.0,
+                field_name='CRYPTO_BACKTEST_MAKER_FEE_RATE_BPS',
+                minimum=0.0,
+            ),
+            crypto_backtest_taker_fee_rate_bps=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_TAKER_FEE_RATE_BPS'),
+                5.0,
+                field_name='CRYPTO_BACKTEST_TAKER_FEE_RATE_BPS',
+                minimum=0.0,
+            ),
+            crypto_backtest_maintenance_margin_rate=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE'),
+                0.005,
+                field_name='CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE',
+                minimum=0.0,
+                maximum=0.5,
+            ),
+            crypto_market_fetch_budget_seconds=parse_env_float(
+                os.getenv('CRYPTO_MARKET_FETCH_BUDGET_SECONDS'),
+                60.0,
+                field_name='CRYPTO_MARKET_FETCH_BUDGET_SECONDS',
+                minimum=1.0,
+            ),
+            crypto_market_fetch_max_pages=parse_env_int(
+                os.getenv('CRYPTO_MARKET_FETCH_MAX_PAGES'),
+                200,
+                field_name='CRYPTO_MARKET_FETCH_MAX_PAGES',
+                minimum=1,
+            ),
+            crypto_market_fetch_retry_count=parse_env_int(
+                os.getenv('CRYPTO_MARKET_FETCH_RETRY_COUNT'),
+                2,
+                field_name='CRYPTO_MARKET_FETCH_RETRY_COUNT',
+                minimum=0,
             ),
             log_dir=os.getenv('LOG_DIR', './logs'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),

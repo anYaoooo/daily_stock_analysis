@@ -1,11 +1,11 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { Eye, FileText, Play, RefreshCw, Trash2 } from 'lucide-react';
 import { backtestApi } from '../api/backtest';
 import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { historyApi } from '../api/history';
-import { ApiErrorAlert, Badge, Card, EmptyState, Pagination } from '../components/common';
+import { ApiErrorAlert, Badge, Card, Drawer, EmptyState, Pagination } from '../components/common';
 import type {
   BacktestRunResponse,
   BacktestTimeframeFilter,
@@ -49,16 +49,42 @@ function directionLabel(value: string): string {
   return labels[value] ?? value;
 }
 
+function formatAnalysisTime(value?: string): string {
+  if (!value) return '--';
+  return value.replace('T', ' ').slice(0, 16);
+}
+
+function planResultSummary(plans: CryptoBacktestHistoryPlan[]): string {
+  if (!plans.length) return '无计划';
+  const labels: Record<string, string> = {
+    win: '盈利',
+    loss: '亏损',
+    neutral: '持平',
+    no_entry: '未触发',
+    pending: '待回测',
+    insufficient_data: '等待数据',
+    invalid_plan: '不可评估',
+    skipped: '跳过',
+  };
+  const counts = new Map<string, number>();
+  plans.forEach((plan) => {
+    const status = plan.latestResult?.outcome || plan.backtestStatus || 'pending';
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  });
+  return Array.from(counts, ([status, count]) => `${labels[status] ?? status} ${count}`).join(' · ');
+}
+
 function statusBadge(status: string): React.ReactNode {
   const normalized = status || 'pending';
   if (['win', 'completed'].includes(normalized)) return <Badge variant="success">{normalized === 'win' ? '盈利' : '已回测'}</Badge>;
   if (normalized === 'loss') return <Badge variant="danger">亏损</Badge>;
   if (['neutral', 'no_entry'].includes(normalized)) return <Badge variant="warning">{normalized === 'no_entry' ? '未触发' : '持平'}</Badge>;
   if (normalized === 'pending') return <Badge variant="default">待回测</Badge>;
+  if (normalized === 'skipped') return <Badge variant="default">不计入样本</Badge>;
   if (normalized === 'invalid_plan') return <Badge variant="danger">计划缺字段</Badge>;
   if (normalized === 'no_plan') return <Badge variant="default">无计划</Badge>;
   if (normalized === 'partial') return <Badge variant="warning">部分回测</Badge>;
-  if (normalized === 'insufficient_data') return <Badge variant="warning">样本不足</Badge>;
+  if (normalized === 'insufficient_data') return <Badge variant="warning">等待评估数据</Badge>;
   return <Badge variant="default">{normalized}</Badge>;
 }
 
@@ -74,7 +100,7 @@ const RunSummary: React.FC<{ data: BacktestRunResponse }> = ({ data }) => (
     <span className="label">记录 <span className="value">{data.processed}</span></span>
     <span className="label">写入 <span className="value primary">{data.saved}</span></span>
     <span className="label">完成 <span className="value success">{data.completed}</span></span>
-    <span className="label">样本不足 <span className="value warning">{data.insufficient}</span></span>
+    <span className="label">等待评估数据 <span className="value warning">{data.insufficient}</span></span>
     {data.skipped ? <span className="label">跳过 <span className="value">{data.skipped}</span></span> : null}
     {data.errors > 0 ? <span className="label">错误 <span className="value danger">{data.errors}</span></span> : null}
   </div>
@@ -98,16 +124,32 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
     );
   }
 
+  const sampleConfidence = metrics.diagnostics?.sampleConfidence as
+    | { isLowConfidence?: boolean; sampleCount?: number; minimumSampleCount?: number }
+    | undefined;
+  const metricSemantics = metrics.diagnostics?.metricSemantics;
+  const contractMetrics = metricSemantics === 'structured_execution_contract';
+  const rawTriggeredCount = metrics.diagnostics?.rawTriggeredCount;
+  const overlapExcludedCount = metrics.diagnostics?.overlapExcludedCount;
+
   return (
     <Card variant="gradient" padding="md">
-      <div className="mb-3">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <span className="label-uppercase">BTC 计划表现</span>
+        {sampleConfidence?.isLowConfidence ? <Badge variant="warning">低样本</Badge> : null}
       </div>
-      <MetricRow label="胜率" value={pct(metrics.winRatePct)} />
+      <MetricRow label={contractMetrics ? '策略契约胜率' : '触价代理胜率'} value={pct(metrics.winRatePct)} />
       <MetricRow label="方向准确率" value={pct(metrics.directionAccuracyPct)} />
       <MetricRow label="平均净收益" value={pct(metrics.avgSimulatedReturnPct)} />
-      <MetricRow label="已触发 / 总样本" value={`${metrics.triggeredCount ?? 0} / ${metrics.totalEvaluations}`} />
+      <MetricRow label="独立成交 / 已完成评估" value={`${metrics.triggeredCount ?? 0} / ${metrics.completedCount}`} />
+      <MetricRow label="不可评估 / 等待数据" value={`${metrics.skippedCount ?? 0} / ${metrics.insufficientCount ?? 0}`} />
+      {typeof rawTriggeredCount === 'number' && typeof overlapExcludedCount === 'number' ? (
+        <MetricRow label="原始触发 / 重叠排除" value={`${rawTriggeredCount} / ${overlapExcludedCount}`} />
+      ) : null}
       <MetricRow label="盈利 / 亏损 / 持平" value={`${metrics.winCount} / ${metrics.lossCount} / ${metrics.neutralCount}`} />
+      {sampleConfidence?.minimumSampleCount ? (
+        <MetricRow label="可信样本门槛" value={`${sampleConfidence.sampleCount ?? 0} / ${sampleConfidence.minimumSampleCount}`} />
+      ) : null}
     </Card>
   );
 };
@@ -117,6 +159,7 @@ type IndicatorBucket = {
   dimensionLabel?: string;
   key: string;
   totalEvaluations: number;
+  completedCount?: number;
   triggeredCount?: number;
   winRatePct?: number | null;
   avgSimulatedReturnPct?: number | null;
@@ -168,7 +211,7 @@ const IndicatorGroupCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ 
               {bucket.sampleConfidence?.isLowConfidence ? <Badge variant="warning">低样本</Badge> : null}
             </div>
             <div className="mt-1 grid grid-cols-2 gap-1 text-xs text-muted-text">
-              <span>样本 {bucket.totalEvaluations}</span>
+              <span>已完成 {bucket.completedCount ?? 0}</span>
               <span>触发 {bucket.triggeredCount ?? 0}</span>
               <span>胜率 {pct(bucket.winRatePct)}</span>
               <span>均收益 {pct(bucket.avgSimulatedReturnPct)}</span>
@@ -205,6 +248,9 @@ const PlanSummary: React.FC<{
         <span>止盈 {plan.takeProfit ?? '--'}</span>
         <span>风报比 {plan.riskReward || money(trade.rMultiple)}</span>
       </div>
+      {plan.executionContract ? (
+        <div className="mt-2"><Badge variant="info">结构化执行契约</Badge></div>
+      ) : null}
       {(plan.positionHint || plan.confidence || plan.invalidCondition) ? (
         <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-muted-text">
           {plan.positionHint ? <span>仓位 {plan.positionHint}</span> : null}
@@ -231,8 +277,12 @@ const PlanSummary: React.FC<{
         </div>
       ) : null}
       {!plan.backtestable ? (
-        <p className="mt-2 text-xs text-danger">
-          缺少关键字段：{plan.missingFields.join('、') || plan.noTradeReason || '不可回测'}
+        <p className={`mt-2 text-xs ${plan.qualityStatus === 'no_trade_plan' ? 'text-muted-text' : 'text-danger'}`}>
+          {plan.qualityStatus === 'no_trade_plan'
+            ? `观望计划，不计入有效样本${plan.noTradeReason ? `：${plan.noTradeReason}` : ''}`
+            : plan.missingFields.length === 1 && plan.missingFields[0] === 'execution_contract'
+            ? '旧报告没有 v3 执行契约，不计入有效样本'
+            : `缺少关键字段：${plan.missingFields.join('、') || plan.noTradeReason || '不可回测'}`}
         </p>
       ) : null}
       <div className="mt-3 flex justify-end">
@@ -271,6 +321,7 @@ const BacktestPage: React.FC = () => {
   const [forceRerun, setForceRerun] = useState(false);
   const [runResult, setRunResult] = useState<BacktestRunResponse | null>(null);
   const [error, setError] = useState<ParsedApiError | null>(null);
+  const [detailItem, setDetailItem] = useState<CryptoBacktestHistoryItem | null>(null);
 
   useEffect(() => {
     document.title = 'BTC 回测 - DSA';
@@ -448,7 +499,7 @@ const BacktestPage: React.FC = () => {
             <option value="loss">亏损</option>
             <option value="neutral">持平</option>
             <option value="no_entry">未触发</option>
-            <option value="insufficient_data">样本不足</option>
+            <option value="insufficient_data">等待评估数据</option>
             <option value="invalid_plan">计划缺字段</option>
           </select>
           <button
@@ -545,85 +596,110 @@ const BacktestPage: React.FC = () => {
                 <span className="backtest-table-scroll-hint">可横向滚动查看计划摘要</span>
               </div>
 
-              <div className="flex flex-col gap-3">
-                {history.map((item) => {
-                  const isSelected = selectedSet.has(item.analysisHistoryId);
-                  const backtestablePlans = item.plans.filter((plan) => plan.backtestable);
-                  return (
-                    <div
-                      key={item.analysisHistoryId}
-                      className="rounded-xl border border-white/10 bg-card/70 p-4 shadow-soft-card"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <label className="flex min-w-0 items-start gap-3">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleSelect(item.analysisHistoryId)}
-                            className="mt-1 h-4 w-4 rounded border-border bg-elevated"
-                          />
-                          <span className="min-w-0">
-                            <span className="flex flex-wrap items-center gap-2">
-                              <span className="font-mono text-sm text-foreground">{item.code}</span>
-                              <Badge variant="history">#{item.analysisHistoryId}</Badge>
-                              <Badge variant={item.analysisMode === 'hourly' ? 'warning' : 'default'}>
-                                {item.analysisTimeframe || item.analysisMode || '日线'}
-                              </Badge>
-                              {statusBadge(item.backtestStatus)}
-                            </span>
-                            <span className="mt-1 block text-xs text-muted-text">
-                              {item.analysisCreatedAt || '--'} · {item.stockName || 'Bitcoin'}
-                            </span>
-                            <span className="mt-2 block max-w-3xl truncate text-sm text-secondary-text">
-                              {item.analysisSummary || item.trendPrediction || item.operationAdvice || '无摘要'}
-                            </span>
-                          </span>
-                        </label>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Link
-                            to={`/?history=${item.analysisHistoryId}`}
-                            className="btn-secondary inline-flex items-center gap-1.5 text-xs"
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                            报告
-                          </Link>
-                          <button
-                            type="button"
-                            disabled={!backtestablePlans.length || runningRecordId === item.analysisHistoryId}
-                            onClick={() => void runForIds([item.analysisHistoryId])}
-                            className="btn-primary inline-flex items-center gap-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {runningRecordId === item.analysisHistoryId ? (
-                              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Play className="h-3.5 w-3.5" />
-                            )}
-                            回测记录
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 grid gap-2 xl:grid-cols-3">
-                        {item.plans.length ? item.plans.map((plan) => (
-                          <PlanSummary
-                            key={`${item.analysisHistoryId}:${plan.planType}`}
-                            plan={plan}
-                            runningKey={runningRecordId === item.analysisHistoryId ? runningPlanKey : null}
-                            onRun={(selectedPlan) => {
-                              setRunningRecordId(item.analysisHistoryId);
-                              setRunningPlanKey(selectedPlan.planType);
-                              void runForIds([item.analysisHistoryId], [selectedPlan.planType]);
-                            }}
-                          />
-                        )) : (
-                          <div className="rounded-lg border border-dashed border-white/10 p-3 text-sm text-muted-text">
-                            该报告没有可解析的结构化交易计划。
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="overflow-x-auto rounded-lg border border-border/70 bg-card/55">
+                <table className="w-full min-w-[1120px] text-left text-sm" aria-label="BTC 回测历史分析记录">
+                  <thead className="border-b border-border/70 bg-elevated/45 text-xs text-muted-text">
+                    <tr>
+                      <th className="w-11 px-3 py-3">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          onChange={toggleSelectVisible}
+                          aria-label="全选当前页"
+                          className="h-4 w-4 rounded border-border bg-elevated"
+                        />
+                      </th>
+                      <th className="px-3 py-3 font-medium">分析时间</th>
+                      <th className="px-3 py-3 font-medium">记录</th>
+                      <th className="px-3 py-3 font-medium">周期</th>
+                      <th className="min-w-72 px-3 py-3 font-medium">分析摘要</th>
+                      <th className="min-w-56 px-3 py-3 font-medium">计划</th>
+                      <th className="px-3 py-3 font-medium">状态</th>
+                      <th className="min-w-40 px-3 py-3 font-medium">结果摘要</th>
+                      <th className="px-3 py-3 text-right font-medium">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((item) => {
+                      const isSelected = selectedSet.has(item.analysisHistoryId);
+                      const backtestablePlans = item.plans.filter((plan) => plan.backtestable);
+                      return (
+                        <tr
+                          key={item.analysisHistoryId}
+                          className="border-b border-border/45 transition-colors hover:bg-hover/40 last:border-0"
+                        >
+                          <td className="px-3 py-3">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelect(item.analysisHistoryId)}
+                              aria-label={`选择记录 #${item.analysisHistoryId}`}
+                              className="h-4 w-4 rounded border-border bg-elevated"
+                            />
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-secondary-text">
+                            {formatAnalysisTime(item.analysisCreatedAt)}
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="font-mono font-medium text-foreground">{item.code}</div>
+                            <div className="mt-1 text-xs text-muted-text">#{item.analysisHistoryId} · {item.stockName || 'Bitcoin'}</div>
+                          </td>
+                          <td className="px-3 py-3">
+                            <Badge variant={item.analysisMode === 'hourly' ? 'warning' : 'default'}>
+                              {item.analysisTimeframe || item.analysisMode || '日线'}
+                            </Badge>
+                          </td>
+                          <td className="max-w-sm px-3 py-3 text-secondary-text">
+                            <span className="line-clamp-2">{item.analysisSummary || item.trendPrediction || item.operationAdvice || '无摘要'}</span>
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="flex flex-wrap gap-1">
+                              {item.plans.length ? item.plans.map((plan) => (
+                                <Badge key={plan.planType} variant={plan.direction === 'short' ? 'danger' : plan.direction === 'long' ? 'info' : 'default'}>
+                                  {planTypeLabel(plan.planType)}
+                                </Badge>
+                              )) : <span className="text-xs text-muted-text">无计划</span>}
+                            </div>
+                          </td>
+                          <td className="px-3 py-3">{statusBadge(item.backtestStatus)}</td>
+                          <td className="px-3 py-3 text-xs text-secondary-text">{planResultSummary(item.plans)}</td>
+                          <td className="px-3 py-3">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setDetailItem(item)}
+                                className="btn-secondary inline-flex items-center gap-1.5 whitespace-nowrap text-xs"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                                详情
+                              </button>
+                              <Link
+                                to={`/?history=${item.analysisHistoryId}`}
+                                className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+                              >
+                                <FileText className="h-3.5 w-3.5" />
+                                报告
+                              </Link>
+                              <button
+                                type="button"
+                                disabled={!backtestablePlans.length || runningRecordId === item.analysisHistoryId}
+                                onClick={() => void runForIds([item.analysisHistoryId])}
+                                className="btn-primary inline-flex items-center gap-1.5 whitespace-nowrap text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {runningRecordId === item.analysisHistoryId ? (
+                                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Play className="h-3.5 w-3.5" />
+                                )}
+                                回测
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
 
               <div className="mt-4">
@@ -637,6 +713,74 @@ const BacktestPage: React.FC = () => {
           )}
         </section>
       </main>
+
+      <Drawer
+        isOpen={Boolean(detailItem)}
+        onClose={() => setDetailItem(null)}
+        title={detailItem ? `${detailItem.code} · 回测详情` : undefined}
+        width="max-w-4xl"
+      >
+        {detailItem ? (
+          <div className="space-y-5">
+            <section className="grid gap-3 rounded-lg border border-border/70 bg-elevated/35 p-4 sm:grid-cols-2">
+              <div>
+                <span className="label-uppercase">分析记录</span>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-base font-semibold text-foreground">{detailItem.code}</span>
+                  <Badge variant="history">#{detailItem.analysisHistoryId}</Badge>
+                  {statusBadge(detailItem.backtestStatus)}
+                </div>
+                <p className="mt-2 text-sm text-secondary-text">{detailItem.analysisSummary || detailItem.trendPrediction || detailItem.operationAdvice || '无摘要'}</p>
+              </div>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                <div><dt className="text-muted-text">分析时间</dt><dd className="mt-1 font-mono text-foreground">{formatAnalysisTime(detailItem.analysisCreatedAt)}</dd></div>
+                <div><dt className="text-muted-text">分析周期</dt><dd className="mt-1 text-foreground">{detailItem.analysisTimeframe || detailItem.analysisMode || '日线'}</dd></div>
+                <div><dt className="text-muted-text">计划结果</dt><dd className="mt-1 text-foreground">{planResultSummary(detailItem.plans)}</dd></div>
+                <div><dt className="text-muted-text">可回测计划</dt><dd className="mt-1 text-foreground">{detailItem.plans.filter((plan) => plan.backtestable).length} / {detailItem.plans.length}</dd></div>
+              </dl>
+            </section>
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <Link to={`/?history=${detailItem.analysisHistoryId}`} className="btn-secondary inline-flex items-center gap-1.5 text-xs">
+                <FileText className="h-3.5 w-3.5" />
+                查看报告
+              </Link>
+              <button
+                type="button"
+                disabled={!detailItem.plans.some((plan) => plan.backtestable) || runningRecordId === detailItem.analysisHistoryId}
+                onClick={() => void runForIds([detailItem.analysisHistoryId])}
+                className="btn-primary inline-flex items-center gap-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Play className="h-3.5 w-3.5" />
+                回测全部计划
+              </button>
+            </div>
+
+            <section>
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-foreground">计划明细</h3>
+                <span className="text-xs text-muted-text">{detailItem.plans.length} 项</span>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                {detailItem.plans.length ? detailItem.plans.map((plan) => (
+                  <PlanSummary
+                    key={`${detailItem.analysisHistoryId}:${plan.planType}`}
+                    plan={plan}
+                    runningKey={runningRecordId === detailItem.analysisHistoryId ? runningPlanKey : null}
+                    onRun={(selectedPlan) => {
+                      setRunningRecordId(detailItem.analysisHistoryId);
+                      setRunningPlanKey(selectedPlan.planType);
+                      void runForIds([detailItem.analysisHistoryId], [selectedPlan.planType]);
+                    }}
+                  />
+                )) : (
+                  <EmptyState title="没有结构化交易计划" description="这条分析记录没有可展示的回测计划。" />
+                )}
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </Drawer>
     </div>
   );
 };

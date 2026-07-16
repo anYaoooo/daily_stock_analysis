@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from src.services.crypto_trading_service import CryptoTradingConfigError
 from src.services.crypto_trading_service import CryptoTradingService
@@ -32,6 +32,10 @@ class DummyConfig:
 
 class RealTradingBlockedConfig(DummyConfig):
     crypto_trading_dry_run = False
+
+
+class RealTradingEnabledConfig(RealTradingBlockedConfig):
+    crypto_trading_enabled = True
 
 
 class BybitDemoConfig(DummyConfig):
@@ -104,6 +108,44 @@ def test_real_order_requires_trading_enabled() -> None:
     exchange.create_order.assert_not_called()
 
 
+def test_trading_service_rejects_non_btc_symbols() -> None:
+    service = CryptoTradingService(exchange=Mock())
+    service.config = DummyConfig()
+
+    try:
+        service.create_order(
+            symbol="ETH/USDT:USDT",
+            order_type="market",
+            side="buy",
+            amount=0.01,
+        )
+    except ValueError as exc:
+        assert "BTC-only" in str(exc)
+    else:
+        raise AssertionError("non-BTC symbols must be rejected")
+
+
+def test_real_order_requires_admin_authentication() -> None:
+    exchange = Mock()
+    service = CryptoTradingService(exchange=exchange)
+    service.config = RealTradingEnabledConfig()
+
+    with patch("src.services.crypto_trading_service.is_auth_enabled", return_value=False):
+        try:
+            service.create_order(
+                symbol="BTC",
+                order_type="market",
+                side="buy",
+                amount=0.01,
+            )
+        except CryptoTradingConfigError as exc:
+            assert "ADMIN_AUTH_ENABLED=true" in str(exc)
+        else:
+            raise AssertionError("live trading must require admin authentication")
+
+    exchange.create_order.assert_not_called()
+
+
 def test_bybit_futures_demo_order_uses_position_idx_and_order_link_id() -> None:
     exchange = Mock()
     service = CryptoTradingService(exchange=exchange)
@@ -145,6 +187,25 @@ def test_bybit_spot_default_symbol_uses_spot_symbol() -> None:
     assert result["dry_run"] is True
     assert result["order"]["symbol"] == "BTC/USDT"
     assert result["order"]["params"] == {}
+
+
+def test_explicit_okx_spot_symbol_is_not_collapsed_to_default_perpetual() -> None:
+    exchange = Mock()
+    service = CryptoTradingService(exchange=exchange)
+    service.config = DummyConfig()
+
+    result = service.create_order(
+        symbol="BTC/USDT",
+        order_type="limit",
+        side="buy",
+        amount=0.001,
+        price=50000,
+    )
+
+    assert result["dry_run"] is True
+    assert result["order"]["symbol"] == "BTC/USDT"
+    assert result["order"]["instrument"]["type"] == "spot"
+    assert result["order"]["params"] == {"tdMode": "cash"}
 
 
 def test_bybit_requires_demo_trading_flag() -> None:

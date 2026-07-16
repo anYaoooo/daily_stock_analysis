@@ -116,6 +116,7 @@ class DirectionalStrategyPlan(BaseModel):
     entry_zone: Optional[Union[str, int, float]] = None
     stop_loss: Optional[Union[str, int, float]] = None
     take_profit: Optional[Union[str, int, float]] = None
+    execution_contract: Optional[Dict[str, Any]] = None
     trigger_condition: Optional[str] = None
     invalidation: Optional[str] = None
     invalid_condition: Optional[str] = None
@@ -138,6 +139,7 @@ class IntradayPlan(BaseModel):
     entry_zone: Optional[Union[str, int, float]] = None
     stop_loss: Optional[Union[str, int, float]] = None
     take_profit: Optional[Union[str, int, float]] = None
+    execution_contract: Optional[Dict[str, Any]] = None
     trigger_condition: Optional[str] = None
     invalidation: Optional[str] = None
     invalid_condition: Optional[str] = None

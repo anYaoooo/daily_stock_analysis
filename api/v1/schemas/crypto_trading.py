@@ -37,7 +37,7 @@ class CryptoListResponse(BaseModel):
 
 
 class CryptoCreateOrderRequest(BaseModel):
-    symbol: Optional[str] = Field(None, description="默认 BTC/USDT:USDT")
+    symbol: Optional[str] = Field(None, description="仅支持 BTC/USDT 现货或 BTC/USDT:USDT 永续合约")
     order_type: Literal["market", "limit"] = Field(..., description="market 或 limit")
     side: Literal["buy", "sell"]
     amount: float = Field(..., gt=0)
@@ -56,7 +56,7 @@ class CryptoCreateOrderResponse(BaseModel):
 
 class CryptoCancelOrderRequest(BaseModel):
     order_id: str
-    symbol: Optional[str] = Field(None, description="默认 BTC/USDT:USDT")
+    symbol: Optional[str] = Field(None, description="仅支持 BTC/USDT 现货或 BTC/USDT:USDT 永续合约")
     extra_params: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -67,7 +67,7 @@ class CryptoCancelOrderResponse(BaseModel):
 
 class CryptoSetLeverageRequest(BaseModel):
     leverage: int = Field(..., gt=0)
-    symbol: Optional[str] = Field(None, description="默认 BTC/USDT:USDT")
+    symbol: Optional[str] = Field(None, description="仅支持 BTC/USDT:USDT 永续合约")
     margin_mode: Optional[Literal["cross", "isolated"]] = None
     pos_side: Optional[Literal["long", "short", "net"]] = None
 
@@ -79,7 +79,7 @@ class CryptoSetLeverageResponse(BaseModel):
 
 class CryptoSetMarginModeRequest(BaseModel):
     margin_mode: Literal["cross", "isolated"]
-    symbol: Optional[str] = Field(None, description="默认 BTC/USDT:USDT")
+    symbol: Optional[str] = Field(None, description="仅支持 BTC/USDT:USDT 永续合约")
 
 
 class CryptoSetMarginModeResponse(BaseModel):

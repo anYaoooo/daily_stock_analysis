@@ -36,14 +36,15 @@
 | `daily_short` | `daily` | `short` | 日线空单计划 |
 | `intraday` | `intraday` | `long` / `short` / `wait` | 小时线日内计划 |
 
-每个计划至少需要：
+`btc-plan-v3` 的每个可回测计划至少需要：
 
 - `entry_price`：入场价。
 - `stop_loss`：止损价。
 - `take_profit`：止盈价。
 - `direction`：多/空方向，日内计划会额外检查 enabled 状态。
+- `execution_contract`：版本为 `btc-execution-v1` 的机器执行契约，完整表达收盘、量比、VWAP、确认 bars、等待 bars、成交方式和最长持有 bars。
 
-计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。回测引擎当前仍以可解析的 `entry_price`、`stop_loss`、`take_profit` 作为机器执行字段；缺失关键字段的计划会在历史记录入口标记为 `invalid_plan`，不会被静默当作有效交易。
+计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。旧 `btc-plan-v2` 结果只保留为历史触价代理口径。
 
 每个计划回测结果还会在 `diagnostics.indicator_tags` 中保存生成报告时的低敏 BTC 指标快照标签，当前包括：
 
@@ -69,12 +70,12 @@
 - 日线计划使用 daily K 线。
 - 日内计划使用 hourly K 线。
 
-回测窗口：
+回测窗口由执行契约决定：
 
-- `intraday`：从报告生成时刻开始，向后 24 小时。
-- `daily_long` / `daily_short`：从报告生成日期的下一天 00:00 开始，向后 1 天。
+- `intraday`：从报告生成时刻开始，覆盖确认、下一根开盘成交、最长等待和最长持有需要的小时 bars。
+- `daily_long` / `daily_short`：从报告生成日期的下一根完整日线开始，覆盖同样的日线 bars。
 
-注意：当前是用后验获取的 K 线执行回测，没有把当时可见的数据快照固化到结果中。
+行情适配会剔除尚未闭合的小时线和日线。K 线来源、拉取时间、范围和哈希会写入 diagnostics；当前仍是后验拉取历史 K 线，不是交易所逐笔撮合回放。
 
 ## 4. 核心回测算法
 
@@ -89,19 +90,17 @@
 
 ### 4.2 入场触发
 
-对每个计划，回测引擎在评估窗口内扫描 K 线：
+对每个计划，回测引擎只在闭合 K 线上执行 `execution_contract.entry.conditions`。当前支持：
 
-```text
-如果某根 K 线满足 low <= entry_price <= high
-则认为该计划在这根 K 线触发入场
-否则 outcome = no_entry
-```
+- `close_above` / `close_below`。
+- `volume_ratio_gte` / `volume_ratio_lte`。
+- `close_above_vwap` / `close_below_vwap`。
 
-未触发入场的计划计入 completed，但不参与方向正确率和胜负统计。
+条件逻辑固定为 `all`。全部条件连续满足 `confirmation_bars` 后，计划在下一根 K 线开盘成交；触发 K 线不参与持仓止盈止损。超过 `max_wait_bars` 仍未确认时才记为 `no_entry`。评估窗口尚未结束时记为 `insufficient_data/provisional`，不参与胜率。
 
 ### 4.3 出场规则
 
-入场后，从触发入场的 K 线开始扫描后续 K 线。
+入场后，从实际成交 K 线开始扫描后续 K 线。
 
 多单：
 
@@ -121,7 +120,7 @@ exit_reason = ambiguous_stop_loss
 exit_price = stop_loss
 ```
 
-若评估窗口内没有触发止盈或止损，则以窗口最后一根 K 线的 close 作为退出价。
+若 `exit.max_holding_bars` 内没有触发止盈或止损，则以最后一根完整 K 线的 close 作为退出价。窗口尚未成熟时保持暂定状态，不提前按当前 close 结算。
 
 ### 4.4 交易成本
 
@@ -284,7 +283,7 @@ else:
 
 | 指标 | 含义 |
 | --- | --- |
-| `total_evaluations` | 总计划数 |
+| `total_evaluations` | 回测尝试总数，包含不可评估和仍在等待数据的计划，不等同于有效样本数 |
 | `completed_count` | 完成评估数 |
 | `triggered_count` | 入场触发数 |
 | `no_entry_count` | 未触发入场数 |
@@ -317,9 +316,11 @@ else:
 | `risk_metrics.expectancy_pct` | 单笔收益期望 |
 | `equity_curve` | 按回测交易顺序生成的权益曲线 |
 
-`diagnostics.sample_confidence` 会按 `triggered_count < 30` 标记低置信度样本，避免少量成交样本被误读为稳定策略结论。
+`diagnostics.sample_confidence` 会按独立 `triggered_count < 100` 标记低置信度样本，避免少量或高度重叠的成交样本被误读为稳定策略结论。`raw_triggered_count` 保留原始触发数，`overlap_excluded_count` 记录同一 BTC 持仓期间被排除的重叠信号。
 
-`diagnostics.indicator_group_breakdown` 会按计划类型、方向、多周期对齐、价格行为、VWAP、EMA、量能确认和事件类型分组。每个分组 bucket 展示样本数、触发数、胜率、平均净收益、最大回撤、平均 R 倍数和低样本置信提示。
+Web 汇总使用 `completed_count` 表示已完成评估数，使用 `triggered_count` 表示独立成交样本数。缺少 `btc-execution-v1` 契约的旧报告会标记为不可评估，开放中的评估窗口会标记为等待数据；二者都不会显示成有效样本。
+
+`diagnostics.indicator_group_breakdown` 会按计划类型、方向、多周期对齐、价格行为、VWAP、EMA、量能确认和事件类型分组。每个分组 bucket 展示已完成评估数、触发数、胜率、平均净收益、最大回撤、平均 R 倍数和低样本置信提示。
 
 ## 6. API 使用
 
@@ -351,6 +352,8 @@ curl "http://127.0.0.1:8000/api/v1/backtest/crypto/history?code=BTC&page=1&limit
 - 报告时间、分析周期、摘要和当前整条记录的 `backtest_status`。
 - `plans[]`：每个计划的 `plan_type`、方向、点位、风险收益比、仓位建议、置信度、缺失字段、是否可回测。
 - `latest_result`：该计划最近一次回测摘要，包含是否触发入场、收益率、交易明细和状态。
+
+Web 回测页按该接口的分页结果展示历史分析表格。表格支持行级选择、当前页全选、批量回测和批量删除；点击记录或“详情”可打开抽屉查看该报告的全部计划、指标标签和单计划回测操作。
 
 ### 6.3 按历史记录回测
 
@@ -415,7 +418,7 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | 报告生成后至少等待多少小时再评估 |
-| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v2` | 回测引擎版本，算法升级后用于隔离旧结果 |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v3` | 结构化执行契约引擎版本；与 v2 触价代理结果隔离 |
 | `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | 中性区间阈值，账户净收益率落在该区间内视为 neutral |
 | `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | 初始权益 |
 | `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | 单笔风险占账户权益百分比 |
@@ -438,7 +441,7 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
 - 支持按账户风险预算和最大名义仓位推导仓位。
 - 单笔结果保留交易明细，可审计。
 - 单笔结果保留 R 倍数、K 线数据快照哈希和前视偏差校验信息。
-- 汇总层对入场触发样本小于 30 的结果标记低置信度。
+- 汇总层排除同一 BTC 持仓期间的重叠信号，并对独立触发样本小于 100 的结果标记低置信度。
 - 汇总层提供资金曲线、总收益、最大回撤、profit factor、期望值等指标。
 - API 和数据库结果按 engine_version 隔离，便于算法升级后重算。
 
@@ -485,7 +488,7 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
 
 ### P0：让结果更可信
 
-- 已落地：默认引擎版本升级为 `btc-plan-v2`，每次回测保存 K 线来源、周期、拉取时间、bar 数量、数据范围和哈希。
+- 已落地：默认引擎版本升级为 `btc-plan-v3`，使用 `btc-execution-v1` 契约和闭合 K 线状态机，并保存 K 线来源、周期、拉取时间、bar 数量、数据范围和哈希。
 - 已落地：增加前视偏差校验、低样本置信标记和单笔 R 倍数。
 - 后续可继续扩展完整 K 线 payload 快照，支持离线复算和外部审计。
 

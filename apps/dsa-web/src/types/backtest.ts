@@ -137,6 +137,7 @@ export interface CryptoBacktestHistoryPlan {
   entryPrice?: number | null;
   stopLoss?: number | null;
   takeProfit?: number | null;
+  executionContract?: Record<string, unknown> | null;
   invalidCondition?: string | null;
   riskReward?: string | null;
   positionHint?: string | null;

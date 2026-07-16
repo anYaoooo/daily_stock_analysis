@@ -35,6 +35,8 @@ const TEXT = {
     netPnl: '净 PnL',
     rMultiple: 'R 倍数',
     missingFields: '缺少关键字段',
+    legacyContract: '旧报告没有 v3 执行契约，不计入有效样本',
+    noTradePlan: '观望计划，不计入有效样本',
     yes: '是',
     no: '否',
   },
@@ -56,6 +58,8 @@ const TEXT = {
     netPnl: 'Net PnL',
     rMultiple: 'R multiple',
     missingFields: 'Missing fields',
+    legacyContract: 'This legacy report has no v3 execution contract and is excluded from valid samples',
+    noTradePlan: 'Wait plan, excluded from valid samples',
     yes: 'Yes',
     no: 'No',
   },
@@ -103,8 +107,8 @@ function statusBadge(status: string, language: 'zh' | 'en'): React.ReactNode {
       invalid_plan: '计划缺字段',
       no_plan: '无计划',
       partial: '部分回测',
-      insufficient_data: '样本不足',
-      skipped: '已跳过',
+      insufficient_data: '等待评估数据',
+      skipped: '不计入样本',
     },
     en: {
       win: 'Win',
@@ -116,8 +120,8 @@ function statusBadge(status: string, language: 'zh' | 'en'): React.ReactNode {
       invalid_plan: 'Missing fields',
       no_plan: 'No plan',
       partial: 'Partial',
-      insufficient_data: 'Low sample',
-      skipped: 'Skipped',
+      insufficient_data: 'Awaiting data',
+      skipped: 'Excluded',
     },
   } as const;
   const variant = normalized === 'win' || normalized === 'completed'
@@ -177,8 +181,12 @@ const PlanBacktestCard: React.FC<{
       ) : null}
 
       {!plan.backtestable ? (
-        <p className="mt-3 text-xs text-danger">
-          {text.missingFields}: {plan.missingFields.join(', ') || plan.noTradeReason || plan.qualityStatus}
+        <p className={`mt-3 text-xs ${plan.qualityStatus === 'no_trade_plan' ? 'text-muted-text' : 'text-danger'}`}>
+          {plan.qualityStatus === 'no_trade_plan'
+            ? `${text.noTradePlan}${plan.noTradeReason ? `${language === 'zh' ? '：' : ': '}${plan.noTradeReason}` : ''}`
+            : plan.missingFields.length === 1 && plan.missingFields[0] === 'execution_contract'
+            ? text.legacyContract
+            : `${text.missingFields}: ${plan.missingFields.join(', ') || plan.noTradeReason || plan.qualityStatus}`}
         </p>
       ) : null}
     </div>

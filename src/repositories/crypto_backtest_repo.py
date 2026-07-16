@@ -58,10 +58,19 @@ class CryptoBacktestRepository:
 
             query = select(AnalysisHistory).where(and_(*conditions))
             if not force:
-                existing_ids = select(CryptoBacktestResult.analysis_history_id).where(
-                    CryptoBacktestResult.engine_version == engine_version
+                provisional_ids = select(CryptoBacktestResult.analysis_history_id).where(
+                    and_(
+                        CryptoBacktestResult.engine_version == engine_version,
+                        CryptoBacktestResult.eval_status.in_({"pending", "insufficient_data"}),
+                    )
                 )
-                query = query.where(AnalysisHistory.id.not_in(existing_ids))
+                terminal_only_ids = select(CryptoBacktestResult.analysis_history_id).where(
+                    and_(
+                        CryptoBacktestResult.engine_version == engine_version,
+                        CryptoBacktestResult.analysis_history_id.not_in(provisional_ids),
+                    )
+                )
+                query = query.where(AnalysisHistory.id.not_in(terminal_only_ids))
 
             rows = session.execute(
                 query.order_by(desc(AnalysisHistory.created_at)).limit(int(limit))
@@ -153,23 +162,26 @@ class CryptoBacktestRepository:
 
         with self.db.get_session() as session:
             try:
-                if replace_existing:
-                    analysis_ids = sorted({row.analysis_history_id for row in results})
-                    engine_versions = sorted({row.engine_version for row in results})
-                    plan_types = sorted({row.plan_type for row in results})
-                    if analysis_ids and engine_versions and plan_types:
-                        session.execute(
-                            delete(CryptoBacktestResult).where(
-                                and_(
-                                    CryptoBacktestResult.analysis_history_id.in_(analysis_ids),
-                                    CryptoBacktestResult.engine_version.in_(engine_versions),
-                                    CryptoBacktestResult.plan_type.in_(plan_types),
-                                )
+                saved = 0
+                for row in results:
+                    existing = session.execute(
+                        select(CryptoBacktestResult).where(
+                            and_(
+                                CryptoBacktestResult.analysis_history_id == row.analysis_history_id,
+                                CryptoBacktestResult.plan_type == row.plan_type,
+                                CryptoBacktestResult.engine_version == row.engine_version,
                             )
                         )
-                session.add_all(results)
+                    ).scalar_one_or_none()
+                    if existing is not None:
+                        if not replace_existing and existing.eval_status not in {"pending", "insufficient_data"}:
+                            continue
+                        session.delete(existing)
+                        session.flush()
+                    session.add(row)
+                    saved += 1
                 session.commit()
-                return len(results)
+                return saved
             except Exception as exc:
                 session.rollback()
                 logger.error("批量保存 BTC 回测结果失败: %s", exc)
@@ -300,6 +312,17 @@ class CryptoBacktestRepository:
 
             session.add(summary)
             session.commit()
+
+    def delete_summaries(self, *, engine_version: str) -> int:
+        """Delete derived summaries before rebuilding a complete engine snapshot."""
+        with self.db.get_session() as session:
+            result = session.execute(
+                delete(CryptoBacktestSummary).where(
+                    CryptoBacktestSummary.engine_version == engine_version
+                )
+            )
+            session.commit()
+            return int(result.rowcount or 0)
 
     def get_summary(
         self,

@@ -6,7 +6,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from src.auth import is_auth_enabled
 from src.config import get_config
+from src.schemas.crypto_instrument import (
+    CryptoInstrument,
+    instrument_type_from_market_symbol,
+    resolve_crypto_instrument,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +84,15 @@ class CryptoTradingService:
         client_order_id: Optional[str] = None,
         extra_params: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        market_symbol = self._resolve_symbol(symbol, required=True)
+        instrument = self._resolve_instrument(symbol, required=True)
+        market_symbol = instrument.market_symbol
         normalized_type = self._normalize_order_type(order_type)
         normalized_side = self._normalize_side(side)
         normalized_amount = self._positive_float(amount, "amount")
         normalized_price = self._optional_positive_float(price, "price")
 
         params = self._build_order_params(
+            instrument_type=instrument.instrument_type,
             td_mode=td_mode,
             pos_side=pos_side,
             reduce_only=reduce_only,
@@ -100,6 +108,7 @@ class CryptoTradingService:
         preview = {
             "exchange": self.exchange_id,
             "symbol": market_symbol,
+            "instrument": instrument.to_contract(),
             "type": normalized_type,
             "side": normalized_side,
             "amount": normalized_amount,
@@ -276,22 +285,56 @@ class CryptoTradingService:
         return exchange
 
     def _resolve_symbol(self, symbol: Optional[str], *, required: bool = False) -> Optional[str]:
+        instrument = self._resolve_instrument(symbol, required=required)
+        return instrument.market_symbol if instrument is not None else None
+
+    def _resolve_instrument(
+        self,
+        symbol: Optional[str],
+        *,
+        required: bool = False,
+    ) -> Optional[CryptoInstrument]:
         configured_default = (getattr(self.config, "crypto_trading_default_symbol", "") or "").strip()
         if self.exchange_id == "bybit" and not self._is_bybit_swap() and configured_default == "BTC/USDT:USDT":
             configured_default = "BTC/USDT"
-        raw = (symbol or configured_default or self._default_symbol()).strip()
+        default_symbol = configured_default or self._default_symbol()
+        default_type = instrument_type_from_market_symbol(default_symbol)
+        default_margin = (
+            getattr(self.config, "okx_td_mode", "cross")
+            if self.exchange_id == "okx"
+            else getattr(self.config, "bybit_margin_mode", "isolated")
+        )
+        default_instrument = resolve_crypto_instrument(
+            default_symbol,
+            default_type=default_type,
+            venue=self.exchange_id,
+            margin_mode=default_margin,
+        )
+        if default_instrument is None:
+            raise CryptoTradingConfigError("CRYPTO_TRADING_DEFAULT_SYMBOL 仅支持 BTC/USDT 现货或永续合约")
+        raw = str(symbol or default_symbol).strip()
         if not raw:
             if required:
                 raise ValueError("symbol is required")
             return None
-        compact = raw.upper().replace("-", "").replace("_", "").replace("/", "").replace(":", "")
-        if compact in {"BTC", "BTCUSDT", "BTCUSDTUSDT"}:
-            return str(configured_default or self._default_symbol())
-        return raw
+        instrument = resolve_crypto_instrument(
+            raw,
+            default_type=default_type,
+            venue=self.exchange_id,
+            margin_mode=default_margin,
+        )
+        if instrument is None:
+            raise ValueError("BTC-only 模式仅支持 BTC/USDT 现货或永续合约")
+        return instrument
+
+    @staticmethod
+    def _is_supported_btc_trading_symbol(symbol: str) -> bool:
+        return resolve_crypto_instrument(symbol, default_type="perpetual") is not None
 
     def _build_order_params(
         self,
         *,
+        instrument_type: str,
         td_mode: Optional[str],
         pos_side: Optional[str],
         reduce_only: bool,
@@ -299,6 +342,14 @@ class CryptoTradingService:
         extra_params: Optional[dict[str, Any]],
     ) -> dict[str, Any]:
         params = dict(extra_params or {})
+        if instrument_type == "spot":
+            if pos_side:
+                raise ValueError("spot orders do not support pos_side")
+            if reduce_only:
+                raise ValueError("spot orders do not support reduce_only")
+            if self.exchange_id == "okx":
+                params.setdefault("tdMode", "cash")
+            return params
         if self.exchange_id == "okx":
             params.setdefault("tdMode", self._normalize_td_mode(td_mode or getattr(self.config, "okx_td_mode", "cross")))
         elif self._is_bybit_swap():
@@ -366,6 +417,8 @@ class CryptoTradingService:
     def _ensure_trading_enabled(self) -> None:
         if not getattr(self.config, "crypto_trading_enabled", False):
             raise CryptoTradingConfigError("CRYPTO_TRADING_ENABLED=false，禁止真实交易")
+        if not is_auth_enabled():
+            raise CryptoTradingConfigError("真实交易必须先启用 ADMIN_AUTH_ENABLED=true")
 
     def _is_dry_run(self) -> bool:
         return bool(getattr(self.config, "crypto_trading_dry_run", True))

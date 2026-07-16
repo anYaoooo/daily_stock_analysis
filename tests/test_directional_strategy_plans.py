@@ -14,6 +14,17 @@ def test_extract_directional_strategy_plans_from_dashboard() -> None:
                     "trigger_condition": "突破确认",
                     "invalidation": "跌回突破位",
                     "reason": "VWAP 上方且放量",
+                    "execution_contract": {
+                        "version": "btc-execution-v1",
+                        "entry": {
+                            "logic": "all",
+                            "conditions": [{"type": "close_above", "value": 100000}],
+                            "confirmation_bars": 1,
+                            "fill": "next_bar_open",
+                            "max_wait_bars": 3,
+                        },
+                        "exit": {"max_holding_bars": 5},
+                    },
                 },
                 "short_plan": {
                     "entry_price": "空单入场：98000",
@@ -42,6 +53,7 @@ def test_extract_directional_strategy_plans_from_dashboard() -> None:
 
     assert plans["long_plan"]["entry_price"] == "多单入场：100000"
     assert plans["long_plan"]["trigger_condition"] == "突破确认"
+    assert plans["long_plan"]["execution_contract"]["entry"]["conditions"][0]["value"] == 100000
     assert plans["short_plan"]["entry_price"] == "空单入场：98000"
     assert plans["short_plan"]["invalidation"] == "重新站回支撑"
     assert plans["intraday_plan"]["enabled"] is True

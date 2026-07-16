@@ -31,7 +31,7 @@ vi.mock('../../api/history', () => ({
 
 const basePerformance = {
   scope: 'overall',
-  engineVersion: 'btc-plan-v2',
+  engineVersion: 'btc-plan-v3',
   totalEvaluations: 3,
   completedCount: 3,
   triggeredCount: 2,
@@ -48,6 +48,10 @@ const basePerformance = {
   riskMetrics: {},
   equityCurve: [],
   diagnostics: {
+    metricSemantics: 'structured_execution_contract',
+    rawTriggeredCount: 3,
+    overlapExcludedCount: 1,
+    sampleConfidence: { isLowConfidence: true, sampleCount: 2, minimumSampleCount: 100 },
     indicatorGroupBreakdown: {
       groups: {
         'price_action.state': [
@@ -92,6 +96,9 @@ const baseHistoryItem = {
       entryPrice: 100000,
       stopLoss: 99000,
       takeProfit: 102000,
+      executionContract: {
+        version: 'btc-execution-v1',
+      },
       invalidCondition: '跌回区间',
       riskReward: '1:2',
       positionHint: '0.5% 风险',
@@ -144,15 +151,19 @@ beforeEach(() => {
 });
 
 describe('BacktestPage', () => {
-  it('loads BTC history records with plan summaries and indicator grouping', async () => {
+  it('loads BTC history records in a paginated table and opens plan details', async () => {
     renderPage();
 
     expect(await screen.findByText('BTCUSDT')).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'BTC 回测历史分析记录' })).toBeInTheDocument();
     expect(screen.getByText('突破后等待回踩确认')).toBeInTheDocument();
     expect(screen.getAllByText('日线多单').length).toBeGreaterThan(0);
-    expect(screen.getByText('PA breakout')).toBeInTheDocument();
     expect(screen.getByText('指标分组复盘')).toBeInTheDocument();
     expect(screen.getByText('价格行为 · breakout')).toBeInTheDocument();
+    expect(screen.getByText('策略契约胜率')).toBeInTheDocument();
+    expect(screen.getByText('独立成交 / 已完成评估')).toBeInTheDocument();
+    expect(screen.getByText('不可评估 / 等待数据')).toBeInTheDocument();
+    expect(screen.getByText('原始触发 / 重叠排除')).toBeInTheDocument();
     expect(mockGetHistory).toHaveBeenCalledWith({
       code: 'BTC',
       analysisMode: 'all',
@@ -162,6 +173,11 @@ describe('BacktestPage', () => {
       page: 1,
       limit: 20,
     });
+
+    fireEvent.click(screen.getByRole('button', { name: '详情' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('PA breakout')).toBeInTheDocument();
+    expect(screen.getByText('结构化执行契约')).toBeInTheDocument();
   });
 
   it('sends analysis mode, direction, plan type, and result status filters', async () => {
@@ -191,7 +207,8 @@ describe('BacktestPage', () => {
     renderPage();
     await screen.findByText('BTCUSDT');
 
-    fireEvent.click(screen.getByRole('button', { name: '回测计划' }));
+    fireEvent.click(screen.getByRole('button', { name: '详情' }));
+    fireEvent.click(await screen.findByRole('button', { name: '回测计划' }));
 
     await waitFor(() => {
       expect(mockRunSelected).toHaveBeenCalledWith({
@@ -203,11 +220,43 @@ describe('BacktestPage', () => {
     expect(await screen.findByText('写入')).toBeInTheDocument();
   });
 
+  it('labels explicit wait plans as excluded samples instead of missing fields', async () => {
+    mockGetHistory.mockResolvedValue({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [{
+        ...baseHistoryItem,
+        analysisMode: 'hourly',
+        plans: [{
+          ...baseHistoryItem.plans[0],
+          planType: 'intraday',
+          horizon: 'intraday',
+          direction: 'wait',
+          executionContract: null,
+          backtestable: false,
+          qualityStatus: 'no_trade_plan',
+          missingFields: [],
+          noTradeReason: '小时线结构尚未确认',
+          backtestStatus: 'skipped',
+        }],
+      }],
+    });
+
+    renderPage();
+    await screen.findByText('BTCUSDT');
+    fireEvent.click(screen.getByRole('button', { name: '详情' }));
+
+    expect(await screen.findByText('观望计划，不计入有效样本：小时线结构尚未确认')).toBeInTheDocument();
+    expect(screen.queryByText(/缺少关键字段/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('不计入样本').length).toBeGreaterThan(0);
+  });
+
   it('batch-runs selected history records and deletes with traceability warning', async () => {
     renderPage();
     await screen.findByText('BTCUSDT');
 
-    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择记录 #7' }));
     fireEvent.click(screen.getByRole('button', { name: /批量回测/ }));
 
     await waitFor(() => {

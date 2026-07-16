@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] BTC 回测将明确观望的日内计划标记为不交易样本，不再误报缺少方向和 v3 执行契约。
+
+- [改进] BTC 回测历史记录改为分页表格，支持行级选择、批量回测和删除，并通过详情抽屉查看计划、指标与单计划回测操作。
+- [修复] BTC 小时 K 线按交易所单页上限连续分页到当前时间，并让回测页区分已完成评估、等待数据和旧契约不可评估记录，避免把全部尝试误报为有效样本。
+- [修复] BTC 回测升级为 `btc-plan-v3` 结构化执行契约，按闭合 K 线确认并在下一根开盘成交，隔离未完成窗口、无契约旧计划和重叠持仓，避免触价代理结果被误读为策略胜率。
+- [修复] BTC 实时行情与 K 线增加 OKX、Binance、Bybit 跨交易所公共接口降级，全部数据源失败时波动监控返回可观测状态而不再持续抛出调度异常。
+- [修复] 移除 BTC Pipeline 对已废弃 `anspire_keys` 参数的注入，恢复 CryptoPanic 与搜索服务初始化。
+- [修复] 删除 BTC 历史分析记录时同步使对应回测汇总失效，汇总重建前清理旧 scope，避免明细删除后继续展示历史胜率。
+- [修复] 加密货币交易 API 强制限制为 BTC/USDT，并要求真实写操作启用管理员认证；默认 dry-run 行为不变。
 - [修复] BTC 加密货币行情默认切换到 OKX CCXT/REST/WebSocket 数据源，避免 Binance 地区限制返回 HTTP 451 导致行情长期不可用。
 - [修复] BTC WebSocket 行情连接优先使用 websockets legacy client 并收紧依赖主版本，避免握手失败时触发 `ClientConnection.recv_messages` 内部异常日志。
 - [改进] BTC 波动机会监控支持优先使用 WebSocket ticker 缓存并保留 REST 兜底，后台任务最小间隔降至 5 秒，默认示例改为 15 秒检查与 1 分钟观察窗口。

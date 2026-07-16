@@ -365,7 +365,7 @@ jobs:
           echo "  Anthropic Key:  $([ -n "$ANTHROPIC_API_KEY" ] && echo '✅ 已配置' || echo '⚪ 未配置')"
           echo ""
           echo "【数据源】"
-          echo "  BTC 行情: ✅ Binance 公共接口"
+          echo "  BTC 行情: ✅ OKX 主源 / Binance、Bybit 公共接口兜底"
           echo "  BTC 新闻: ✅ CryptoPanic/ChromaDB"
           echo ""
           echo "【搜索引擎】"

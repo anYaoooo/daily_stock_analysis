@@ -129,6 +129,7 @@ class CryptoBacktestHistoryPlan(BaseModel):
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+    execution_contract: Optional[Dict[str, Any]] = None
     invalid_condition: Optional[str] = None
     risk_reward: Optional[str] = None
     position_hint: Optional[str] = None

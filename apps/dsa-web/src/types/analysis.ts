@@ -119,6 +119,7 @@ export interface DirectionalStrategyPlan {
   entryZone?: string;
   stopLoss?: string;
   takeProfit?: string;
+  executionContract?: Record<string, unknown>;
   triggerCondition?: string;
   invalidation?: string;
   invalidCondition?: string;

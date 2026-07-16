@@ -1159,8 +1159,8 @@ PUSHOVER_API_TOKEN=your_api_token
 - 支持美股/港股数据
 - 美股历史数据与实时行情均统一使用 YFinance，以避免 akshare 美股复权异常导致的技术指标错误
 
-### CCXT / Binance Crypto
-- 免费，无需配置，通过 CCXT 对接 Binance 公共行情接口
+### BTC 公共行情
+- 免费，无需配置；默认通过 CCXT/REST 读取 OKX，失败时依次降级到 Binance、Bybit 公共接口
 - 当前支持比特币标的：`BTC`、`BTCUSDT`、`BTC-USD`、`BTC/USD`
 - 提供实时行情与日 K 数据，并在数据源路由中独立识别为加密货币，避免被误判为美股 ticker
 
@@ -1168,7 +1168,7 @@ PUSHOVER_API_TOKEN=your_api_token
 - 通过 `CRYPTO_TRADING_EXCHANGE=okx|bybit` 选择交易所，默认 `okx`；交易接口不会接入分析流程自动执行。API 位于 `/api/v1/crypto-trading/*`，支持查询余额、持仓、挂单、单个订单，以及显式下单、撤单、设置杠杆和保证金模式。
 - OKX 可选配置 `OKX_API_KEY`、`OKX_SECRET`、`OKX_PASSWORD`；`OKX_PASSWORD` 是创建 OKX API Key 时设置的 Passphrase，不是登录密码。默认交易标的为 `BTC/USDT:USDT`，默认 `OKX_DEFAULT_TYPE=swap`、`OKX_TD_MODE=cross`；如需 sandbox，可设置 `OKX_SANDBOX=true`。
 - Bybit 当前仅接入交易所 Demo Trading：设置 `CRYPTO_TRADING_EXCHANGE=bybit`、`BYBIT_API_KEY`、`BYBIT_SECRET`、`BYBIT_DEMO_TRADING=true`。期货模式默认 `BYBIT_DEFAULT_TYPE=swap`、`BYBIT_DEFAULT_SETTLE=USDT`、`BYBIT_MARGIN_MODE=isolated`、`BYBIT_DEFAULT_LEVERAGE=2`，CCXT 下单参数会自动补 `position_idx=0`；现货模式可设 `BYBIT_DEFAULT_TYPE=spot` 并使用 `BTC/USDT` 这类现货 symbol。
-- 写接口受双重保护：`CRYPTO_TRADING_ENABLED=false` 时禁止真实交易；`CRYPTO_TRADING_DRY_RUN=true` 时只返回预览，不会请求交易所写接口。只有同时设置 `CRYPTO_TRADING_ENABLED=true` 且 `CRYPTO_TRADING_DRY_RUN=false` 才会真实调用所选交易所下单/撤单等写接口。Bybit Demo Trading 是交易所模拟账户模式，不等同于本地 dry-run。
+- 交易接口只接受 BTC/USDT 现货或永续合约。写接口受三重保护：`CRYPTO_TRADING_ENABLED=false` 时禁止真实交易；`CRYPTO_TRADING_DRY_RUN=true` 时只返回预览；真实写操作还必须启用 `ADMIN_AUTH_ENABLED=true` 并通过管理员会话访问 API。Bybit Demo Trading 是交易所模拟账户模式，不等同于本地 dry-run。
 
 ### Longbridge（长桥）
 - 美股/港股数据兜底，补充 YFinance 缺失的量比、换手率、PE 等字段
@@ -1388,7 +1388,7 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 | `BACKTEST_ENGINE_VERSION` | `v1` | 引擎版本号，升级逻辑时用于区分结果 |
 | `BACKTEST_NEUTRAL_BAND_PCT` | `2.0` | 中性区间阈值（%），±2% 内视为震荡 |
 | `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | BTC 计划级回测等待时长；默认报告生成 24 小时后评估 |
-| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v2` | BTC 计划级回测引擎版本 |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v3` | BTC 计划级回测引擎版本；v2 仅保留为触价代理历史口径 |
 | `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | BTC 计划级回测中性区间阈值（%） |
 | `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | BTC 正式交易回测初始权益，用于资金曲线、净收益率和仓位测算 |
 | `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | 单笔最大风险占账户权益百分比，用止损距离推导仓位 |
@@ -1399,7 +1399,7 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 
 ### 自动运行
 
-回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析会在每小时 05 分执行以获取上一根完整小时 K 线，后台回测仍会每小时检查一次够龄的 BTC 历史报告。BTC 计划级回测会从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，按入场触发、止盈止损、手续费、滑点、风险预算和名义仓位模拟交易，分别写入 `crypto_backtest_results`，并在 `crypto_backtest_summaries` 汇总正确率、胜率、资金曲线和风险收益指标。`btc-plan-v2` 会额外保存 K 线来源/周期/拉取时间/bar 范围/哈希、前视偏差校验、单笔 R 倍数，并在入场触发样本小于 30 时标记低置信度。也可通过 API 手动触发或删除单条回测结果；删除后会自动重算汇总。
+回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析会在每小时 05 分执行以获取上一根完整小时 K 线，后台回测仍会每小时检查一次够龄的 BTC 历史报告。`btc-plan-v3` 从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，并要求计划携带 `btc-execution-v1` 结构化执行契约。引擎只使用已闭合 K 线验证收盘、量比和 rolling VWAP 条件，在全部条件连续满足后于下一根 K 线开盘成交，再按止盈止损、最长持有 bars、手续费、滑点、风险预算和名义仓位模拟交易。未闭合窗口保持 `insufficient_data/provisional`，后续可重算，不进入胜率；缺少或含不支持条件的契约标记为不可回测，不会降级成触价成交。汇总会排除同一 BTC 持仓期间的重叠信号，仅以独立触发交易计算策略契约胜率，并在独立触发样本少于 100 时标记低置信度。`btc-plan-v2` 结果仍可保留审计，但其 `win_rate_pct` 仅表示入场价触及代理口径，不能与 v3 混合。
 
 BTC 单标的分析完成后的完整报告推送使用 BTC 专用模板，不再发送通用股票决策仪表盘；正文只保留多空建议、日线多单计划、日线空单计划、小时线日内计划和技术分析。
 
@@ -1408,7 +1408,7 @@ BTC 单标的分析完成后的完整报告推送使用 BTC 专用模板，不�
 | 指标 | 说明 |
 |------|------|
 | `direction_accuracy_pct` | 方向预测准确率（预期方向与实际一致） |
-| `win_rate_pct` | 胜率（胜 / (胜+负)，不含中性） |
+| `win_rate_pct` | 策略契约胜率（独立触发交易中的胜 / (胜+负)，不含中性；v2 仅为触价代理胜率） |
 | `avg_stock_return_pct` | 平均股票收益率 |
 | `avg_simulated_return_pct` | 平均模拟执行收益率（含止盈止损退出） |
 | `stop_loss_trigger_rate` | 止损触发率（仅统计配置了止损的记录） |
@@ -1669,7 +1669,7 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 交易机会触发的小时线分析会向分析上下文传入 `trigger_reason=entry_signal`、建议交易方向、入场确认价、失效价、观察秒数、短窗口方向、涨跌幅、当前价、基准价、阈值和确认采样信息。报告需要把这些信息解释为日内触发/风控上下文，并明确当前 1 小时 K 线可能尚未收线；短窗口冲击不能直接升级为日线趋势反转结论。若价格在观察期内反向触及 `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT`，或超过 `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES` 仍未确认，机会会失效且不会触发分析。
 
-启用 `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true` 后，监控会优先读取 Binance 公共 ticker WebSocket 缓存；缓存缺失、过期或 WebSocket 依赖不可用时自动回退到 REST 行情，避免监控链路中断。默认连续 2 次同向确认用于降低单次 Last Price 脏数据、瞬时插针或交易所异常报价导致的误触发；如果追求更快响应，可把确认次数设为 1，但误触发风险会升高。普通小时线基线分析仍保留，但默认通过 `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4` 降为每 4 小时一次，真正的短线机会由事件监控捕捉。
+启用 `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true` 后，监控会优先读取 OKX 公共 ticker WebSocket 缓存；缓存缺失、过期或 WebSocket 依赖不可用时，依次回退到 OKX REST、Binance REST 和 Bybit REST。全部数据源暂不可用时，本轮检查会记录为 `quote_error`，不会持续向调度器抛出完整异常。默认连续 2 次同向确认用于降低单次 Last Price 脏数据、瞬时插针或交易所异常报价导致的误触发；如果追求更快响应，可把确认次数设为 1，但误触发风险会升高。普通小时线基线分析仍保留，但默认通过 `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4` 降为每 4 小时一次，真正的短线机会由事件监控捕捉。
 
 默认参数偏保守：每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 后开始观察，继续同向推进 0.2% 才形成入场信号，反向 0.5% 或观察 20 分钟未确认则失效，触发后冷却 30 分钟。若开启 WebSocket，可把检查间隔下调到 15 秒、观察窗口下调到 1 分钟以更快捕捉日内机会；调度器后台任务最小轮询精度为 5 秒，因此低于 5 秒的间隔会被自动夹到 5 秒。
 

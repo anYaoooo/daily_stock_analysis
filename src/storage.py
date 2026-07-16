@@ -445,7 +445,7 @@ class CryptoBacktestResult(Base):
     plan_type = Column(String(24), nullable=False, index=True)  # daily_long/daily_short/intraday
     horizon = Column(String(16), nullable=False, index=True)  # daily/intraday
     direction = Column(String(8), nullable=False)  # long/short/wait
-    engine_version = Column(String(24), nullable=False, default='btc-plan-v2')
+    engine_version = Column(String(24), nullable=False, default='btc-plan-v3')
 
     eval_status = Column(String(24), nullable=False, default='pending')
     evaluation_start = Column(DateTime)
@@ -501,7 +501,7 @@ class CryptoBacktestSummary(Base):
     code = Column(String(16), index=True)
     horizon = Column(String(16), index=True)
     plan_type = Column(String(24), index=True)
-    engine_version = Column(String(24), nullable=False, default='btc-plan-v2')
+    engine_version = Column(String(24), nullable=False, default='btc-plan-v3')
     computed_at = Column(DateTime, default=datetime.now, index=True)
 
     total_evaluations = Column(Integer, default=0)
@@ -2078,6 +2078,14 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             if not existing_ids:
                 return 0
 
+            affected_crypto_engines = list(
+                session.execute(
+                    select(CryptoBacktestResult.engine_version)
+                    .where(CryptoBacktestResult.analysis_history_id.in_(existing_ids))
+                    .distinct()
+                ).scalars().all()
+            )
+
             session.execute(
                 delete(DecisionSignalRecord).where(
                     and_(
@@ -2092,6 +2100,12 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             session.execute(
                 delete(CryptoBacktestResult).where(CryptoBacktestResult.analysis_history_id.in_(existing_ids))
             )
+            if affected_crypto_engines:
+                session.execute(
+                    delete(CryptoBacktestSummary).where(
+                        CryptoBacktestSummary.engine_version.in_(affected_crypto_engines)
+                    )
+                )
             result = session.execute(
                 delete(AnalysisHistory).where(AnalysisHistory.id.in_(existing_ids))
             )

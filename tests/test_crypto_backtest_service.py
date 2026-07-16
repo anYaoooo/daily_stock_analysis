@@ -11,6 +11,43 @@ from src.storage import AnalysisHistory, CryptoBacktestResult
 
 
 class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
+    def test_bars_from_dataframe_keeps_execution_fields_and_indicators(self):
+        import pandas as pd
+
+        bars = CryptoBacktestService._bars_from_dataframe(
+            pd.DataFrame(
+                [
+                    {"date": "2026-01-01 00:00", "open": 99, "high": 101, "low": 98, "close": 100, "volume": 10},
+                    {"date": "2026-01-01 01:00", "open": 100, "high": 103, "low": 99, "close": 102, "volume": 20},
+                ]
+            ),
+            period="hourly",
+        )
+
+        self.assertEqual(bars[1].open, 100)
+        self.assertEqual(bars[1].volume_ratio, 2.0)
+        self.assertIsNotNone(bars[1].vwap)
+
+    def test_only_closed_bars_and_mature_windows_are_final(self):
+        fetched_at = datetime(2026, 1, 2, 0, 30, tzinfo=timezone.utc)
+
+        self.assertTrue(
+            CryptoBacktestService._bar_is_closed(
+                datetime(2026, 1, 1), period="daily", fetched_at=fetched_at
+            )
+        )
+        self.assertFalse(
+            CryptoBacktestService._bar_is_closed(
+                datetime(2026, 1, 2), period="daily", fetched_at=fetched_at
+            )
+        )
+        self.assertFalse(
+            CryptoBacktestService._evaluation_window_complete(
+                window_end=datetime(2026, 1, 3),
+                data_snapshot={"fetched_at": fetched_at.isoformat()},
+            )
+        )
+
     def test_kline_metadata_freezes_source_range_and_hash(self):
         bars = [
             _Bar(timestamp=datetime(2026, 1, 1), high=101, low=99, close=100),
@@ -131,6 +168,17 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                                 "entry_price": "100500",
                                 "stop_loss": "100000",
                                 "take_profit": "101500",
+                                "execution_contract": {
+                                    "version": "btc-execution-v1",
+                                    "entry": {
+                                        "logic": "all",
+                                        "conditions": [{"type": "close_above", "value": 100500}],
+                                        "confirmation_bars": 1,
+                                        "fill": "next_bar_open",
+                                        "max_wait_bars": 8,
+                                    },
+                                    "exit": {"max_holding_bars": 12},
+                                },
                             },
                         }
                     }
@@ -144,6 +192,7 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
 
         self.assertEqual([plan.plan_type for plan in plans], ["intraday"])
         self.assertEqual(plans[0].direction, "long")
+        self.assertEqual(plans[0].execution_contract["version"], "btc-execution-v1")
 
     def test_history_record_marks_missing_plan_fields(self):
         analysis = AnalysisHistory(
@@ -173,8 +222,74 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         self.assertEqual(item["backtest_status"], "invalid_plan")
         self.assertEqual(item["plans"][0]["plan_type"], "daily_long")
         self.assertFalse(item["plans"][0]["backtestable"])
-        self.assertEqual(item["plans"][0]["missing_fields"], ["stop_loss", "take_profit"])
+        self.assertEqual(
+            item["plans"][0]["missing_fields"],
+            ["stop_loss", "take_profit", "execution_contract"],
+        )
         self.assertEqual(item["plans"][0]["no_trade_reason"], "等待止损和目标价补齐")
+
+    def test_history_record_marks_explicit_wait_as_no_trade_plan(self):
+        analysis = AnalysisHistory(
+            id=13,
+            query_id="q-13",
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "intraday_plan": {
+                                "enabled": False,
+                                "direction": "wait",
+                                "no_trade_reason": "小时线结构尚未确认",
+                            }
+                        }
+                    }
+                }
+            ),
+            context_snapshot=json.dumps({"analysis_mode": "hourly"}),
+            created_at=datetime(2026, 1, 1, 8),
+        )
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+
+        item = service._history_record_to_dict(analysis, {})
+
+        plan = item["plans"][0]
+        self.assertEqual(plan["direction"], "wait")
+        self.assertEqual(plan["quality_status"], "no_trade_plan")
+        self.assertEqual(plan["missing_fields"], [])
+        self.assertEqual(plan["backtest_status"], "skipped")
+        self.assertFalse(plan["backtestable"])
+        self.assertEqual(item["backtest_status"], "skipped")
+
+    def test_history_record_treats_disabled_directional_plan_as_no_trade(self):
+        analysis = AnalysisHistory(
+            id=14,
+            query_id="q-14",
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "intraday_plan": {
+                                "enabled": False,
+                                "direction": "long",
+                                "no_trade_reason": "波动条件不足",
+                            }
+                        }
+                    }
+                }
+            ),
+            context_snapshot=json.dumps({"analysis_mode": "hourly"}),
+            created_at=datetime(2026, 1, 1, 8),
+        )
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+
+        item = service._history_record_to_dict(analysis, {})
+
+        plan = item["plans"][0]
+        self.assertEqual(plan["direction"], "wait")
+        self.assertEqual(plan["quality_status"], "no_trade_plan")
+        self.assertEqual(plan["missing_fields"], [])
 
     def test_history_record_attaches_latest_backtest_result_status(self):
         analysis = AnalysisHistory(
@@ -190,6 +305,17 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                                 "stop_loss": "99000",
                                 "take_profit": "102000",
                                 "risk_reward": "1:2",
+                                "execution_contract": {
+                                    "version": "btc-execution-v1",
+                                    "entry": {
+                                        "logic": "all",
+                                        "conditions": [{"type": "close_above", "value": 100000}],
+                                        "confirmation_bars": 1,
+                                        "fill": "next_bar_open",
+                                        "max_wait_bars": 8,
+                                    },
+                                    "exit": {"max_holding_bars": 12},
+                                },
                             }
                         }
                     }
@@ -203,7 +329,7 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
             plan_type="daily_long",
             horizon="daily",
             direction="long",
-            engine_version="btc-plan-v2",
+            engine_version="btc-plan-v3",
             eval_status="completed",
             outcome="win",
             entry_triggered=True,
@@ -216,6 +342,7 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
 
         self.assertEqual(item["backtest_status"], "completed")
         self.assertEqual(item["plans"][0]["backtest_status"], "win")
+        self.assertEqual(item["plans"][0]["execution_contract"]["version"], "btc-execution-v1")
         self.assertEqual(item["plans"][0]["risk_reward"], "1:2")
         self.assertEqual(item["plans"][0]["latest_result"]["trade"]["net_pnl"], 12.3)
 
@@ -395,6 +522,7 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
             outcome="loss",
         )
         service = CryptoBacktestService.__new__(CryptoBacktestService)
+        service._engine_version = lambda: "btc-plan-v2"
 
         item = service._history_record_to_dict(
             analysis,

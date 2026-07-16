@@ -20,6 +20,7 @@ STRATEGY_PLAN_KEYS = (
     "entry_zone",
     "stop_loss",
     "take_profit",
+    "execution_contract",
     "trigger_condition",
     "invalidation",
     "invalid_condition",
@@ -39,6 +40,7 @@ INTRADAY_PLAN_KEYS = (
     "entry_zone",
     "stop_loss",
     "take_profit",
+    "execution_contract",
     "trigger_condition",
     "invalidation",
     "invalid_condition",
@@ -133,7 +135,7 @@ def extract_sniper_points(result: Any) -> Dict[str, Optional[float]]:
     return {key: parse_sniper_value(raw_points.get(key)) for key in SNIPER_KEYS}
 
 
-def extract_directional_strategy_plans(source: Any) -> Dict[str, Optional[Dict[str, str]]]:
+def extract_directional_strategy_plans(source: Any) -> Dict[str, Optional[Dict[str, Any]]]:
     """Extract optional long/short plan blocks from a report dashboard."""
 
     dashboard: Mapping[str, Any] = {}
@@ -177,11 +179,11 @@ def extract_directional_strategy_plans(source: Any) -> Dict[str, Optional[Dict[s
     }
 
 
-def _normalize_strategy_plan(value: Any) -> Optional[Dict[str, str]]:
+def _normalize_strategy_plan(value: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(value, Mapping):
         return None
 
-    normalized: Dict[str, str] = {}
+    normalized: Dict[str, Any] = {}
     for key in STRATEGY_PLAN_KEYS:
         raw_value = value.get(key)
         if raw_value is None and "_" in key:
@@ -190,6 +192,9 @@ def _normalize_strategy_plan(value: Any) -> Optional[Dict[str, str]]:
             )
             raw_value = value.get(camel_key)
         if raw_value is None:
+            continue
+        if key == "execution_contract" and isinstance(raw_value, Mapping):
+            normalized[key] = dict(raw_value)
             continue
         text = str(raw_value).strip()
         if text:
@@ -216,6 +221,9 @@ def _normalize_intraday_plan(value: Any) -> Optional[Dict[str, Any]]:
             )
             raw_value = value.get(camel_key)
         if raw_value is None:
+            continue
+        if key == "execution_contract" and isinstance(raw_value, Mapping):
+            normalized[key] = dict(raw_value)
             continue
         if key == "enabled" and isinstance(raw_value, bool):
             normalized[key] = raw_value

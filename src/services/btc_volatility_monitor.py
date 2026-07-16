@@ -41,17 +41,15 @@ class BTCVolatilityMonitor:
         quote_fetcher: Optional[Callable[[str], Any]] = None,
         now_provider: Optional[Callable[[], float]] = None,
     ) -> None:
-        self.quote_fetcher = quote_fetcher or self._fetch_quote
+        self._rest_fetcher = CryptoFetcher()
+        self.quote_fetcher = quote_fetcher or self._rest_fetcher.get_realtime_quote
         self.now_provider = now_provider or time.time
         self._snapshots: List[PriceSnapshot] = []
         self._last_trigger_at: Optional[float] = None
         self._confirmation_direction: Optional[str] = None
         self._confirmation_count = 0
         self._active_opportunity: Optional[ActiveOpportunity] = None
-
-    @staticmethod
-    def _fetch_quote(symbol: str) -> Any:
-        return CryptoFetcher().get_realtime_quote(symbol)
+        self._last_quote_error_log_at: Optional[float] = None
 
     def run_once(self, config: Any) -> Dict[str, Any]:
         """Check one quote and return trigger metadata for the scheduler."""
@@ -67,7 +65,15 @@ class BTCVolatilityMonitor:
 
         symbol = str(getattr(config, "btc_volatility_monitor_symbol", "BTC") or "BTC").strip() or "BTC"
         now = float(self.now_provider())
-        quote = self.quote_fetcher(symbol)
+        try:
+            quote = self.quote_fetcher(symbol)
+        except Exception as exc:
+            if self._last_quote_error_log_at is None or now - self._last_quote_error_log_at >= 60:
+                logger.warning("BTC 行情暂不可用，波动监控本轮跳过: %s", exc)
+                self._last_quote_error_log_at = now
+            stats["reason"] = "quote_error"
+            stats["error_type"] = type(exc).__name__
+            return stats
         price = self._quote_price(quote)
         if price is None or price <= 0:
             stats["reason"] = "missing_price"

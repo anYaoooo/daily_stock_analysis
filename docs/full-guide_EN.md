@@ -1024,8 +1024,8 @@ System defaults to AkShare (free), also supports other data sources:
 - Supports US/HK stock data
 - US stock historical and real-time data both use YFinance exclusively to avoid technical indicator errors from akshare's US stock adjustment issues
 
-### CCXT / Binance Crypto
-- Free, no configuration needed; uses CCXT to access Binance public market-data endpoints
+### BTC Public Market Data
+- Free and configuration-free; reads OKX through CCXT/REST first, then falls back to Binance and Bybit public endpoints
 - Currently supports Bitcoin symbols: `BTC`, `BTCUSDT`, `BTC-USD`, `BTC/USD`
 - Provides real-time quotes and daily K-line data, and routes crypto symbols separately so they are not mistaken for US tickers
 
@@ -1033,7 +1033,7 @@ System defaults to AkShare (free), also supports other data sources:
 - Select the exchange with `CRYPTO_TRADING_EXCHANGE=okx|bybit`; the default is `okx`. Trading APIs are not wired into automatic analysis execution. Endpoints live under `/api/v1/crypto-trading/*` and support balance, positions, open orders, single-order lookup, explicit order creation/cancelation, leverage, and margin mode settings.
 - For OKX, optionally configure `OKX_API_KEY`, `OKX_SECRET`, and `OKX_PASSWORD`. `OKX_PASSWORD` is the OKX API key passphrase, not the login password. The default symbol is `BTC/USDT:USDT`, with `OKX_DEFAULT_TYPE=swap` and `OKX_TD_MODE=cross`; set `OKX_SANDBOX=true` to use the OKX sandbox.
 - Bybit currently uses exchange-provided Demo Trading only: set `CRYPTO_TRADING_EXCHANGE=bybit`, `BYBIT_API_KEY`, `BYBIT_SECRET`, and `BYBIT_DEMO_TRADING=true`. Futures default to `BYBIT_DEFAULT_TYPE=swap`, `BYBIT_DEFAULT_SETTLE=USDT`, `BYBIT_MARGIN_MODE=isolated`, and `BYBIT_DEFAULT_LEVERAGE=2`; order params automatically include `position_idx=0`. For spot, set `BYBIT_DEFAULT_TYPE=spot` and use spot symbols such as `BTC/USDT`.
-- Mutating calls have two safeguards: `CRYPTO_TRADING_ENABLED=false` blocks real trading, and `CRYPTO_TRADING_DRY_RUN=true` returns a preview without calling exchange write APIs. Real write calls require both `CRYPTO_TRADING_ENABLED=true` and `CRYPTO_TRADING_DRY_RUN=false`. Bybit Demo Trading is an exchange-side simulated account mode, not local dry-run.
+- Trading endpoints accept BTC/USDT spot or perpetual symbols only. Mutating calls have three safeguards: `CRYPTO_TRADING_ENABLED=false` blocks real trading, `CRYPTO_TRADING_DRY_RUN=true` returns a preview, and live writes additionally require `ADMIN_AUTH_ENABLED=true` with a valid admin session. Bybit Demo Trading is an exchange-side simulated account mode, not local dry-run.
 
 ### Longbridge
 - Optional fallback for US/HK stocks, mainly used to supplement fields that YFinance may miss
@@ -1219,7 +1219,7 @@ Set the following variables in `.env` (all optional, have defaults):
 | `BACKTEST_ENGINE_VERSION` | `v1` | Engine version, used to distinguish results when logic is updated |
 | `BACKTEST_NEUTRAL_BAND_PCT` | `2.0` | Neutral band threshold (%), ±2% treated as range-bound |
 | `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | BTC plan-level backtest minimum age; defaults to 24 hours after report creation |
-| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v2` | BTC plan-level backtest engine version |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v3` | BTC plan-level backtest engine version; v2 remains a touch-price proxy only |
 | `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | BTC plan-level neutral band threshold (%) |
 | `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | Initial equity for BTC trading backtests, used for equity curve, net return, and sizing |
 | `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | Maximum account risk per trade; position size is derived from stop distance |
@@ -1230,7 +1230,7 @@ Set the following variables in `.env` (all optional, have defaults):
 
 ### Auto-run
 
-Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker still checks eligible BTC history every hour. BTC plan-level backtesting extracts `daily_long`, `daily_short`, and `intraday` plans from `analysis_history.raw_result`, simulates trade execution with entry triggers, SL/TP exits, fees, slippage, risk budget, and notional caps, stores results in `crypto_backtest_results`, and rolls up accuracy, win rate, equity curve, and risk/return metrics in `crypto_backtest_summaries`. `btc-plan-v2` also stores kline source/period/fetch time/bar range/hash, lookahead-bias guard diagnostics, per-trade R multiple, and marks summaries as low confidence when fewer than 30 entries were triggered. Results can be triggered manually or deleted one row at a time via API; summaries are recomputed after deletion.
+Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v3` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, fills at the next candle open after all conditions are confirmed, and then applies SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing `btc-plan-v2` results remain auditable but represent a touch-price proxy and are never mixed with v3 metrics.
 
 After a single-symbol BTC analysis completes, full report notifications use the BTC-specific template instead of the generic stock decision dashboard. The notification body keeps only directional advice, the daily long plan, the daily short plan, the hourly intraday plan, and technical analysis.
 
@@ -1239,7 +1239,7 @@ After a single-symbol BTC analysis completes, full report notifications use the 
 | Metric | Description |
 |--------|-------------|
 | `direction_accuracy_pct` | Direction prediction accuracy (expected direction matches actual) |
-| `win_rate_pct` | Win rate (wins / (wins + losses), excludes neutral) |
+| `win_rate_pct` | Contract win rate for independent triggered trades (wins / (wins + losses), excludes neutral; v2 is proxy-only) |
 | `avg_stock_return_pct` | Average stock return percentage |
 | `avg_simulated_return_pct` | Average simulated execution return (including SL/TP exits) |
 | `risk_metrics.total_return_pct` | Account total return for BTC trading backtests |
@@ -1509,7 +1509,7 @@ When `BTC_VOLATILITY_MONITOR_ENABLED=true`, schedule mode also registers the `bt
 
 Opportunity-triggered hourly analysis receives `trigger_reason=entry_signal`, suggested trade direction, entry confirmation price, invalidation price, watched seconds, short-window direction, change percentage, current price, baseline price, threshold, and confirmation sample counts. Reports should treat this as intraday trigger/risk context and state that the current 1h candle may still be unfinished; a short-window shock must not be promoted directly into a daily trend reversal. If price reverses by `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT` during the watch state, or no confirmation appears within `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES`, the opportunity expires without triggering analysis.
 
-When `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true`, the monitor prefers the Binance public ticker WebSocket cache and automatically falls back to REST when the cache is missing, stale, or the WebSocket dependency is unavailable. The default two-sample confirmation reduces false positives from dirty Last Price ticks, one-off wicks, or abnormal exchange quotes. Setting confirmation samples to `1` improves response speed but increases false-trigger risk. Regular hourly baseline analysis remains available, but defaults to every 4 hours through `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4`; faster intraday opportunities are handled by the event monitor.
+When `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true`, the monitor prefers the OKX public ticker WebSocket cache. If the cache is missing or stale, it falls back through OKX REST, Binance REST, and Bybit REST. If all providers are temporarily unavailable, the check reports `quote_error` instead of repeatedly throwing full scheduler exceptions. The default two-sample confirmation reduces false positives from dirty Last Price ticks, one-off wicks, or abnormal exchange quotes. Setting confirmation samples to `1` improves response speed but increases false-trigger risk. Regular hourly baseline analysis remains available, but defaults to every 4 hours through `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4`; faster intraday opportunities are handled by the event monitor.
 
 ```env
 BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4
