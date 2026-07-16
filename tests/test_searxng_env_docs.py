@@ -4,17 +4,11 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
-def test_env_example_documents_searxng_actions_variable_mapping() -> None:
+def test_env_example_omits_legacy_searxng_settings_in_btc_only_mode() -> None:
     env_example = (ROOT_DIR / ".env.example").read_text(encoding="utf-8")
 
-    start = env_example.index("# SearXNG 实例地址")
-    end = env_example.index("SEARXNG_PUBLIC_INSTANCES_ENABLED=true", start)
-    searxng_block = env_example[start:end]
-
-    assert "GitHub Actions" in searxng_block
-    assert "Variables 优先" in searxng_block
-    assert "Secrets" in searxng_block
-    assert "需配置为 Secret" not in searxng_block
+    assert "SEARXNG_BASE_URLS=" not in env_example
+    assert "SEARXNG_PUBLIC_INSTANCES_ENABLED=" not in env_example
 
 
 def test_daily_analysis_workflow_matches_documented_searxng_variable_mapping() -> None:

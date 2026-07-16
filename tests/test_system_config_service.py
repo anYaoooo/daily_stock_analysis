@@ -36,7 +36,12 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        os.environ["ENV_FILE"] = str(self.env_path)
+        self.env_patcher = patch.dict(
+            os.environ,
+            {"ENV_FILE": str(self.env_path)},
+            clear=True,
+        )
+        self.env_patcher.start()
         Config.reset_instance()
 
         self.manager = ConfigManager(env_path=self.env_path)
@@ -44,7 +49,7 @@ class SystemConfigServiceTestCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         Config.reset_instance()
-        os.environ.pop("ENV_FILE", None)
+        self.env_patcher.stop()
         self.temp_dir.cleanup()
 
     def _rewrite_env(self, *lines: str) -> None:
@@ -1435,14 +1440,15 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertTrue(any(issue["key"] == "LITELLM_MODEL" and issue["code"] == "missing_runtime_source" for issue in validation["issues"]))
 
     def test_validate_excludes_removed_aihubmix_channel_from_runtime_models(self) -> None:
-        validation = self.service.validate(
-            items=[
-                {"key": "LLM_CHANNELS", "value": "aihubmix"},
-                {"key": "LLM_AIHUBMIX_API_KEY", "value": "sk-aihubmix-test-value"},
-                {"key": "LLM_AIHUBMIX_MODELS", "value": "gpt-4o-mini"},
-                {"key": "LITELLM_MODEL", "value": "openai/gpt-4o-mini"},
-            ]
-        )
+        with self._notification_test_env():
+            validation = self.service.validate(
+                items=[
+                    {"key": "LLM_CHANNELS", "value": "aihubmix"},
+                    {"key": "LLM_AIHUBMIX_API_KEY", "value": "sk-aihubmix-test-value"},
+                    {"key": "LLM_AIHUBMIX_MODELS", "value": "gpt-4o-mini"},
+                    {"key": "LITELLM_MODEL", "value": "openai/gpt-4o-mini"},
+                ]
+            )
 
         self.assertFalse(validation["valid"])
         self.assertTrue(any(issue["key"] == "LITELLM_MODEL" and issue["code"] == "missing_runtime_source" for issue in validation["issues"]))
@@ -2551,12 +2557,12 @@ class SystemConfigServiceTestCase(unittest.TestCase):
 
         response = self.service.update(
             config_version=self.manager.get_config_version(),
-            items=[{"key": "STOCK_LIST", "value": "300750,TSLA"}],
+            items=[{"key": "STOCK_LIST", "value": "BTCUSDT"}],
             reload_now=True,
         )
 
         self.assertTrue(response["success"])
-        self.assertEqual(Config.get_instance().stock_list, ["300750", "TSLA"])
+        self.assertEqual(Config.get_instance().stock_list, ["BTC"])
 
     def test_update_raises_conflict_for_stale_version(self) -> None:
         with self.assertRaises(ConfigConflictError):

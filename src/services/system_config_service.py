@@ -96,6 +96,7 @@ class SystemConfigService:
 
     _LLM_CAPABILITY_ORDER: Tuple[str, ...] = ("json", "tools", "stream", "vision")
     _LLM_STREAM_CHUNK_LIMIT = 8
+    _REMOVED_LLM_CHANNEL_NAMES = frozenset({"anspire", "aihubmix"})
     _WEB_SETTINGS_LLM_CHANNEL_SUPPORT_KEY_RE = re.compile(
         r"^LLM_([A-Z0-9_]+)_(PROTOCOL|BASE_URL|API_KEY|API_KEYS|MODELS|EXTRA_HEADERS|ENABLED)$"
     )
@@ -307,6 +308,7 @@ class SystemConfigService:
             segment.strip().upper()
             for segment in config_map.get("LLM_CHANNELS", "").split(",")
             if segment.strip()
+            and segment.strip().lower() not in cls._REMOVED_LLM_CHANNEL_NAMES
         }
         if not channel_names:
             return keys
@@ -336,6 +338,7 @@ class SystemConfigService:
             )
             for segment in raw_channels.split(",")
             if segment.strip()
+            and segment.strip().lower() not in cls._REMOVED_LLM_CHANNEL_NAMES
         }
         runtime_map: Dict[str, str] = {}
 
@@ -2495,6 +2498,8 @@ class SystemConfigService:
             name = raw_name.strip()
             if not name:
                 continue
+            if name.lower() in cls._REMOVED_LLM_CHANNEL_NAMES:
+                continue
             prefix = f"LLM_{name.upper()}"
             enabled_raw = effective_map.get(f"{prefix}_ENABLED")
             enabled = parse_env_bool(enabled_raw, default=True)
@@ -3399,6 +3404,8 @@ class SystemConfigService:
             name = raw_name.strip()
             if not name:
                 continue
+            if name.lower() in SystemConfigService._REMOVED_LLM_CHANNEL_NAMES:
+                continue
             if not re.fullmatch(r"[A-Za-z0-9_]+", name):
                 issues.append(
                     {
@@ -3471,6 +3478,8 @@ class SystemConfigService:
         for raw_name in raw_channels.split(","):
             name = raw_name.strip()
             if not name:
+                continue
+            if name.lower() in SystemConfigService._REMOVED_LLM_CHANNEL_NAMES:
                 continue
 
             prefix = f"LLM_{name.upper()}"

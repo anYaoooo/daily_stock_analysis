@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Tests for backward-compatible config env aliases and TickFlow loading."""
+"""Tests for backward-compatible config env aliases in BTC-only mode."""
 
 import os
 import tempfile
@@ -16,20 +16,20 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
-    def test_load_from_env_reads_tickflow_api_key(
+    def test_load_from_env_ignores_removed_tickflow_api_key(
         self, _mock_parse_litellm_yaml, _mock_setup_env
     ):
         with patch.dict(
             os.environ,
             {
-                "STOCK_LIST": "600519",
+                "STOCK_LIST": "BTC",
                 "TICKFLOW_API_KEY": "tf-secret",
             },
             clear=True,
         ):
             config = Config._load_from_env()
 
-        self.assertEqual(config.tickflow_api_key, "tf-secret")
+        self.assertIsNone(config.tickflow_api_key)
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
@@ -39,7 +39,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "STOCK_LIST": "600519",
+                "STOCK_LIST": "BTC",
             },
             clear=True,
         ):
@@ -48,7 +48,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertIsNone(config.tickflow_api_key)
         self.assertEqual(
             config.realtime_source_priority,
-            "tencent,akshare_sina,efinance,akshare_em",
+            "crypto",
         )
 
     @patch("src.config.setup_env")
@@ -280,14 +280,14 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
-    def test_daily_market_context_enabled_defaults_on_and_can_disable(
+    def test_daily_market_context_is_disabled_in_btc_only_mode(
         self,
         _mock_parse_yaml,
         _mock_setup_env,
     ) -> None:
         with patch.dict(os.environ, {}, clear=True):
             config = Config._load_from_env()
-        self.assertTrue(config.daily_market_context_enabled)
+        self.assertFalse(config.daily_market_context_enabled)
 
         with patch.dict(os.environ, {"DAILY_MARKET_CONTEXT_ENABLED": "false"}, clear=True):
             config = Config._load_from_env()
@@ -303,7 +303,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             env_path.write_text(
                 "\n".join(
                     [
-                        "STOCK_LIST=600519",
+                        "STOCK_LIST=BTC",
                         "SCHEDULE_ENABLED=false",
                         "SCHEDULE_TIME=18:00",
                         "RUN_IMMEDIATELY=true",
@@ -318,7 +318,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 os.environ,
                 {
                     "ENV_FILE": str(env_path),
-                    "STOCK_LIST": "600519",
+                    "STOCK_LIST": "BTC",
                     "SCHEDULE_ENABLED": "false",
                     "SCHEDULE_TIME": "18:00",
                     "RUN_IMMEDIATELY": "true",
@@ -330,7 +330,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 env_path.write_text(
                     "\n".join(
                         [
-                            "STOCK_LIST=300750,TSLA",
+                            "STOCK_LIST=BTCUSDT",
                             "SCHEDULE_ENABLED=true",
                             "SCHEDULE_TIME=09:30",
                             "RUN_IMMEDIATELY=false",
@@ -344,7 +344,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 setup_env(override=True)
                 config = Config._load_from_env()
 
-        self.assertEqual(config.stock_list, ["300750", "TSLA"])
+        self.assertEqual(config.stock_list, ["BTC"])
         self.assertTrue(config.schedule_enabled)
         self.assertEqual(config.schedule_time, "09:30")
         self.assertFalse(config.run_immediately)
@@ -365,7 +365,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             env_path.write_text(
                 "\n".join(
                     [
-                        "STOCK_LIST=300750,TSLA",
+                        "STOCK_LIST=BTC-USD",
                         "SCHEDULE_ENABLED=true",
                         "SCHEDULE_TIME=09:30",
                         "RUN_IMMEDIATELY=false",
@@ -380,7 +380,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 os.environ,
                 {
                     "ENV_FILE": str(env_path),
-                    "STOCK_LIST": "600519,000001",
+                    "STOCK_LIST": "BTCUSDT",
                     "SCHEDULE_ENABLED": "false",
                     "SCHEDULE_TIME": "18:00",
                     "RUN_IMMEDIATELY": "true",
@@ -391,7 +391,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 config = Config._load_from_env()
 
         # Explicit process env overrides win when values differ from .env
-        self.assertEqual(config.stock_list, ["600519", "000001"])
+        self.assertEqual(config.stock_list, ["BTC"])
         self.assertFalse(config.schedule_enabled)
         self.assertEqual(config.schedule_time, "18:00")
         self.assertTrue(config.run_immediately)
@@ -414,28 +414,26 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 os.environ,
                 {
                     "ENV_FILE": str(env_path),
-                    "STOCK_LIST": "600519,000001",
+                    "STOCK_LIST": "BTC/USD",
                 },
                 clear=True,
             ):
                 config = Config._load_from_env()
 
-        self.assertEqual(config.stock_list, ["600519", "000001"])
+        self.assertEqual(config.stock_list, ["BTC"])
 
     def test_refresh_stock_list_preserves_empty_required_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env"
             env_path.write_text("STOCK_LIST=\n", encoding="utf-8")
 
-            config = Config(stock_list=["600519"])
+            config = Config(stock_list=["BTC"])
             with patch.dict(os.environ, {"ENV_FILE": str(env_path)}, clear=True):
                 config.refresh_stock_list()
 
-        self.assertEqual(config.stock_list, [])
+        self.assertEqual(config.stock_list, ["BTC"])
         issues = config.validate_structured()
-        self.assertTrue(
-            any(issue.severity == "error" and issue.field == "STOCK_LIST" for issue in issues)
-        )
+        self.assertFalse(any(issue.field == "STOCK_LIST" for issue in issues))
 
     def test_parse_report_language_accepts_known_alias_without_warning(self) -> None:
         with self.assertNoLogs("src.config", level="WARNING"):

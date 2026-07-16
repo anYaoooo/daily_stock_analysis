@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for LLM usage tracking (storage + analyzer helper)."""
 
+import gc
 import hashlib
 import hmac as py_hmac
 import json
@@ -8,7 +9,9 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -1467,6 +1470,23 @@ class TestLLMUsageMigration(unittest.TestCase):
             )
             conn.commit()
 
+    @contextmanager
+    def _temporary_usage_db(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        try:
+            yield Path(temp_dir.name) / "legacy.sqlite"
+        finally:
+            DatabaseManager.reset_instance()
+            for attempt in range(5):
+                gc.collect()
+                try:
+                    temp_dir.cleanup()
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05)
+
     def _usage_columns(self, db_path: Path):
         with sqlite3.connect(db_path) as conn:
             return {
@@ -1487,8 +1507,7 @@ class TestLLMUsageMigration(unittest.TestCase):
         )
 
     def test_existing_sqlite_table_gets_missing_columns_idempotently(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "legacy.sqlite"
+        with self._temporary_usage_db() as db_path:
             self._create_legacy_usage_db(db_path)
 
             DatabaseManager.reset_instance()
@@ -1498,8 +1517,7 @@ class TestLLMUsageMigration(unittest.TestCase):
             self._assert_all_telemetry_columns(db_path)
 
     def test_existing_sqlite_table_gets_partial_missing_columns(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "legacy.sqlite"
+        with self._temporary_usage_db() as db_path:
             self._create_legacy_usage_db(
                 db_path,
                 telemetry_columns=(
@@ -1515,8 +1533,7 @@ class TestLLMUsageMigration(unittest.TestCase):
             self._assert_all_telemetry_columns(db_path)
 
     def test_existing_sqlite_table_with_all_telemetry_columns_is_noop(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "legacy.sqlite"
+        with self._temporary_usage_db() as db_path:
             self._create_legacy_usage_db(
                 db_path,
                 telemetry_columns=tuple(_LLM_USAGE_TELEMETRY_COLUMN_SQL),
@@ -1528,8 +1545,7 @@ class TestLLMUsageMigration(unittest.TestCase):
             self._assert_all_telemetry_columns(db_path)
 
     def test_existing_sqlite_table_ignores_concurrent_duplicate_column(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "legacy.sqlite"
+        with self._temporary_usage_db() as db_path:
             self._create_legacy_usage_db(db_path)
 
             original_exec_driver_sql = Connection.exec_driver_sql
@@ -1572,8 +1588,7 @@ class TestLLMUsageMigration(unittest.TestCase):
             self._assert_all_telemetry_columns(db_path)
 
     def test_existing_sqlite_table_retries_locked_column_backfill(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "legacy.sqlite"
+        with self._temporary_usage_db() as db_path:
             self._create_legacy_usage_db(db_path)
 
             original_exec_driver_sql = Connection.exec_driver_sql

@@ -2601,37 +2601,6 @@ class Config:
                 message="当前项目已切换为 BTC-only 模式，STOCK_LIST 仅支持 BTC/BTCUSDT/BTC-USD/BTC/USD。",
                 field="STOCK_LIST",
             ))
-        elif self.stock_email_groups:
-            from data_provider.base import normalize_stock_code
-            configured_stock_set = {
-                normalize_stock_code(code)
-                for code in self.stock_list
-                if (code or "").strip()
-            }
-            missing_group_stocks_dict: Dict[str, None] = {}
-            for stocks, _emails in self.stock_email_groups:
-                for stock in stocks:
-                    raw = (stock or "").strip()
-                    if not raw:
-                        continue
-                    normalized_stock = normalize_stock_code(stock)
-                    if normalized_stock in configured_stock_set:
-                        continue
-                    if normalized_stock in missing_group_stocks_dict:
-                        continue
-                    missing_group_stocks_dict[normalized_stock] = None
-            missing_group_stocks = list(missing_group_stocks_dict.keys())
-            if missing_group_stocks:
-                issues.append(ConfigIssue(
-                    severity="warning",
-                    message=(
-                        "检测到 STOCK_GROUP_N 中存在未包含在 STOCK_LIST 内的股票："
-                        f"{', '.join(missing_group_stocks[:6])}。"
-                        "STOCK_GROUP_N 仅用于邮件路由，不会扩大分析范围；"
-                        "请先将这些股票加入 STOCK_LIST。"
-                    ),
-                    field="STOCK_GROUP_N",
-                ))
 
         # --- LLM availability ---
         # llm_model_list is populated for YAML / channels / managed legacy keys.

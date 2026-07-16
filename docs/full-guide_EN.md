@@ -4,6 +4,8 @@ This document contains the complete configuration guide for the AI Stock Analysi
 
 > Quick start guide available in [README_EN.md](README_EN.md). This document covers advanced configuration.
 
+> BTC-only boundary: stock-market review, A/H/US stock providers, fundamentals, stock indexes, smart stock import, and the old DecisionSignals Web UI are outside the default product and CI contract. See [Legacy stock module isolation](legacy-stock-isolation.md) for the quarantine scope, audit commands, and removal order. Historical sections that still describe these capabilities are migration references, not active Web entry points.
+
 ## Project Structure
 
 ```
@@ -1219,7 +1221,7 @@ Set the following variables in `.env` (all optional, have defaults):
 | `BACKTEST_ENGINE_VERSION` | `v1` | Engine version, used to distinguish results when logic is updated |
 | `BACKTEST_NEUTRAL_BAND_PCT` | `2.0` | Neutral band threshold (%), ±2% treated as range-bound |
 | `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | BTC plan-level backtest minimum age; defaults to 24 hours after report creation |
-| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v3` | BTC plan-level backtest engine version; v2 remains a touch-price proxy only |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v4` | BTC perpetual backtest engine version; v2/v3 remain historical audit formats only |
 | `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | BTC plan-level neutral band threshold (%) |
 | `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | Initial equity for BTC trading backtests, used for equity curve, net return, and sizing |
 | `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | Maximum account risk per trade; position size is derived from stop distance |
@@ -1227,10 +1229,13 @@ Set the following variables in `.env` (all optional, have defaults):
 | `CRYPTO_BACKTEST_LEVERAGE` | `1.0` | Notional leverage multiplier |
 | `CRYPTO_BACKTEST_FEE_RATE_BPS` | `5.0` | One-way fee rate in bps |
 | `CRYPTO_BACKTEST_SLIPPAGE_BPS` | `2.0` | One-way slippage in bps |
+| `CRYPTO_BACKTEST_MAKER_FEE_RATE_BPS` | `2.0` | v4 one-way maker fee in bps |
+| `CRYPTO_BACKTEST_TAKER_FEE_RATE_BPS` | `5.0` | v4 one-way taker fee in bps |
+| `CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE` | `0.005` | Maintenance margin rate used by v4 liquidation estimates |
 
 ### Auto-run
 
-Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v3` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, fills at the next candle open after all conditions are confirmed, and then applies SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing `btc-plan-v2` results remain auditable but represent a touch-price proxy and are never mixed with v3 metrics.
+Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v4` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, fills at the next candle open after all conditions are confirmed, and then applies SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Perpetual plans also require complete mark-price and funding histories to estimate liquidation, funding cost, and maker/taker fees. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing v2/v3 results remain auditable but are never mixed with v4 metrics.
 
 After a single-symbol BTC analysis completes, full report notifications use the BTC-specific template instead of the generic stock decision dashboard. The notification body keeps only directional advice, the daily long plan, the daily short plan, the hourly intraday plan, and technical analysis.
 

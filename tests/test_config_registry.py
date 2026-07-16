@@ -214,8 +214,6 @@ class TestSettingsHelpMetadata(unittest.TestCase):
         "WEBUI_HOST",
         "AGENT_LITELLM_MODEL",
         "LITELLM_FALLBACK_MODELS",
-        "TUSHARE_TOKEN",
-        "REALTIME_SOURCE_PRIORITY",
         "TAVILY_API_KEYS",
         "NEWS_STRATEGY_PROFILE",
         "WECHAT_WEBHOOK_URL",

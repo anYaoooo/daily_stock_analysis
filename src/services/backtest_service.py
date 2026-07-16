@@ -209,20 +209,19 @@ class BacktestService:
                     )
                 )
 
+        summary_codes_by_mode: Dict[str, set[str]] = {}
+        for row in results_to_save:
+            row_mode = row.analysis_mode or "daily"
+            summary_codes_by_mode.setdefault(row_mode, set()).add(row.code)
+
         saved = 0
         if results_to_save:
             saved = self.repo.save_results_batch(results_to_save, replace_existing=force)
 
         if saved:
-            saved_modes = sorted({row.analysis_mode or "daily" for row in results_to_save})
-            for saved_mode in saved_modes:
-                mode_codes = sorted({
-                    row.code
-                    for row in results_to_save
-                    if (row.analysis_mode or "daily") == saved_mode
-                })
+            for saved_mode, mode_codes in sorted(summary_codes_by_mode.items()):
                 self._recompute_summaries(
-                    touched_codes=mode_codes or sorted(touched_codes),
+                    touched_codes=sorted(mode_codes) or sorted(touched_codes),
                     eval_window_days=int(eval_window_days),
                     engine_version=str(engine_version),
                     analysis_mode=saved_mode,

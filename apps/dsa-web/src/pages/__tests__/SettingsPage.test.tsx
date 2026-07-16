@@ -85,11 +85,6 @@ vi.mock('../../utils/constants', async () => {
 vi.mock('../../components/settings', () => ({
   AuthSettingsCard: () => <div>认证与登录保护</div>,
   ChangePasswordCard: () => <div>修改密码</div>,
-  IntelligentImport: ({ onMerged }: { onMerged: (value: string) => void }) => (
-    <button type="button" onClick={() => onMerged('SZ000001,SZ000002')}>
-      merge stock list
-    </button>
-  ),
   LLMChannelEditor: ({
     items,
     onSaved,
@@ -744,17 +739,6 @@ describe('SettingsPage', () => {
     expect(resetDraft).toHaveBeenCalledTimes(1);
     expect(load).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
-  });
-
-  it('refreshes server state after intelligent import merges stock list', async () => {
-    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ activeCategory: 'base' }));
-
-    render(<SettingsPage />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'merge stock list' }));
-
-    expect(refreshAfterExternalSave).toHaveBeenCalledWith(['STOCK_LIST']);
-    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes server state after llm channel editor saves', async () => {

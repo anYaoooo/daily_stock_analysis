@@ -12,6 +12,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:legacy-stock": "vitest run --config vitest.legacy-stock.config.ts",
     "test:smoke": "playwright test",
     "preview": "vite preview"
   },

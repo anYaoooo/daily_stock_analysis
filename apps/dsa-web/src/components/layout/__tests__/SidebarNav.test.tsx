@@ -86,16 +86,16 @@ describe('SidebarNav', () => {
     expect(alertsLink).toHaveClass('font-medium');
   });
 
-  it('renders the AI signals navigation item and marks it active', () => {
+  it('does not expose the retired AI signals route', () => {
     render(
-      <MemoryRouter initialEntries={['/decision-signals']}>
+      <MemoryRouter initialEntries={['/']}>
         <SidebarNav />
       </MemoryRouter>,
     );
 
-    const signalsLink = screen.getByRole('link', { name: 'AI 建议' });
-    expect(signalsLink).toHaveAttribute('href', '/decision-signals');
-    expect(signalsLink).toHaveClass('font-medium');
+    expect(screen.queryByRole('link', { name: 'AI 建议' })).not.toBeInTheDocument();
+    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+    expect(hrefs).not.toContain('/decision-signals');
   });
 
   it('opens the logout confirmation and confirms logout', async () => {

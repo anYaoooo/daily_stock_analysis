@@ -150,7 +150,7 @@ def _phase_rule_zh(ctx: Dict[str, Any], phase: str) -> str:
         )
     if phase == "crypto_24x7":
         return (
-            "BTC/加密货币为 7x24 连续交易市场，不适用美股/A股/港股的盘前、开盘、收盘约束；"
+            "BTC/加密货币为 7x24 连续交易市场，不受股票交易时段约束；"
             "可以基于最新可用 K 线、实时价格、成交量、VWAP/EMA/Price Action 等生成当前交易计划，"
             "但若当前日线尚未完成，应明确说明最后一根 K 线可能仍在变化。"
         )

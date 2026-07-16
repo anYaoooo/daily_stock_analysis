@@ -4,6 +4,8 @@
 
 > 💡 快速上手请参考 [README.md](../README.md)，本文档为进阶配置。
 
+> BTC-only 边界：股票市场复盘、A/H/美股数据源、基本面、股票索引、股票智能导入和旧 DecisionSignals Web UI 已退出默认产品与 CI 契约。遗留模块的隔离范围、审计命令和删除顺序见 [Legacy 股票模块隔离边界](legacy-stock-isolation.md)。本文档中仍描述这些能力的历史章节仅供迁移审计，不代表当前 Web 入口继续提供。
+
 ## 📁 项目结构
 
 ```
@@ -1388,7 +1390,7 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 | `BACKTEST_ENGINE_VERSION` | `v1` | 引擎版本号，升级逻辑时用于区分结果 |
 | `BACKTEST_NEUTRAL_BAND_PCT` | `2.0` | 中性区间阈值（%），±2% 内视为震荡 |
 | `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | BTC 计划级回测等待时长；默认报告生成 24 小时后评估 |
-| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v3` | BTC 计划级回测引擎版本；v2 仅保留为触价代理历史口径 |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v4` | BTC 永续合约回测引擎版本；v2/v3 仅保留为历史审计口径 |
 | `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | BTC 计划级回测中性区间阈值（%） |
 | `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | BTC 正式交易回测初始权益，用于资金曲线、净收益率和仓位测算 |
 | `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | 单笔最大风险占账户权益百分比，用止损距离推导仓位 |
@@ -1396,10 +1398,13 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 | `CRYPTO_BACKTEST_LEVERAGE` | `1.0` | 名义杠杆倍数 |
 | `CRYPTO_BACKTEST_FEE_RATE_BPS` | `5.0` | 单边手续费，单位 bps |
 | `CRYPTO_BACKTEST_SLIPPAGE_BPS` | `2.0` | 单边滑点，单位 bps |
+| `CRYPTO_BACKTEST_MAKER_FEE_RATE_BPS` | `2.0` | v4 限价单单边手续费，单位 bps |
+| `CRYPTO_BACKTEST_TAKER_FEE_RATE_BPS` | `5.0` | v4 市价单单边手续费，单位 bps |
+| `CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE` | `0.005` | v4 永续合约强平估算使用的维持保证金率 |
 
 ### 自动运行
 
-回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析会在每小时 05 分执行以获取上一根完整小时 K 线，后台回测仍会每小时检查一次够龄的 BTC 历史报告。`btc-plan-v3` 从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，并要求计划携带 `btc-execution-v1` 结构化执行契约。引擎只使用已闭合 K 线验证收盘、量比和 rolling VWAP 条件，在全部条件连续满足后于下一根 K 线开盘成交，再按止盈止损、最长持有 bars、手续费、滑点、风险预算和名义仓位模拟交易。未闭合窗口保持 `insufficient_data/provisional`，后续可重算，不进入胜率；缺少或含不支持条件的契约标记为不可回测，不会降级成触价成交。汇总会排除同一 BTC 持仓期间的重叠信号，仅以独立触发交易计算策略契约胜率，并在独立触发样本少于 100 时标记低置信度。`btc-plan-v2` 结果仍可保留审计，但其 `win_rate_pct` 仅表示入场价触及代理口径，不能与 v3 混合。
+回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析会在每小时 05 分执行以获取上一根完整小时 K 线，后台回测仍会每小时检查一次够龄的 BTC 历史报告。`btc-plan-v4` 从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，并要求计划携带 `btc-execution-v1` 结构化执行契约。引擎只使用已闭合 K 线验证收盘、量比和 rolling VWAP 条件，在全部条件连续满足后于下一根 K 线开盘成交，再按止盈止损、最长持有 bars、手续费、滑点、风险预算和名义仓位模拟交易。永续合约还要求完整标记价格与资金费率历史，用于估算强平、资金成本和 maker/taker 手续费。未闭合窗口保持 `insufficient_data/provisional`，后续可重算，不进入胜率；缺少或含不支持条件的契约标记为不可回测，不会降级成触价成交。汇总会排除同一 BTC 持仓期间的重叠信号，仅以独立触发交易计算策略契约胜率，并在独立触发样本少于 100 时标记低置信度。旧 v2/v3 结果仍可保留审计，但不与 v4 指标混合。
 
 BTC 单标的分析完成后的完整报告推送使用 BTC 专用模板，不再发送通用股票决策仪表盘；正文只保留多空建议、日线多单计划、日线空单计划、小时线日内计划和技术分析。
 

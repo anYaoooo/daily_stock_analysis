@@ -2,13 +2,11 @@ import React from 'react';
 import type { AnalysisResult, AnalysisReport } from '../../types/analysis';
 import { ReportOverview } from './ReportOverview';
 import { ReportStrategy } from './ReportStrategy';
-import { ReportDecisionSignals } from './ReportDecisionSignals';
 import { ReportBacktestSummary } from './ReportBacktestSummary';
 import { ReportNews } from './ReportNews';
 import { ReportDetails } from './ReportDetails';
 import { ReportDiagnostics } from './ReportDiagnostics';
 import { AnalysisContextSummary } from './AnalysisContextSummary';
-import { MarketReviewReportView } from './MarketReviewReportView';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 
 interface ReportSummaryProps {
@@ -48,17 +46,6 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
     modelUsed && !['unknown', 'error', 'none', 'null', 'n/a'].includes(modelUsed.toLowerCase()),
   );
 
-  if (meta.reportType === 'market_review') {
-    return (
-      <MarketReviewReportView
-        report={report}
-        recordId={recordId}
-        reportLanguage={reportLanguage}
-        onOpenRunFlow={onOpenRunFlow}
-      />
-    );
-  }
-
   return (
     <div className="space-y-5 pb-8 animate-fade-in">
       {/* 概览区（首屏） */}
@@ -75,9 +62,6 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
 
       {/* BTC 计划级回测摘要 */}
       <ReportBacktestSummary recordId={recordId} stockCode={meta.stockCode} language={reportLanguage} />
-
-      {/* 从当前历史报告提取的结构化信号 */}
-      <ReportDecisionSignals recordId={recordId} reportType={meta.reportType} />
 
       {/* 资讯区 */}
       <ReportNews recordId={recordId} limit={8} language={reportLanguage} />

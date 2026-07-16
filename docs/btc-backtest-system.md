@@ -36,7 +36,7 @@
 | `daily_short` | `daily` | `short` | 日线空单计划 |
 | `intraday` | `intraday` | `long` / `short` / `wait` | 小时线日内计划 |
 
-`btc-plan-v3` 的每个可回测计划至少需要：
+`btc-plan-v4` 的每个可回测计划至少需要：
 
 - `entry_price`：入场价。
 - `stop_loss`：止损价。
@@ -44,7 +44,7 @@
 - `direction`：多/空方向，日内计划会额外检查 enabled 状态。
 - `execution_contract`：版本为 `btc-execution-v1` 的机器执行契约，完整表达收盘、量比、VWAP、确认 bars、等待 bars、成交方式和最长持有 bars。
 
-计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。旧 `btc-plan-v2` 结果只保留为历史触价代理口径。
+计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。v4 永续合约还要求完整的标记价格和资金费率历史，用于模拟强平与资金成本；旧 v2/v3 结果保留审计但不与 v4 指标混合。
 
 每个计划回测结果还会在 `diagnostics.indicator_tags` 中保存生成报告时的低敏 BTC 指标快照标签，当前包括：
 
@@ -418,7 +418,7 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | 报告生成后至少等待多少小时再评估 |
-| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v3` | 结构化执行契约引擎版本；与 v2 触价代理结果隔离 |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v4` | 永续合约执行引擎版本；与 v2/v3 历史结果隔离 |
 | `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | 中性区间阈值，账户净收益率落在该区间内视为 neutral |
 | `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | 初始权益 |
 | `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | 单笔风险占账户权益百分比 |
@@ -426,6 +426,9 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
 | `CRYPTO_BACKTEST_LEVERAGE` | `1.0` | 名义杠杆倍数 |
 | `CRYPTO_BACKTEST_FEE_RATE_BPS` | `5.0` | 单边手续费，单位 bps |
 | `CRYPTO_BACKTEST_SLIPPAGE_BPS` | `2.0` | 单边滑点，单位 bps |
+| `CRYPTO_BACKTEST_MAKER_FEE_RATE_BPS` | `2.0` | v4 限价单单边手续费，单位 bps |
+| `CRYPTO_BACKTEST_TAKER_FEE_RATE_BPS` | `5.0` | v4 市价单单边手续费，单位 bps |
+| `CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE` | `0.005` | v4 永续合约强平估算使用的维持保证金率 |
 
 ## 8. 当前评估
 
@@ -438,6 +441,7 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
 - 支持多单和空单。
 - 支持入场未触发、跳过、数据不足等状态区分。
 - 支持手续费和滑点。
+- v4 永续合约支持标记价格、资金费率、maker/taker 手续费和隔离保证金强平估算。
 - 支持按账户风险预算和最大名义仓位推导仓位。
 - 单笔结果保留交易明细，可审计。
 - 单笔结果保留 R 倍数、K 线数据快照哈希和前视偏差校验信息。
@@ -459,7 +463,7 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
    如果多个计划时间重叠，当前汇总按顺序累加 PnL，没有检查同一账户是否同时占用保证金、是否超过组合风险上限。
 
 4. 没有真实订单簿与成交量约束。
-   当前用固定滑点模拟成交，没有考虑盘口深度、成交量、资金费率、强平价格、maker/taker 手续费差异。
+   当前仍用固定滑点模拟成交，没有考虑盘口深度、成交量、部分成交和延迟；v4 已加入资金费率、标记价格强平和 maker/taker 手续费，但仍不等同于交易所撮合回放。
 
 5. 数据快照未完整固化。
    回测结果已保存 K 线元数据和哈希，便于发现历史数据修正；但尚未保存完整 bar payload，因此不能离线重放当时的全部行情。
@@ -488,7 +492,8 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
 
 ### P0：让结果更可信
 
-- 已落地：默认引擎版本升级为 `btc-plan-v3`，使用 `btc-execution-v1` 契约和闭合 K 线状态机，并保存 K 线来源、周期、拉取时间、bar 数量、数据范围和哈希。
+- 已落地：默认引擎版本升级为 `btc-plan-v4`，使用 `btc-execution-v1` 契约和闭合 K 线状态机，并保存 K 线来源、周期、拉取时间、bar 数量、数据范围和哈希。
+- 已落地：永续合约按标记价格和维持保证金率估算强平，累计资金费率，并区分 maker/taker 手续费。
 - 已落地：增加前视偏差校验、低样本置信标记和单笔 R 倍数。
 - 后续可继续扩展完整 K 线 payload 快照，支持离线复算和外部审计。
 
@@ -500,8 +505,8 @@ r_multiple = net_pnl / risk_budget
 
 - 使用动态权益 sizing：每笔交易按上一笔后的 equity 计算 risk_budget。
 - 加入组合风险限制：同时未平仓计划的总风险不能超过账户上限。
-- 增加资金费率、保证金占用和强平风险估算。
-- 对 maker/taker 手续费分开配置。
+- 使用交易所级保证金阶梯和风险限额替代固定维持保证金率。
+- 增加盘口深度、部分成交和延迟模型。
 
 ### P2：更强的研究能力
 

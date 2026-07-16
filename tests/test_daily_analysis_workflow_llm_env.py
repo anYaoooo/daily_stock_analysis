@@ -15,7 +15,6 @@ WORKFLOW_PATH = ROOT_DIR / ".github/workflows/00-daily-analysis.yml"
 ENV_EXAMPLE_PATH = ROOT_DIR / ".env.example"
 
 EXPECTED_TEMPLATE_CHANNELS = {
-    "aihubmix",
     "deepseek",
     "dashscope",
     "zhipu",
@@ -49,11 +48,11 @@ def _extract_provider_templates() -> dict[str, str]:
 def _load_daily_analysis_env() -> dict[str, str]:
     workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
     steps = workflow["jobs"]["analyze"]["steps"]
-    analyze_step = next((step for step in steps if step.get("name") == "执行股票分析"), None)
+    analyze_step = next((step for step in steps if step.get("name") == "执行 BTC 分析"), None)
     available_step_names = [step.get("name", "<unnamed>") for step in steps]
     assert analyze_step is not None, (
         "Expected 00-daily-analysis.yml job analyze to include a step named "
-        f"'执行股票分析'; available step names: {available_step_names}"
+        f"'执行 BTC 分析'; available step names: {available_step_names}"
     )
     return analyze_step["env"]
 
@@ -103,21 +102,17 @@ def test_daily_analysis_maps_usage_hmac_config_safely() -> None:
     assert "secrets.LLM_USAGE_HMAC_KEY_VERSION" in env["LLM_USAGE_HMAC_KEY_VERSION"]
 
 
-def test_env_example_includes_provider_template_channel_examples() -> None:
-    templates = _extract_provider_templates()
+def test_env_example_includes_compact_channel_examples() -> None:
     env_example = ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
 
-    for channel, base_url in templates.items():
-        upper = channel.upper()
-        assert f"LLM_CHANNELS={channel}" in env_example
-        assert f"LLM_{upper}_MODELS=" in env_example
-
-        if channel != "ollama":
-            assert f"LLM_{upper}_API_KEY=" in env_example
-        if base_url:
-            assert f"LLM_{upper}_BASE_URL=" in env_example
-        if channel != "ollama":
-            assert f"LLM_{upper}_PROTOCOL=" in env_example
-
+    assert "LLM_CHANNELS=deepseek,gemini" in env_example
+    for channel in ("DEEPSEEK", "GEMINI"):
+        assert f"LLM_{channel}_PROTOCOL=" in env_example
+        assert f"LLM_{channel}_MODELS=" in env_example
+    assert "LLM_DEEPSEEK_API_KEY=" in env_example
+    assert "LLM_GEMINI_API_KEYS=" in env_example
+    assert "LLM_CHANNELS=my_proxy" in env_example
+    assert "LLM_MY_PROXY_BASE_URL=" in env_example
+    assert "LLM_CHANNELS=aihubmix" not in env_example
     assert "LLM_CHANNELS=ark" not in env_example
     assert "LLM_ARK_" not in env_example

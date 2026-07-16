@@ -106,7 +106,7 @@ describe('TokenUsagePage', () => {
     expect(await screen.findByRole('heading', { name: 'Token 用量监控' })).toBeInTheDocument();
     expect(await screen.findByText('400')).toBeInTheDocument();
     expect(screen.getAllByText('openai/gpt-test')).toHaveLength(2);
-    expect(screen.getAllByText('个股分析')).toHaveLength(2);
+    expect(screen.getAllByText('BTC 分析')).toHaveLength(2);
     expect(screen.getByText(/600519/)).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith('/api/v1/usage/dashboard', {
       params: { period: 'month', limit: 50 },
@@ -120,7 +120,7 @@ describe('TokenUsagePage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Token usage' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Today' })).toBeInTheDocument();
-    expect(screen.getAllByText('Stock analysis')).toHaveLength(2);
+    expect(screen.getAllByText('BTC analysis')).toHaveLength(2);
     expect(screen.getByText('Latest 50 LLM token audit records.')).toBeInTheDocument();
     expect(screen.queryByText('Token 用量监控')).not.toBeInTheDocument();
   });

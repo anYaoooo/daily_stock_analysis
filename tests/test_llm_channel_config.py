@@ -37,7 +37,7 @@ class LLMChannelConfigTestCase(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             config = Config._load_from_env()
 
-        self.assertEqual(config.llm_models_source, "llm_channels")
+        self.assertEqual(config.llm_models_source, "legacy_env")
         self.assertEqual(config.llm_channels, [])
         self.assertEqual(config.llm_model_list, [])
         self.assertEqual(config.openai_api_keys, [])

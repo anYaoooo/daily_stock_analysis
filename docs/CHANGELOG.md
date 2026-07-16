@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] 将 A/H/美股数据源、股票市场复盘、基本面、股票索引及旧 HomePage/DecisionSignals/智能导入测试移入显式 legacy 隔离套件，并从 BTC-only Web 入口移除对应 UI。
+- [修复] BTC-only 配置验证不再提示把旧 `STOCK_GROUP_N` 股票加入不可用的股票列表，并在 Web 设置、运行时模型与 setup 校验中统一排除已移除的 Anspire/AIHubMix 品牌渠道。
+- [改进] 加密交易凭据、真实交易开关和高级回测参数明确保持为环境变量专用配置，在独立风控层完成前不通过 Web 设置接口暴露。
+- [改进] BTC 回测默认升级为 `btc-plan-v4`，永续合约使用完整标记价格与资金费率历史模拟强平、资金成本和 maker/taker 手续费，并与 v2/v3 历史结果隔离。
 - [修复] BTC 回测将明确观望的日内计划标记为不交易样本，不再误报缺少方向和 v3 执行契约。
 
 - [改进] BTC 回测历史记录改为分页表格，支持行级选择、批量回测和删除，并通过详情抽屉查看计划、指标与单计划回测操作。

@@ -445,7 +445,7 @@ class CryptoBacktestResult(Base):
     plan_type = Column(String(24), nullable=False, index=True)  # daily_long/daily_short/intraday
     horizon = Column(String(16), nullable=False, index=True)  # daily/intraday
     direction = Column(String(8), nullable=False)  # long/short/wait
-    engine_version = Column(String(24), nullable=False, default='btc-plan-v3')
+    engine_version = Column(String(24), nullable=False, default='btc-plan-v4')
 
     eval_status = Column(String(24), nullable=False, default='pending')
     evaluation_start = Column(DateTime)
@@ -501,7 +501,7 @@ class CryptoBacktestSummary(Base):
     code = Column(String(16), index=True)
     horizon = Column(String(16), index=True)
     plan_type = Column(String(24), index=True)
-    engine_version = Column(String(24), nullable=False, default='btc-plan-v3')
+    engine_version = Column(String(24), nullable=False, default='btc-plan-v4')
     computed_at = Column(DateTime, default=datetime.now, index=True)
 
     total_evaluations = Column(Integer, default=0)
@@ -2583,7 +2583,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         with self.session_scope() as session:
             stmt = select(ConversationMessage).filter(
                 ConversationMessage.session_id == session_id
-            ).order_by(ConversationMessage.created_at.desc()).limit(limit)
+            ).order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc()).limit(limit)
             messages = session.execute(stmt).scalars().all()
 
             # 倒序返回，保证时间顺序
@@ -2894,7 +2894,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             stmt = (
                 select(ConversationMessage)
                 .where(ConversationMessage.session_id == session_id)
-                .order_by(ConversationMessage.created_at)
+                .order_by(ConversationMessage.created_at, ConversationMessage.id)
                 .limit(limit)
             )
             messages = session.execute(stmt).scalars().all()

@@ -247,7 +247,7 @@ def test_pipeline_uses_market_phase_effective_date_for_daily_market_context() ->
         effective_daily_bar_date=date(2026, 3, 26),
         to_dict=MagicMock(
             return_value={
-                "market": "cn",
+                    "market": "crypto",
                 "phase": "intraday",
                 "market_local_time": "2026-03-27T10:00:00+08:00",
                 "session_date": "2026-03-27",
@@ -277,14 +277,14 @@ def test_pipeline_uses_market_phase_effective_date_for_daily_market_context() ->
     pipeline.analysis_phase = "auto"
     pipeline.portfolio_context = None
     pipeline.fetcher_manager = MagicMock()
-    pipeline.fetcher_manager.get_stock_name.return_value = "贵州茅台"
+    pipeline.fetcher_manager.get_stock_name.return_value = "Bitcoin"
     pipeline.fetcher_manager.get_chip_distribution.return_value = None
     pipeline.fetcher_manager.get_fundamental_context.return_value = {}
     pipeline.fetcher_manager.build_failed_fundamental_context.return_value = {}
     pipeline.db = MagicMock()
     pipeline.db.get_analysis_context.return_value = {
-        "code": "600519",
-        "stock_name": "贵州茅台",
+        "code": "BTC",
+        "stock_name": "Bitcoin",
         "today": {},
         "yesterday": {},
     }
@@ -299,13 +299,13 @@ def test_pipeline_uses_market_phase_effective_date_for_daily_market_context() ->
 
     with patch("src.core.pipeline.build_market_phase_context", return_value=phase_context):
         pipeline.analyze_stock(
-            "600519",
+                "BTC",
             ReportType.SIMPLE,
             "q-effective-date",
         )
 
     pipeline._load_daily_market_context.assert_called_once_with(
-        "cn",
+            "crypto",
         target_date=date(2026, 3, 26),
     )
 

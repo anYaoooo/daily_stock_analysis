@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import time
 import threading
 from collections.abc import Awaitable, Callable
@@ -16,10 +17,167 @@ from warnings import warn
 import anyio.to_thread
 import fastapi.testclient
 import httpx
+import pytest
 import starlette.testclient
 from anyio._backends import _asyncio
 
 T = TypeVar("T")
+
+# These tests cover the pre-BTC-only stock product. Keep the boundary explicit so
+# the default suite cannot silently grow new dependencies on retired modules.
+LEGACY_STOCK_TEST_FILES = frozenset(
+    {
+        "test_a_share_fetcher_code_conversion.py",
+        "test_akshare_history_timeout.py",
+        "test_akshare_realtime_logging.py",
+        "test_alphavantage_fetcher.py",
+        "test_belong_boards_run_flow.py",
+        "test_chip_distribution_manager.py",
+        "test_chip_structure_fallback.py",
+        "test_data_fetcher_prefetch_stock_names.py",
+        "test_data_tools_get_capital_flow.py",
+        "test_data_tools_get_stock_info.py",
+        "test_efinance_main_indices.py",
+        "test_etf_daily_routing.py",
+        "test_fetch_tushare_stock_list.py",
+        "test_fetcher_source_optimization.py",
+        "test_finnhub_fetcher.py",
+        "test_fundamental_adapter.py",
+        "test_fundamental_context.py",
+        "test_generate_index_from_csv.py",
+        "test_get_latest_data.py",
+        "test_hk_realtime_routing.py",
+        "test_hk_stock_name_fallback.py",
+        "test_image_stock_extractor_litellm.py",
+        "test_longbridge_fetcher.py",
+        "test_market_analyzer_generate_text.py",
+        "test_market_review.py",
+        "test_market_review_lock.py",
+        "test_market_review_runtime.py",
+        "test_name_to_code_resolver.py",
+        "test_refresh_stock_index.py",
+        "test_realtime_quote_fallback_logging.py",
+        "test_stock_code_bse.py",
+        "test_stock_code_utils.py",
+        "test_stock_index_loader.py",
+        "test_stock_index_remote_service.py",
+        "test_stock_quote_news_api.py",
+        "test_stock_watchlist_api.py",
+        "test_stooq_fallback.py",
+        "test_tencent_fetcher.py",
+        "test_tickflow_fetcher.py",
+        "test_tickflow_market_review_fallback.py",
+        "test_tushare_fetcher_followups.py",
+        "test_tushare_fetcher_get_stock_list.py",
+        "test_tushare_fetcher_http_client.py",
+        "test_us_index_mapping.py",
+        "test_yfinance_fundamental_adapter.py",
+        "test_yfinance_hk_indices.py",
+        "test_yfinance_normalize.py",
+        "test_yfinance_us_indices.py",
+    }
+)
+
+# Mixed test modules still contain useful BTC/API coverage. Quarantine only the
+# retired cases in those files instead of weakening the whole module.
+LEGACY_STOCK_TEST_NAMES_BY_FILE = {
+    "test_alert_api.py": frozenset(
+        {
+            "test_p6_watchlist_dry_run_aggregates_targets_without_stock_code_validation",
+        }
+    ),
+    "test_analysis_api_contract.py": frozenset(
+        {
+            "test_market_review_endpoint_accepts_omitted_body",
+            "test_market_review_runtime_initializes_analyzer_for_litellm_provider",
+            "test_run_market_review_background_raises_when_report_is_empty",
+            "test_run_market_review_background_releases_lock_on_runtime_build_failure",
+            "test_run_market_review_background_returns_non_empty_result_payload",
+            "test_run_market_review_background_runtime_build_failure_marks_task_failed",
+            "test_run_market_review_background_uses_configured_pipeline",
+            "test_trigger_market_review_accepts_background_task",
+            "test_trigger_market_review_accepts_camel_case_report_language_alias",
+            "test_trigger_market_review_accepts_request_level_report_language",
+            "test_trigger_market_review_rejects_duplicate_submission",
+            "test_trigger_market_review_rejects_when_shared_lock_is_held",
+            "test_trigger_market_review_submits_even_when_configured_markets_closed",
+        }
+    ),
+    "test_analyzer_news_prompt.py": frozenset(
+        {
+            "test_analysis_prompt_keeps_injected_default_policy_for_implicit_default_run",
+        }
+    ),
+    "test_api_schema_pydantic.py": frozenset(
+        {
+            "test_decision_signal_static_api_spec_matches_runtime_paths",
+        }
+    ),
+    "test_docker_entrypoint.py": frozenset(
+        {
+            "test_docker_entrypoint_repairs_nested_mount_ownership",
+            "test_docker_entrypoint_skips_owner_chmod_when_chown_fails",
+        }
+    ),
+    "test_main_schedule_mode.py": frozenset(
+        {
+            "test_market_review_mode_uses_shared_runtime_assembly",
+            "test_serve_schedule_mode_continues_scheduler_when_api_server_start_fails",
+            "test_single_run_keeps_cli_stock_override",
+        }
+    ),
+    "test_packaging_build_scripts.py": frozenset(
+        {
+            "test_windows_backend_build_script_does_not_collect_alphasift_adapter",
+        }
+    ),
+    "test_pipeline_related_boards.py": frozenset(
+        {
+            "test_attach_belong_boards_uses_normalized_a_share_code_when_market_missing",
+        }
+    ),
+    "test_static_assets_consistency.py": frozenset(
+        {
+            "test_app_startup_schedules_stock_index_background_refresh",
+            "test_existing_asset_is_served_from_explicit_assets_route",
+            "test_existing_asset_supports_head_and_conditional_requests",
+            "test_missing_asset_returns_safe_404_content_types",
+            "test_stock_index_route_does_not_parse_bundled_candidates_on_hot_path",
+            "test_stock_index_route_falls_back_to_static_index",
+            "test_stock_index_route_prefers_newer_static_index_over_older_remote_cache",
+            "test_stock_index_route_returns_404_when_all_candidates_missing",
+            "test_stock_index_route_serves_newer_remote_cache",
+            "test_stock_index_route_skips_invalid_remote_cache",
+        }
+    ),
+}
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "legacy_stock: quarantined pre-BTC-only stock-market coverage",
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    legacy_items: list[pytest.Item] = []
+    active_items: list[pytest.Item] = []
+    for item in items:
+        legacy_names = LEGACY_STOCK_TEST_NAMES_BY_FILE.get(item.path.name, ())
+        if item.path.name in LEGACY_STOCK_TEST_FILES or item.name in legacy_names:
+            item.add_marker("legacy_stock")
+            legacy_items.append(item)
+        else:
+            active_items.append(item)
+
+    if os.getenv("DSA_INCLUDE_LEGACY_STOCK_TESTS") == "1":
+        return
+
+    if legacy_items:
+        config.hook.pytest_deselected(items=legacy_items)
+        items[:] = active_items
 
 _original_call_soon_threadsafe = asyncio.BaseEventLoop.call_soon_threadsafe
 

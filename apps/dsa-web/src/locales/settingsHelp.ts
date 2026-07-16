@@ -14,7 +14,7 @@ type SettingsHelpMap = Record<string, SettingsHelpContent>;
 
 const settingsHelpZhCN: SettingsHelpMap = {
   'settings.base.STOCK_LIST': {
-    title: '自选股列表',
+    title: 'BTC 标的',
     summary: 'BTC-only 模式下固定分析 BTC，是手动分析、定时任务和通知报告的基础输入。',
     usage: '填写 BTC 即可；BTCUSDT、BTC-USD、BTC/USD 等别名会统一规范为 BTC。',
     valueNotes: [
@@ -159,26 +159,10 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响 OpenAI-compatible legacy 配置路径下的模型请求。'],
     notes: ['渠道模式下优先维护各渠道自己的 LLM_<NAME>_BASE_URL。'],
   },
-  'settings.data_source.stock_index_remote': {
-    title: '标的索引远程更新',
-    summary: '从 GitHub main 分支获取最新标的自动补全索引，并缓存到本地。',
-    usage: '默认开启；如运行环境无法访问 GitHub raw，可关闭开关。远程 URL、检查频率和超时时间均为系统内置值。',
-    valueNotes: ['系统默认 48 小时检查一次更新，避免频繁访问 GitHub。', '远程检查失败不会阻断 WebUI 或分析流程。'],
-    impact: ['影响 Web 自动补全和后端标的名称解析使用的标的简称新鲜度。'],
-    notes: ['远程下载失败时会继续使用已有缓存或随应用打包的内置索引。'],
-  },
-  'settings.data_source.REALTIME_SOURCE_PRIORITY': {
-    title: '实时行情源优先级',
-    summary: '配置多个实时行情源的尝试顺序。',
-    usage: '优先级使用英文逗号分隔；系统会按顺序尝试可用数据源。',
-    valueNotes: ['前面的数据源优先使用，失败后再降级到后续数据源。'],
-    impact: ['影响现价、盘中分析和依赖实时价格的报告字段。'],
-    notes: ['单一数据源失败应降级到后续数据源，不应拖垮主流程。'],
-  },
   'settings.data_source.realtime_quotes': {
     title: '实时行情配置',
     summary: '控制实时行情和盘中技术指标是否启用。',
-    usage: '开关字段使用 true/false；行情源顺序由 REALTIME_SOURCE_PRIORITY 单独配置。',
+    usage: '开关字段使用 true/false；BTC 行情源降级顺序由系统内置。',
     valueNotes: [
       '关闭实时行情后，分析会更依赖历史收盘价。',
       '实时技术指标会把盘中价格纳入均线和趋势判断。',
@@ -1011,16 +995,15 @@ const settingsHelpZhCN: SettingsHelpMap = {
 
 const settingsHelpEnUS: SettingsHelpMap = {
   'settings.base.STOCK_LIST': {
-    title: 'Watchlist',
-    summary: 'Defines the stock codes used by analysis jobs and notification reports.',
-    usage: 'Separate symbols with commas. A-shares can use six-digit codes, HK stocks can use the hk prefix, and US stocks can use ticker symbols.',
+    title: 'BTC Symbol',
+    summary: 'BTC-only mode fixes the analysis target to BTC for manual runs, schedules, and notifications.',
+    usage: 'Enter BTC. Aliases such as BTCUSDT, BTC-USD, and BTC/USD are normalized to BTC.',
     valueNotes: [
       'Scheduled mode rereads the saved STOCK_LIST before each run.',
-      'A temporary --stocks argument only affects that manual run.',
-      'STOCK_GROUP_N should be a subset of STOCK_LIST and only affects grouped email routing.',
+      'BTC-only mode rejects non-BTC symbols to avoid running the wrong market workflow.',
     ],
-    impact: ['Affects analysis scope, notification content, and saved history reports.'],
-    notes: ['Use English commas between symbols.', 'Save the setting before later tasks can read it.'],
+    impact: ['Affects analysis jobs, notification content, and saved history reports.'],
+    notes: ['Keeping STOCK_LIST=BTC is the clearest configuration.', 'Save the setting before later tasks can read it.'],
   },
   'settings.ai_model.LITELLM_MODEL': {
     title: 'Primary Model',
@@ -1130,18 +1113,10 @@ const settingsHelpEnUS: SettingsHelpMap = {
     impact: ['Affects legacy OpenAI-compatible model calls.'],
     notes: ['In channel mode, prefer each channel-specific LLM_<NAME>_BASE_URL.'],
   },
-  'settings.data_source.REALTIME_SOURCE_PRIORITY': {
-    title: 'Realtime Source Priority',
-    summary: 'Configures the provider order for realtime quotes.',
-    usage: 'Use comma-separated provider names; the system tries them in order.',
-    valueNotes: ['Earlier providers are preferred; failures fall back to later providers.'],
-    impact: ['Affects current price, intraday analysis, and report fields that depend on realtime prices.'],
-    notes: ['A single provider failure should fall back to the next source.'],
-  },
   'settings.data_source.realtime_quotes': {
     title: 'Realtime Quotes',
     summary: 'Controls whether realtime quotes and intraday technical indicators are enabled.',
-    usage: 'Switch fields use true/false. Provider order is configured separately by REALTIME_SOURCE_PRIORITY.',
+    usage: 'Switch fields use true/false. The BTC provider fallback order is built into the runtime.',
     valueNotes: ['Disabling realtime quotes falls back toward historical close prices.', 'Realtime technical indicators use intraday prices.'],
     impact: ['Affects current price, technical indicators, intraday analysis, and report fields.'],
     notes: ['A single provider failure should fall back to the next source.'],

@@ -28,12 +28,12 @@ describe('SettingsField', () => {
             displayOrder: 1,
           },
         }}
-        value="600519"
+        value="BTC"
         onChange={vi.fn()}
       />
     );
 
-    expect(screen.getByLabelText('自选股列表')).toBeInTheDocument();
+    expect(screen.getByLabelText('BTC 标的')).toBeInTheDocument();
     expect(screen.queryByLabelText('Stock List')).not.toBeInTheDocument();
   });
 
@@ -180,12 +180,6 @@ describe('SettingsField', () => {
         category: 'system',
         options: ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
         expectedLabels: ['调试', '信息', '警告', '错误', '严重'],
-      },
-      {
-        key: 'MARKET_REVIEW_REGION',
-        category: 'system',
-        options: ['cn', 'hk', 'us', 'both'],
-        expectedLabels: ['A 股', '港股', '美股', '全部市场'],
       },
     ] as const;
 
@@ -379,7 +373,7 @@ describe('SettingsField', () => {
             validation: {},
             displayOrder: 1,
             helpKey: 'settings.base.STOCK_LIST',
-            examples: ['STOCK_LIST=600519,300750,002594'],
+            examples: ['STOCK_LIST=BTC'],
             docs: [
               {
                 label: '完整指南',
@@ -389,15 +383,15 @@ describe('SettingsField', () => {
             warningCodes: [],
           },
         }}
-        value="600519,300750"
+        value="BTC"
         onChange={() => undefined}
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '查看 自选股列表 配置说明' }));
+    fireEvent.click(screen.getByRole('button', { name: '查看 BTC 标的 配置说明' }));
 
-    expect(screen.getByRole('dialog', { name: '自选股列表' })).toBeInTheDocument();
-    expect(screen.getByText('STOCK_LIST=600519,300750,002594')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'BTC 标的' })).toBeInTheDocument();
+    expect(screen.getByText('STOCK_LIST=BTC')).toBeInTheDocument();
     const docLink = screen.getByRole('link', { name: /完整指南/ });
     expect(docLink).toHaveAttribute('href', 'https://example.com/full-guide');
 
