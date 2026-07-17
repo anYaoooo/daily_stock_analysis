@@ -1966,9 +1966,9 @@ class GeminiAnalyzer:
                 "plan_type": "daily_long",
                 "direction": "long",
                 "entry_zone": "多单入场区间或触发价：XX-XX；若只给触发价也必须明确",
-                "entry_price": "多单入场价：XX（突破确认/回踩确认）",
-                "stop_loss": "多单止损：XX",
-                "take_profit": "多单目标：XX",
+                "entry_price": 多单入场价数值,
+                "stop_loss": 多单止损价数值,
+                "take_profit": 多单目标价数值,
                 "execution_contract": {
                     "version": "btc-execution-v1",
                     "instrument": {
@@ -1988,7 +1988,7 @@ class GeminiAnalyzer:
                             {"type": "volume_ratio_gte", "value": 最低量比数值},
                             {"type": "close_above_vwap"}
                         ],
-                        "confirmation_bars": 1,
+                        "confirmation_bars": 2,
                         "fill": "next_bar_open",
                         "max_wait_bars": 3
                     },
@@ -2007,9 +2007,9 @@ class GeminiAnalyzer:
                 "plan_type": "daily_short",
                 "direction": "short",
                 "entry_zone": "空单入场区间或触发价：XX-XX；若只给触发价也必须明确",
-                "entry_price": "空单入场价：XX（跌破确认/反抽确认）",
-                "stop_loss": "空单止损：XX",
-                "take_profit": "空单目标：XX",
+                "entry_price": 空单入场价数值,
+                "stop_loss": 空单止损价数值,
+                "take_profit": 空单目标价数值,
                 "execution_contract": {
                     "version": "btc-execution-v1",
                     "instrument": {
@@ -2029,7 +2029,7 @@ class GeminiAnalyzer:
                             {"type": "volume_ratio_gte", "value": 最低量比数值},
                             {"type": "close_below_vwap"}
                         ],
-                        "confirmation_bars": 1,
+                        "confirmation_bars": 2,
                         "fill": "next_bar_open",
                         "max_wait_bars": 3
                     },
@@ -2049,9 +2049,9 @@ class GeminiAnalyzer:
                 "enabled": false,
                 "direction": "none/long/short/wait",
                 "entry_zone": "小时线日内入场区间或触发价：XX-XX；无机会则写等待",
-                "entry_price": "小时线日内入场价：XX；无机会则写等待",
-                "stop_loss": "小时线日内止损：XX；必须受日线失效位约束",
-                "take_profit": "小时线日内目标：XX",
+                "entry_price": 小时线日内入场价数值或null,
+                "stop_loss": 小时线日内止损价数值或null,
+                "take_profit": 小时线日内目标价数值或null,
                 "execution_contract": {
                     "version": "btc-execution-v1",
                     "instrument": {
@@ -3466,6 +3466,13 @@ class GeminiAnalyzer:
         trigger_context = context.get("trigger_context") if isinstance(context, dict) else None
         analysis_mode = str(context.get("analysis_mode") or "daily").strip().lower() if isinstance(context, dict) else "daily"
         if isinstance(crypto_technical, dict):
+            runtime_config = self._get_runtime_config()
+            minimum_risk_reward = float(
+                getattr(runtime_config, "crypto_backtest_minimum_risk_reward", 1.2)
+            )
+            minimum_volume_ratio = float(
+                getattr(runtime_config, "crypto_backtest_minimum_volume_ratio", 1.0)
+            )
             timeframes = crypto_technical.get("timeframes") or {}
             daily_crypto = timeframes.get("daily") if isinstance(timeframes.get("daily"), dict) else crypto_technical
             hourly_crypto = timeframes.get("hourly") if isinstance(timeframes.get("hourly"), dict) else None
@@ -3504,6 +3511,9 @@ class GeminiAnalyzer:
 > BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `plan_type`、`enabled`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`execution_contract`、`trigger_condition`、`invalidation`、`invalid_condition`、`daily_constraint`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件和 `no_trade_reason`。
 > BTC 可回测执行契约：所有 `direction=long/short` 且可交易的 BTC 计划必须同时输出 `execution_contract`，版本固定为 `btc-execution-v1`。`instrument` 必须完整保留系统给出的 `type`、`venue`、`symbol`、`market_symbol`、成交/触发/强平价格类型和保证金模式，不得把现货与永续互换。入场条件只允许 `close_above`、`close_below`、`volume_ratio_gte`、`volume_ratio_lte`、`close_above_vwap`、`close_below_vwap`；`logic` 固定为 `all`，`fill` 固定为 `next_bar_open`，并给出 `confirmation_bars`、`max_wait_bars` 和 `exit.max_holding_bars`。契约必须完整表达 `trigger_condition`，禁止把“站稳、放量、企稳”等额外条件只写在自然语言里。无法用这些原语完整表达时必须设为不交易，不得输出会被降级为触价成交的计划。
 > `execution_contract.entry.conditions[].type` 必须从上述单个枚举值中选择，禁止输出带 `/` 的组合占位字符串；多单通常使用 `close_above`/`close_above_vwap`，空单通常使用 `close_below`/`close_below_vwap`。
+> BTC 点位字段格式：`entry_price`、`stop_loss`、`take_profit` 只能填写单个正数，不得混入“突破、回踩、站稳、跌破”等说明文字；区间放入 `entry_zone`，确认逻辑放入 `trigger_condition`，失效说明放入 `invalid_condition`。
+> BTC 计划质量门槛：可交易计划必须满足多单 `stop_loss < entry_price < take_profit`、空单 `take_profit < entry_price < stop_loss`；计划风险收益比不得低于 1:{minimum_risk_reward:g}，目标空间还必须覆盖双边手续费、滑点和中性收益带，否则设为不交易。
+> BTC 量能与确认门槛：可交易计划必须包含 `volume_ratio_gte` 且阈值不得低于 {minimum_volume_ratio:g}；普通突破/跌破使用至少 2 根闭合 K 线确认。Price Action、VWAP、EMA、Volume 未达到至少三项同向，或日线/小时线方向处于 `wait_for_*`、均线 `mixed` 等冲突状态时，默认 `enabled=false`/等待确认，不得勉强给出入场计划。
 > BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。
 > BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；为避免合约语义歧义，`buy` 仅表示 Long / 多单开仓或加多，`sell` 仅表示 Short / 空单开仓、加空或多单风控退出，`hold` 表示 Flat / 空仓等待、持仓观望或区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”；若是平空或平多，必须在文字中明确写“平空/平多”，不要只依赖 `buy`/`sell`。
 """

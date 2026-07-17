@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _HTTP_TIMEOUT_SECONDS = 10
 _PROVIDER_COOLDOWN_SECONDS = 300
 _CCXT_KLINE_PAGE_SIZE = 300
+_OKX_MARK_KLINE_PAGE_SIZE = 100
 _DEFAULT_FETCH_BUDGET_SECONDS = 60.0
 _DEFAULT_FETCH_MAX_PAGES = 200
 _DEFAULT_FETCH_RETRY_COUNT = 2
@@ -264,6 +265,11 @@ class CryptoFetcher(BaseFetcher):
             start_ms=start_ms,
             end_ms=end_ms,
             params={"price": "mark"},
+            page_size=(
+                _OKX_MARK_KLINE_PAGE_SIZE
+                if instrument.venue == "okx"
+                else _CCXT_KLINE_PAGE_SIZE
+            ),
         )
         if not trade_rows or not mark_rows:
             raise DataFetchError(
@@ -331,9 +337,11 @@ class CryptoFetcher(BaseFetcher):
         start_ms: int,
         end_ms: int,
         params: Optional[dict[str, Any]] = None,
+        page_size: int = _CCXT_KLINE_PAGE_SIZE,
     ) -> list:
         rows: list = []
         cursor_ms = int(start_ms)
+        effective_page_size = max(int(page_size), 1)
         deadline = time.monotonic() + self._fetch_budget_seconds
         for _ in range(self._fetch_max_pages):
             if cursor_ms > end_ms:
@@ -343,7 +351,7 @@ class CryptoFetcher(BaseFetcher):
                 kwargs: dict[str, Any] = {
                     "timeframe": timeframe,
                     "since": cursor_ms,
-                    "limit": _CCXT_KLINE_PAGE_SIZE,
+                    "limit": effective_page_size,
                 }
                 if params:
                     kwargs["params"] = params
@@ -356,7 +364,7 @@ class CryptoFetcher(BaseFetcher):
             last_timestamp = safe_int(page[-1][0]) if page[-1] else None
             if last_timestamp is None or last_timestamp < cursor_ms:
                 raise DataFetchError(f"non-advancing OHLCV cursor for {market_symbol}")
-            if last_timestamp >= end_ms or len(page) < _CCXT_KLINE_PAGE_SIZE:
+            if last_timestamp >= end_ms or len(page) < effective_page_size:
                 break
             cursor_ms = last_timestamp + 1
         else:

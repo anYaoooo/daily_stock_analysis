@@ -52,7 +52,7 @@ from src.report_language import (
 from bot.models import BotMessage
 from src.utils.sanitize import sanitize_diagnostic_text
 from src.utils.data_processing import normalize_model_used
-from src.utils.sniper_points import extract_directional_strategy_plans
+from src.utils.sniper_points import extract_directional_strategy_plans, parse_sniper_value
 from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
 from src.notification_sender import (
     AstrbotSender,
@@ -1901,8 +1901,9 @@ class NotificationService(
         lines.append(f"*{labels['not_investment_advice']}*")
         return "\n".join(lines)
 
-    @staticmethod
+    @classmethod
     def _append_btc_plan(
+        cls,
         lines: List[str],
         title: str,
         plan: Optional[Dict[str, Any]],
@@ -1910,23 +1911,67 @@ class NotificationService(
         if not plan:
             return
 
-        rows = [
-            ("入场", plan.get("entry_price")),
-            ("止损", plan.get("stop_loss")),
-            ("目标", plan.get("take_profit")),
-            ("触发", plan.get("trigger_condition")),
-            ("失效", plan.get("invalidation")),
-            ("依据", plan.get("reason")),
-        ]
-        if title.startswith("小时线日内计划") and plan.get("direction"):
-            rows.insert(0, ("方向", plan.get("direction")))
-        rows = [(label, str(value).strip()) for label, value in rows if value is not None and str(value).strip()]
-        if not rows:
-            return
-
         lines.extend([f"#### {title}", ""])
-        lines.extend(f"- {label}: {value}" for label, value in rows)
+        direction = cls._btc_plan_direction_label(plan.get("direction"), title)
+        enabled = plan.get("enabled")
+        no_trade_reason = cls._clean_btc_plan_text(plan.get("no_trade_reason"))
+        is_waiting = enabled is False or direction == "观望" or bool(no_trade_reason)
+        lines.append(f"**状态：{'等待条件' if is_waiting else '可执行计划'}**")
         lines.append("")
+        lines.append("**核心点位**")
+        lines.append(f"- 方向：**{direction}**")
+        for label, key in (("入场", "entry_price"), ("止损", "stop_loss"), ("止盈", "take_profit")):
+            price = cls._format_btc_plan_price(plan.get(key))
+            lines.append(f"- {label}：**{price}**")
+
+        details = [
+            ("入场区间", plan.get("entry_zone")),
+            ("触发条件", plan.get("trigger_condition")),
+            ("失效条件", plan.get("invalid_condition") or plan.get("invalidation")),
+            ("日线约束", plan.get("daily_constraint")),
+            ("风险收益比", plan.get("risk_reward")),
+            ("仓位建议", plan.get("position_hint")),
+            ("置信度", plan.get("confidence")),
+            ("等待原因", no_trade_reason),
+            ("计划依据", plan.get("reason")),
+        ]
+        cleaned_details = [
+            (label, cls._clean_btc_plan_text(value))
+            for label, value in details
+            if cls._clean_btc_plan_text(value)
+        ]
+        if cleaned_details:
+            lines.extend(["", "**执行条件**"])
+            lines.extend(f"- {label}：{value}" for label, value in cleaned_details)
+        lines.append("")
+
+    @staticmethod
+    def _btc_plan_direction_label(value: Any, title: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized == "long" or "多单" in title:
+            return "多单"
+        if normalized == "short" or "空单" in title:
+            return "空单"
+        if normalized in {"wait", "none", "neutral", "flat"}:
+            return "观望"
+        return str(value).strip() if value is not None and str(value).strip() else "观望"
+
+    @staticmethod
+    def _format_btc_plan_price(value: Any) -> str:
+        parsed = parse_sniper_value(value)
+        if parsed is None:
+            return "--"
+        if float(parsed).is_integer():
+            return f"{parsed:,.0f} USDT"
+        formatted = f"{parsed:,.2f}".rstrip("0").rstrip(".")
+        return f"{formatted} USDT"
+
+    @staticmethod
+    def _clean_btc_plan_text(value: Any) -> str:
+        if value is None:
+            return ""
+        text = " ".join(str(value).replace("|", " / ").split())
+        return "" if text.lower() in {"", "none", "null", "n/a", "-"} else text
 
     # Display name mapping for realtime data sources
     _SOURCE_DISPLAY_NAMES = {

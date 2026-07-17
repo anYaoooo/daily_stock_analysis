@@ -1221,7 +1221,7 @@ Set the following variables in `.env` (all optional, have defaults):
 | `BACKTEST_ENGINE_VERSION` | `v1` | Engine version, used to distinguish results when logic is updated |
 | `BACKTEST_NEUTRAL_BAND_PCT` | `2.0` | Neutral band threshold (%), ±2% treated as range-bound |
 | `CRYPTO_BACKTEST_MIN_AGE_HOURS` | `24` | BTC plan-level backtest minimum age; defaults to 24 hours after report creation |
-| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v4` | BTC perpetual backtest engine version; v2/v3 remain historical audit formats only |
+| `CRYPTO_BACKTEST_ENGINE_VERSION` | `btc-plan-v5` | BTC plan-quality and perpetual backtest engine version; v2/v3/v4 remain historical audit formats only |
 | `CRYPTO_BACKTEST_NEUTRAL_BAND_PCT` | `0.2` | BTC plan-level neutral band threshold (%) |
 | `CRYPTO_BACKTEST_INITIAL_EQUITY` | `10000` | Initial equity for BTC trading backtests, used for equity curve, net return, and sizing |
 | `CRYPTO_BACKTEST_RISK_PER_TRADE_PCT` | `1.0` | Maximum account risk per trade; position size is derived from stop distance |
@@ -1229,15 +1229,17 @@ Set the following variables in `.env` (all optional, have defaults):
 | `CRYPTO_BACKTEST_LEVERAGE` | `1.0` | Notional leverage multiplier |
 | `CRYPTO_BACKTEST_FEE_RATE_BPS` | `5.0` | One-way fee rate in bps |
 | `CRYPTO_BACKTEST_SLIPPAGE_BPS` | `2.0` | One-way slippage in bps |
-| `CRYPTO_BACKTEST_MAKER_FEE_RATE_BPS` | `2.0` | v4 one-way maker fee in bps |
-| `CRYPTO_BACKTEST_TAKER_FEE_RATE_BPS` | `5.0` | v4 one-way taker fee in bps |
-| `CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE` | `0.005` | Maintenance margin rate used by v4 liquidation estimates |
+| `CRYPTO_BACKTEST_MAKER_FEE_RATE_BPS` | `2.0` | v4/v5 one-way maker fee in bps |
+| `CRYPTO_BACKTEST_TAKER_FEE_RATE_BPS` | `5.0` | v4/v5 one-way taker fee in bps |
+| `CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE` | `0.005` | Maintenance margin rate used by v4/v5 liquidation estimates |
+| `CRYPTO_BACKTEST_MINIMUM_RISK_REWARD` | `1.2` | Minimum risk/reward required by v5 at both planned and actual fill prices |
+| `CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO` | `1.0` | Minimum `volume_ratio_gte` confirmation threshold required by v5 |
 
 ### Auto-run
 
-Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v4` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, fills at the next candle open after all conditions are confirmed, and then applies SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Perpetual plans also require complete mark-price and funding histories to estimate liquidation, funding cost, and maker/taker fees. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing v2/v3 results remain auditable but are never mixed with v4 metrics.
+Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v5` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, then checks price geometry, minimum risk/reward, cost coverage, and volume confirmation at both the planned price and the next-candle fill. A gap beyond the target or below the quality threshold is recorded as a rejected fill rather than a trade. Qualified plans then apply SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Perpetual plans also require complete mark-price and funding histories to estimate liquidation, funding cost, and maker/taker fees. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing v2/v3/v4 results remain auditable but are never mixed with v5 metrics.
 
-After a single-symbol BTC analysis completes, full report notifications use the BTC-specific template instead of the generic stock decision dashboard. The notification body keeps only directional advice, the daily long plan, the daily short plan, the hourly intraday plan, and technical analysis.
+After a single-symbol BTC analysis completes, full report notifications use the BTC-specific template instead of the generic stock decision dashboard. Each plan renders direction, entry, stop, and target as separate numeric lines, followed by a dedicated execution-conditions section for zones, triggers, invalidation, risk/reward, sizing, confidence, and no-trade reasons. This avoids broken mobile tables and keeps critical prices out of prose.
 
 ### Evaluation Metrics
 

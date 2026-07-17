@@ -33,7 +33,7 @@ from src.utils.timeframe import analysis_timeframe_label, horizon_to_analysis_mo
 
 logger = logging.getLogger(__name__)
 
-BTC_PLAN_ENGINE_VERSION = "btc-plan-v4"
+BTC_PLAN_ENGINE_VERSION = "btc-plan-v5"
 
 
 @dataclass(frozen=True)
@@ -393,6 +393,8 @@ class CryptoBacktestService:
             maker_fee_rate_bps=float(getattr(config, "crypto_backtest_maker_fee_rate_bps", 2.0)),
             taker_fee_rate_bps=float(getattr(config, "crypto_backtest_taker_fee_rate_bps", 5.0)),
             maintenance_margin_rate=float(getattr(config, "crypto_backtest_maintenance_margin_rate", 0.005)),
+            minimum_risk_reward=float(getattr(config, "crypto_backtest_minimum_risk_reward", 1.2)),
+            minimum_volume_ratio=float(getattr(config, "crypto_backtest_minimum_volume_ratio", 1.0)),
         )
 
     def _evaluate_analysis_record(
@@ -1182,7 +1184,7 @@ class CryptoBacktestService:
 
     @classmethod
     def _indicator_group_breakdown(cls, rows: list[CryptoBacktestResult]) -> dict[str, Any]:
-        if any(str(row.engine_version).lower() in {"btc-plan-v3", "btc-plan-v4"} for row in rows):
+        if any(str(row.engine_version).lower() in {"btc-plan-v3", "btc-plan-v4", "btc-plan-v5"} for row in rows):
             triggered = [
                 row
                 for row in rows
@@ -1424,7 +1426,7 @@ class CryptoBacktestService:
             missing.append("stop_loss")
         if plan.take_profit is None:
             missing.append("take_profit")
-        if self._engine_version().strip().lower() in {"btc-plan-v3", "btc-plan-v4"}:
+        if self._engine_version().strip().lower() in {"btc-plan-v3", "btc-plan-v4", "btc-plan-v5"}:
             _contract, contract_errors = CryptoBacktestEngine._validated_contract(
                 plan.execution_contract,
                 direction=plan.direction,

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] BTC 回测默认升级为 `btc-plan-v5`，在计划价和下一根实际成交价两阶段校验多空点位、最低风险收益比、成本覆盖与量能确认，跳空破坏计划时放弃成交并与 v4 历史结果隔离。
+- [改进] BTC 通知将方向、入场、止损、止盈改为独立纯点位行，入场区间、触发、失效、风险收益比、仓位和等待原因归入执行条件区，避免关键价格埋在长段文字或移动端错列表格中。
+- [修复] BTC 永续回测按 OKX 标记价格 K 线的 100 根单页上限连续分页，避免长时间窗口只取得最新一页并误报 trade/mark 时间戳不同步。
 - [改进] 将 A/H/美股数据源、股票市场复盘、基本面、股票索引及旧 HomePage/DecisionSignals/智能导入测试移入显式 legacy 隔离套件，并从 BTC-only Web 入口移除对应 UI。
 - [修复] BTC-only 配置验证不再提示把旧 `STOCK_GROUP_N` 股票加入不可用的股票列表，并在 Web 设置、运行时模型与 setup 校验中统一排除已移除的 Anspire/AIHubMix 品牌渠道。
 - [改进] 加密交易凭据、真实交易开关和高级回测参数明确保持为环境变量专用配置，在独立风控层完成前不通过 Web 设置接口暴露。

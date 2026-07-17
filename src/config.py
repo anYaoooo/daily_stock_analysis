@@ -891,7 +891,7 @@ class Config:
     backtest_engine_version: str = "v1"
     backtest_neutral_band_pct: float = 2.0
     crypto_backtest_min_age_hours: int = 24
-    crypto_backtest_engine_version: str = "btc-plan-v4"
+    crypto_backtest_engine_version: str = "btc-plan-v5"
     crypto_backtest_neutral_band_pct: float = 0.2
     crypto_backtest_initial_equity: float = 10000.0
     crypto_backtest_risk_per_trade_pct: float = 1.0
@@ -902,6 +902,8 @@ class Config:
     crypto_backtest_maker_fee_rate_bps: float = 2.0
     crypto_backtest_taker_fee_rate_bps: float = 5.0
     crypto_backtest_maintenance_margin_rate: float = 0.005
+    crypto_backtest_minimum_risk_reward: float = 1.2
+    crypto_backtest_minimum_volume_ratio: float = 1.0
     crypto_market_fetch_budget_seconds: float = 60.0
     crypto_market_fetch_max_pages: int = 200
     crypto_market_fetch_retry_count: int = 2
@@ -1792,7 +1794,7 @@ class Config:
                 field_name='CRYPTO_BACKTEST_MIN_AGE_HOURS',
                 minimum=1,
             ),
-            crypto_backtest_engine_version=os.getenv('CRYPTO_BACKTEST_ENGINE_VERSION', 'btc-plan-v4'),
+            crypto_backtest_engine_version=os.getenv('CRYPTO_BACKTEST_ENGINE_VERSION', 'btc-plan-v5'),
             crypto_backtest_neutral_band_pct=parse_env_float(
                 os.getenv('CRYPTO_BACKTEST_NEUTRAL_BAND_PCT'),
                 0.2,
@@ -1853,6 +1855,18 @@ class Config:
                 field_name='CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE',
                 minimum=0.0,
                 maximum=0.5,
+            ),
+            crypto_backtest_minimum_risk_reward=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_MINIMUM_RISK_REWARD'),
+                1.2,
+                field_name='CRYPTO_BACKTEST_MINIMUM_RISK_REWARD',
+                minimum=0.0,
+            ),
+            crypto_backtest_minimum_volume_ratio=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO'),
+                1.0,
+                field_name='CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO',
+                minimum=0.0,
             ),
             crypto_market_fetch_budget_seconds=parse_env_float(
                 os.getenv('CRYPTO_MARKET_FETCH_BUDGET_SECONDS'),

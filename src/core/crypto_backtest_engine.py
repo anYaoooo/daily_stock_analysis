@@ -62,6 +62,8 @@ class CryptoPlanBacktestConfig:
     maker_fee_rate_bps: float = 2.0
     taker_fee_rate_bps: float = 5.0
     maintenance_margin_rate: float = 0.005
+    minimum_risk_reward: float = 1.2
+    minimum_volume_ratio: float = 1.0
 
 
 class CryptoBacktestEngine:
@@ -76,7 +78,7 @@ class CryptoBacktestEngine:
         config: CryptoPlanBacktestConfig,
         evaluation_complete: bool = True,
     ) -> dict[str, Any]:
-        if str(config.engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4"}:
+        if str(config.engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4", "btc-plan-v5"}:
             return cls._evaluate_contract_plan(
                 plan=plan,
                 forward_bars=forward_bars,
@@ -213,13 +215,34 @@ class CryptoBacktestEngine:
             result["diagnostics"]["contract_errors"] = errors
             return result
 
-        is_v4 = str(config.engine_version).strip().lower() == "btc-plan-v4"
+        engine_version = str(config.engine_version).strip().lower()
+        is_perpetual_engine = engine_version in {"btc-plan-v4", "btc-plan-v5"}
+        is_quality_gate_engine = engine_version == "btc-plan-v5"
         instrument = contract["instrument"]
+
+        if is_quality_gate_engine:
+            quality_errors = cls._plan_quality_errors(
+                plan=plan,
+                contract=contract,
+                entry_price=float(plan.entry_price),
+                config=config,
+                require_volume_gate=True,
+            )
+            if quality_errors:
+                result = cls._skipped(plan, "invalid_plan_quality")
+                result["diagnostics"].update(
+                    {
+                        "quality_errors": quality_errors,
+                        "execution_contract": contract,
+                        "execution": cls._execution_config(config),
+                    }
+                )
+                return result
 
         window_bars = [bar for bar in forward_bars if cls._valid_contract_bar(bar)]
         if not window_bars:
             return cls._insufficient(plan, "no_closed_forward_bars")
-        if is_v4 and instrument.get("type") == "perpetual":
+        if is_perpetual_engine and instrument.get("type") == "perpetual":
             if not all(cls._valid_perpetual_bar(bar) for bar in window_bars):
                 result = cls._insufficient(plan, "incomplete_perpetual_trade_mark_data")
                 result["diagnostics"]["execution_contract"] = contract
@@ -282,6 +305,39 @@ class CryptoBacktestEngine:
 
         fill_bar = window_bars[fill_index]
         fill_price = cls._execution_price(fill_bar, "open")
+        if is_quality_gate_engine:
+            fill_quality_errors = cls._plan_quality_errors(
+                plan=plan,
+                contract=contract,
+                entry_price=fill_price,
+                config=config,
+                require_volume_gate=False,
+            )
+            if fill_quality_errors:
+                return {
+                    **cls._base(plan, eval_status="completed"),
+                    "entry_triggered": False,
+                    "entry_triggered_at": None,
+                    "outcome": "no_entry",
+                    "direction_correct": None,
+                    "start_price": fill_price,
+                    "end_close": cls._execution_price(window_bars[-1], "close"),
+                    "max_high": cls._max_value(bar.high for bar in window_bars),
+                    "min_low": cls._min_value(bar.low for bar in window_bars),
+                    "simulated_entry_price": None,
+                    "simulated_exit_price": None,
+                    "simulated_exit_reason": "fill_quality_gate_rejected",
+                    "simulated_return_pct": None,
+                    "diagnostics": {
+                        "reason": "fill_quality_gate_rejected",
+                        "triggered_at": window_bars[trigger_index].timestamp.isoformat(),
+                        "rejected_fill_at": fill_bar.timestamp.isoformat(),
+                        "rejected_fill_price": fill_price,
+                        "quality_errors": fill_quality_errors,
+                        "execution_contract": contract,
+                        "execution": cls._execution_config(config),
+                    },
+                }
         max_holding_bars = int(contract["exit"]["max_holding_bars"])
         available_trade_bars = list(window_bars[fill_index:])
         trade_bars = available_trade_bars[:max_holding_bars]
@@ -307,7 +363,7 @@ class CryptoBacktestEngine:
             stop_loss=plan.stop_loss,
             config=config,
         )
-        if is_v4 and instrument.get("type") == "perpetual":
+        if is_perpetual_engine and instrument.get("type") == "perpetual":
             liquidation = cls._evaluate_liquidation(
                 direction=direction,
                 entry_price=fill_price,
@@ -358,7 +414,7 @@ class CryptoBacktestEngine:
                 quantity=sizing["quantity"],
                 trade_bars=trade_bars[:funding_bar_count],
             )
-            if is_v4 and instrument.get("type") == "perpetual"
+            if is_perpetual_engine and instrument.get("type") == "perpetual"
             else 0.0
         )
         trade = cls._simulate_trade(
@@ -510,6 +566,82 @@ class CryptoBacktestEngine:
         return normalized_contract, errors
 
     @classmethod
+    def _plan_quality_errors(
+        cls,
+        *,
+        plan: CryptoPlan,
+        contract: dict[str, Any],
+        entry_price: float,
+        config: CryptoPlanBacktestConfig,
+        require_volume_gate: bool,
+    ) -> list[str]:
+        """Validate that a triggered plan remains executable after costs and gaps."""
+
+        direction = str(plan.direction or "").strip().lower()
+        stop_loss = float(plan.stop_loss or 0.0)
+        take_profit = float(plan.take_profit or 0.0)
+        errors: list[str] = []
+        if entry_price <= 0 or stop_loss <= 0 or take_profit <= 0:
+            return ["non_positive_plan_price"]
+
+        if direction == "long":
+            risk_distance = entry_price - stop_loss
+            reward_distance = take_profit - entry_price
+            if risk_distance <= 0:
+                errors.append("long_stop_must_be_below_entry")
+            if reward_distance <= 0:
+                errors.append("long_target_must_be_above_entry")
+        else:
+            risk_distance = stop_loss - entry_price
+            reward_distance = entry_price - take_profit
+            if risk_distance <= 0:
+                errors.append("short_stop_must_be_above_entry")
+            if reward_distance <= 0:
+                errors.append("short_target_must_be_below_entry")
+
+        if risk_distance > 0 and reward_distance > 0:
+            risk_reward = reward_distance / risk_distance
+            if risk_reward < max(float(config.minimum_risk_reward), 0.0):
+                errors.append("risk_reward_below_minimum")
+
+            gross_target_return_pct = reward_distance / entry_price * 100.0
+            net_target_return_pct = gross_target_return_pct - cls._estimated_round_trip_cost_pct(
+                contract=contract,
+                config=config,
+            )
+            if net_target_return_pct < max(float(config.neutral_band_pct), 0.0):
+                errors.append("target_does_not_clear_cost_and_neutral_band")
+
+        if require_volume_gate:
+            volume_thresholds = [
+                float(condition["value"])
+                for condition in (contract.get("entry") or {}).get("conditions") or []
+                if condition.get("type") == "volume_ratio_gte" and condition.get("value") is not None
+            ]
+            minimum_volume_ratio = max(float(config.minimum_volume_ratio), 0.0)
+            if not volume_thresholds:
+                errors.append("missing_volume_confirmation")
+            elif max(volume_thresholds) < minimum_volume_ratio:
+                errors.append("volume_confirmation_below_minimum")
+
+        return errors
+
+    @staticmethod
+    def _estimated_round_trip_cost_pct(
+        *,
+        contract: dict[str, Any],
+        config: CryptoPlanBacktestConfig,
+    ) -> float:
+        entry = contract.get("entry") or {}
+        exit_config = contract.get("exit") or {}
+        maker_bps = max(float(config.maker_fee_rate_bps), 0.0)
+        taker_bps = max(float(config.taker_fee_rate_bps), 0.0)
+        entry_fee_bps = maker_bps if entry.get("order_type") == "limit" else taker_bps
+        exit_fee_bps = maker_bps if exit_config.get("order_type") == "limit" else taker_bps
+        slippage_bps = max(float(config.slippage_bps), 0.0)
+        return (entry_fee_bps + exit_fee_bps + 2 * slippage_bps) / 100.0
+
+    @classmethod
     def _find_contract_trigger_index(
         cls,
         *,
@@ -570,7 +702,7 @@ class CryptoBacktestEngine:
         rows = list(results)
         completed = [row for row in rows if getattr(row, "eval_status", None) == "completed"]
         raw_triggered = [row for row in completed if getattr(row, "entry_triggered", None) is True]
-        structured_engine = str(engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4"}
+        structured_engine = str(engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4", "btc-plan-v5"}
         if structured_engine:
             triggered, overlap_excluded = cls._independent_triggered_rows(raw_triggered)
         else:
@@ -962,8 +1094,8 @@ class CryptoBacktestEngine:
         sizing_method = str(sizing["sizing_method"])
 
         slippage_rate = max(float(config.slippage_bps), 0.0) / 10000.0
-        is_v4 = str(config.engine_version).strip().lower() == "btc-plan-v4"
-        if is_v4:
+        uses_order_type_fees = str(config.engine_version).strip().lower() in {"btc-plan-v4", "btc-plan-v5"}
+        if uses_order_type_fees:
             maker_rate = max(float(config.maker_fee_rate_bps), 0.0) / 10000.0
             taker_rate = max(float(config.taker_fee_rate_bps), 0.0) / 10000.0
             entry_fee_rate = maker_rate if entry_order_type == "limit" else taker_rate

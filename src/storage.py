@@ -445,7 +445,7 @@ class CryptoBacktestResult(Base):
     plan_type = Column(String(24), nullable=False, index=True)  # daily_long/daily_short/intraday
     horizon = Column(String(16), nullable=False, index=True)  # daily/intraday
     direction = Column(String(8), nullable=False)  # long/short/wait
-    engine_version = Column(String(24), nullable=False, default='btc-plan-v4')
+    engine_version = Column(String(24), nullable=False, default='btc-plan-v5')
 
     eval_status = Column(String(24), nullable=False, default='pending')
     evaluation_start = Column(DateTime)
@@ -501,7 +501,7 @@ class CryptoBacktestSummary(Base):
     code = Column(String(16), index=True)
     horizon = Column(String(16), index=True)
     plan_type = Column(String(24), index=True)
-    engine_version = Column(String(24), nullable=False, default='btc-plan-v4')
+    engine_version = Column(String(24), nullable=False, default='btc-plan-v5')
     computed_at = Column(DateTime, default=datetime.now, index=True)
 
     total_evaluations = Column(Integer, default=0)

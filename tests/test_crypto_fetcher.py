@@ -279,6 +279,38 @@ def test_crypto_fetcher_builds_aligned_perpetual_trade_mark_and_funding_data() -
     assert frame.attrs["funding_complete"] is True
 
 
+def test_crypto_fetcher_paginates_perpetual_mark_candles_at_provider_limit() -> None:
+    current_hour_ms = int(datetime.now(timezone.utc).timestamp() // 3600 * 3600 * 1000)
+    first_ms = current_hour_ms - 100 * 3600000
+    trade_rows = [
+        [first_ms + index * 3600000, 100.0, 102.0, 99.0, 101.0, 10.0]
+        for index in range(101)
+    ]
+    mark_rows = [
+        [first_ms + index * 3600000, 99.5, 101.5, 98.5, 100.5, 0.0]
+        for index in range(101)
+    ]
+    exchange = Mock()
+    exchange.fetch_ohlcv.side_effect = [trade_rows, mark_rows[:100], mark_rows[100:]]
+    exchange.fetch_funding_rate_history.return_value = [
+        {"timestamp": first_ms, "fundingRate": 0.0001}
+    ]
+    fetcher = CryptoFetcher()
+
+    with patch.object(fetcher, "_create_public_exchange", return_value=exchange):
+        frame = fetcher.get_perpetual_kline_data(
+            "BTC-USDT-PERP",
+            period="hourly",
+            days=5,
+            venue="okx",
+        )
+
+    assert len(frame) == 101
+    assert exchange.fetch_ohlcv.call_count == 3
+    assert exchange.fetch_ohlcv.call_args_list[1].kwargs["limit"] == 100
+    assert exchange.fetch_ohlcv.call_args_list[2].kwargs["since"] == mark_rows[99][0] + 1
+
+
 def test_crypto_fetcher_rejects_unsynchronized_perpetual_mark_candles() -> None:
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     trade_rows = [[now_ms - 3600000, 100.0, 102.0, 99.0, 101.0, 10.0]]
