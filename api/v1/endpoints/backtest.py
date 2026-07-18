@@ -17,6 +17,7 @@ from api.v1.schemas.backtest import (
     CryptoBacktestMetrics,
     CryptoBacktestHistoryItem,
     CryptoBacktestHistoryResponse,
+    CryptoBacktestLossReviewResponse,
     CryptoBacktestResultsResponse,
     CryptoBacktestResultItem,
     CryptoBacktestRunResponse,
@@ -386,6 +387,32 @@ def get_crypto_backtest_results(
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "message": f"查询 BTC 回测结果失败: {str(exc)}"},
+        )
+
+
+@router.get(
+    "/crypto/loss-review",
+    response_model=CryptoBacktestLossReviewResponse,
+    responses={
+        200: {"description": "BTC 亏损回测归因"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取 BTC 亏损复盘",
+    description="基于当前回测引擎的成交、费用、止损止盈和指标快照，对净亏损交易给出可追溯归因。",
+)
+def get_crypto_loss_review(
+    code: Optional[str] = Query(None, description="BTC 代码筛选"),
+    limit: int = Query(50, ge=1, le=200, description="最多复盘的净亏损记录数"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> CryptoBacktestLossReviewResponse:
+    try:
+        service = CryptoBacktestService(db_manager)
+        return CryptoBacktestLossReviewResponse(**service.get_loss_review(code=code, limit=limit))
+    except Exception as exc:
+        logger.error("查询 BTC 亏损复盘失败: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"查询 BTC 亏损复盘失败: {str(exc)}"},
         )
 
 

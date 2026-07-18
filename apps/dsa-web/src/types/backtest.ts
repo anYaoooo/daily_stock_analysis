@@ -175,6 +175,41 @@ export interface BacktestResultsResponse {
   items: BacktestResultItem[];
 }
 
+export interface CryptoBacktestLossReviewItem {
+  analysisHistoryId: number;
+  code: string;
+  planType: string;
+  horizon: string;
+  direction: string;
+  analysisCreatedAt?: string;
+  simulatedReturnPct?: number;
+  netPnl?: number;
+  primaryCause: string;
+  causeGroup: string;
+  confidence: string;
+  title: string;
+  explanation: string;
+  evidence: string[];
+  improvement: string;
+  externalContext: string;
+  indicatorTags: Record<string, unknown>;
+}
+
+export interface CryptoBacktestLossReviewResponse {
+  engineVersion: string;
+  reviewedResults: number;
+  lossCount: number;
+  causeBreakdown: Record<string, number>;
+  indicatorPatterns: Array<{
+    dimension: string;
+    key: string;
+    lossCount: number;
+    note: string;
+  }>;
+  improvementSuggestions: string[];
+  items: CryptoBacktestLossReviewItem[];
+}
+
 export interface CryptoBacktestHistoryResponse {
   total: number;
   page: number;

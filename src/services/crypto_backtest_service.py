@@ -334,6 +334,53 @@ class CryptoBacktestService:
             "items": [self._result_to_dict(row) for row in rows],
         }
 
+    def get_loss_review(
+        self,
+        *,
+        code: Optional[str] = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Review net-loss trades using the current engine's stored evidence only."""
+        engine_version = self._engine_version()
+        rows = self.repo.list_results(
+            code=normalize_crypto_symbol(code) if code else None,
+            engine_version=engine_version,
+            net_loss_only=True,
+            limit=max(1, min(int(limit), 200)),
+        )
+        items = [self._loss_review_item(row) for row in rows]
+
+        cause_breakdown: dict[str, int] = {}
+        indicator_counts: dict[tuple[str, str], int] = {}
+        for item in items:
+            cause = str(item["primary_cause"])
+            cause_breakdown[cause] = cause_breakdown.get(cause, 0) + 1
+            for dimension, key in self._loss_indicator_values(item["indicator_tags"]):
+                count_key = (dimension, key)
+                indicator_counts[count_key] = indicator_counts.get(count_key, 0) + 1
+
+        indicator_patterns = [
+            {
+                "dimension": dimension,
+                "key": key,
+                "loss_count": count,
+                "note": "仅表示亏损样本中的共同特征，不代表已证明的因果关系。",
+            }
+            for (dimension, key), count in sorted(
+                indicator_counts.items(), key=lambda item: (-item[1], item[0])
+            )[:5]
+        ]
+
+        return {
+            "engine_version": engine_version,
+            "reviewed_results": len(rows),
+            "loss_count": len(items),
+            "cause_breakdown": cause_breakdown,
+            "indicator_patterns": indicator_patterns,
+            "improvement_suggestions": self._loss_review_suggestions(cause_breakdown, indicator_patterns),
+            "items": items,
+        }
+
     def get_summary(
         self,
         *,
@@ -362,6 +409,151 @@ class CryptoBacktestService:
         if summary is None:
             return None
         return self._summary_to_dict(summary)
+
+    @classmethod
+    def _loss_review_item(cls, row: CryptoBacktestResult) -> dict[str, Any]:
+        diagnostics = parse_json_field(row.diagnostics_json)
+        diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+        trade = diagnostics.get("trade")
+        trade = trade if isinstance(trade, dict) else {}
+        indicator_tags = diagnostics.get("indicator_tags")
+        indicator_tags = indicator_tags if isinstance(indicator_tags, dict) else {}
+
+        gross_pnl = cls._optional_float(trade.get("gross_pnl"))
+        net_pnl = cls._optional_float(trade.get("net_pnl"))
+        total_fee = cls._optional_float(trade.get("total_fee"))
+        funding_cost = cls._optional_float(trade.get("funding_cost"))
+        exit_reason = str(row.simulated_exit_reason or "")
+
+        if gross_pnl is not None and net_pnl is not None and gross_pnl >= 0 and net_pnl < 0:
+            primary_cause = "costs_exceeded_gross_profit"
+            cause_group = "execution"
+            confidence = "high"
+            title = "费用与资金费吞没毛利"
+            explanation = "价格路径没有产生毛亏损，但手续费、滑点或资金费使净收益转负。"
+            evidence = [
+                f"毛 PnL {gross_pnl:.2f}，净 PnL {net_pnl:.2f}",
+                f"总费用 {total_fee:.2f}" if total_fee is not None else "总费用数据缺失",
+            ]
+            if funding_cost is not None:
+                evidence.append(f"资金费 {funding_cost:.2f}")
+            improvement = "提高最小目标收益阈值，要求目标收益覆盖双边费用、滑点和预估资金费。"
+        elif exit_reason in {"stop_loss", "ambiguous_stop_loss", "liquidation"} or row.hit_stop_loss:
+            primary_cause = "risk_control_exit"
+            cause_group = "methodology"
+            confidence = "high"
+            title = "止损或强平退出"
+            explanation = "交易触及预设风险边界，说明入场后的价格路径与计划方向不符。"
+            evidence = [
+                f"退出原因：{exit_reason or 'stop_loss'}",
+                f"止损价 {cls._price_text(row.stop_loss)}，模拟入场价 {cls._price_text(row.simulated_entry_price)}",
+            ]
+            improvement = "复查该类信号的入场确认、止损距离和仓位；将相同指标组合与盈利样本对比后再调整阈值。"
+        elif row.direction_correct is False:
+            primary_cause = "direction_mismatch"
+            cause_group = "methodology"
+            confidence = "medium"
+            title = "方向判断与后续走势不一致"
+            explanation = "回测窗口内的实际价格方向没有支持该交易计划。"
+            evidence = [
+                f"计划方向：{row.direction or 'unknown'}",
+                f"窗口收益 {cls._percent_text(row.simulated_return_pct)}，窗口结束价 {cls._price_text(row.end_close)}",
+            ]
+            improvement = "针对该指标组合提高确认门槛，优先检查量能确认、多周期方向一致性和关键位突破有效性。"
+        else:
+            primary_cause = "target_not_reached_before_exit"
+            cause_group = "market_path"
+            confidence = "medium"
+            title = "持有期内未达到目标并以亏损退出"
+            explanation = "交易未触发止损，但在最长持有期或窗口结束前未形成足够的有利价格路径。"
+            evidence = [
+                f"退出原因：{exit_reason or 'window_end'}",
+                f"最高价 {cls._price_text(row.max_high)}，最低价 {cls._price_text(row.min_low)}，净收益 {cls._percent_text(row.simulated_return_pct)}",
+            ]
+            improvement = "检查目标位是否与波动率和最长持有期匹配；必要时增加趋势衰减退出或延长评估窗口后再比较。"
+
+        return {
+            "analysis_history_id": int(row.analysis_history_id),
+            "code": row.code,
+            "plan_type": row.plan_type,
+            "horizon": row.horizon,
+            "direction": row.direction,
+            "analysis_created_at": row.analysis_created_at.isoformat() if row.analysis_created_at else None,
+            "simulated_return_pct": row.simulated_return_pct,
+            "net_pnl": net_pnl,
+            "primary_cause": primary_cause,
+            "cause_group": cause_group,
+            "confidence": confidence,
+            "title": title,
+            "explanation": explanation,
+            "evidence": evidence,
+            "improvement": improvement,
+            "external_context": cls._external_context(indicator_tags),
+            "indicator_tags": indicator_tags,
+        }
+
+    @staticmethod
+    def _optional_float(value: Any) -> Optional[float]:
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
+    @staticmethod
+    def _price_text(value: Optional[float]) -> str:
+        return f"{float(value):.2f}" if value is not None else "--"
+
+    @staticmethod
+    def _percent_text(value: Optional[float]) -> str:
+        return f"{float(value):.2f}%" if value is not None else "--"
+
+    @staticmethod
+    def _external_context(indicator_tags: dict[str, Any]) -> str:
+        macro = indicator_tags.get("macro_correlation")
+        macro = macro if isinstance(macro, dict) else {}
+        if macro.get("data_quality") == "available":
+            return "该记录包含宏观关联指标，但未保存可直接证明外部事件导致亏损的事件证据。"
+        return "该记录没有与交易时点绑定的宏观或新闻冲击证据，不能归因于外部因素。"
+
+    @staticmethod
+    def _loss_indicator_values(indicator_tags: dict[str, Any]) -> list[tuple[str, str]]:
+        dimensions = (
+            ("price_action", "state"),
+            ("ema", "structure"),
+            ("vwap", "price_position"),
+            ("volume", "confirmation"),
+            ("intraday", "alignment"),
+            ("event", "type"),
+        )
+        values: list[tuple[str, str]] = []
+        for dimension, field in dimensions:
+            nested = indicator_tags.get(dimension)
+            value = nested.get(field) if isinstance(nested, dict) else None
+            if value not in (None, "", "unknown"):
+                values.append((dimension, str(value)))
+        return values
+
+    @staticmethod
+    def _loss_review_suggestions(
+        cause_breakdown: dict[str, int],
+        indicator_patterns: list[dict[str, Any]],
+    ) -> list[str]:
+        suggestions: list[str] = []
+        if cause_breakdown.get("costs_exceeded_gross_profit"):
+            suggestions.append("将费用、滑点和资金费纳入最小目标收益门槛，避免毛利为正但净收益为负。")
+        if cause_breakdown.get("risk_control_exit") or cause_breakdown.get("direction_mismatch"):
+            suggestions.append("按指标组合与周期拆分亏损样本，验证量能、多周期方向和关键位确认是否需要收紧。")
+        if cause_breakdown.get("target_not_reached_before_exit"):
+            suggestions.append("评估目标位、ATR 波动率和最长持有期是否匹配，避免交易在有效期内缺少足够价格空间。")
+        low_volume = next(
+            (
+                item for item in indicator_patterns
+                if item.get("dimension") == "volume" and item.get("key") == "low"
+            ),
+            None,
+        )
+        if low_volume:
+            suggestions.append("低量能出现在亏损样本中，建议把量能确认作为入场前置条件，并与盈利样本对照验证。")
+        return suggestions or ["当前没有可归因的净亏损成交；待样本积累后再评估分析方法。"]
 
     def delete_result(
         self,

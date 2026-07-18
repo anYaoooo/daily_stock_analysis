@@ -6,8 +6,9 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from src.core.crypto_backtest_engine import CryptoPlan
+from src.repositories.crypto_backtest_repo import CryptoBacktestRepository
 from src.services.crypto_backtest_service import CryptoBacktestService, _Bar
-from src.storage import AnalysisHistory, CryptoBacktestResult
+from src.storage import AnalysisHistory, CryptoBacktestResult, DatabaseManager
 
 
 class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
@@ -144,6 +145,69 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
 
         self.assertEqual(result, {"deleted": 0})
         self.assertEqual(recomputed, [])
+
+    def test_loss_review_separates_cost_loss_from_direction_mismatch(self):
+        cost_loss = CryptoBacktestResult(
+            analysis_history_id=71,
+            code="BTCUSDT",
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            engine_version="btc-plan-v5",
+            eval_status="completed",
+            entry_triggered=True,
+            outcome="neutral",
+            simulated_return_pct=-0.03,
+            diagnostics_json=json.dumps(
+                {
+                    "trade": {"gross_pnl": 1.2, "net_pnl": -0.3, "total_fee": 1.4, "funding_cost": 0.1},
+                    "indicator_tags": {"volume": {"confirmation": "low"}},
+                }
+            ),
+        )
+        direction_loss = CryptoBacktestResult(
+            analysis_history_id=72,
+            code="BTCUSDT",
+            plan_type="daily_long",
+            horizon="daily",
+            direction="long",
+            engine_version="btc-plan-v5",
+            eval_status="completed",
+            entry_triggered=True,
+            outcome="loss",
+            direction_correct=False,
+            simulated_return_pct=-1.5,
+            simulated_exit_reason="window_end",
+            diagnostics_json=json.dumps(
+                {"indicator_tags": {"ema": {"structure": "mixed"}}}
+            ),
+        )
+
+        class Repo:
+            def list_results(self, **kwargs):
+                self.kwargs = kwargs
+                return [cost_loss, direction_loss]
+
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+        service.repo = Repo()
+        service._engine_version = lambda: "btc-plan-v5"
+
+        review = service.get_loss_review(code="BTC", limit=10)
+
+        self.assertEqual(review["engine_version"], "btc-plan-v5")
+        self.assertEqual(review["reviewed_results"], 2)
+        self.assertEqual(review["loss_count"], 2)
+        self.assertEqual(review["cause_breakdown"], {
+            "costs_exceeded_gross_profit": 1,
+            "direction_mismatch": 1,
+        })
+        self.assertEqual(review["items"][0]["primary_cause"], "costs_exceeded_gross_profit")
+        self.assertEqual(review["items"][1]["primary_cause"], "direction_mismatch")
+        self.assertIn("不能归因于外部因素", review["items"][1]["external_context"])
+        self.assertIn("low", {item["key"] for item in review["indicator_patterns"]})
+        self.assertEqual(service.repo.kwargs["engine_version"], "btc-plan-v5")
+        self.assertTrue(service.repo.kwargs["net_loss_only"])
+        self.assertEqual(service.repo.kwargs["limit"], 10)
 
     def test_extract_plans_for_hourly_report_only_returns_intraday_plan(self):
         analysis = AnalysisHistory(
@@ -637,6 +701,89 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         self.assertEqual(stats["processed"], 1)
         self.assertEqual(stats["saved"], 0)
         self.assertEqual(stats["skipped"], 1)
+
+
+class CryptoBacktestRepositoryTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        DatabaseManager.reset_instance()
+        self.db = DatabaseManager("sqlite:///:memory:")
+        self.repo = CryptoBacktestRepository(self.db)
+
+    def tearDown(self) -> None:
+        DatabaseManager.reset_instance()
+
+    def test_net_loss_filter_is_applied_before_limit(self):
+        def result(
+            analysis_history_id: int,
+            created_at: datetime,
+            *,
+            eval_status: str,
+            entry_triggered: bool,
+            outcome: str | None,
+            simulated_return_pct: float | None,
+        ) -> CryptoBacktestResult:
+            return CryptoBacktestResult(
+                analysis_history_id=analysis_history_id,
+                code="BTCUSDT",
+                analysis_created_at=created_at,
+                evaluated_at=created_at,
+                plan_type="daily_long",
+                horizon="daily",
+                direction="long",
+                engine_version="btc-plan-v5",
+                eval_status=eval_status,
+                entry_triggered=entry_triggered,
+                outcome=outcome,
+                simulated_return_pct=simulated_return_pct,
+            )
+
+        with self.db.get_session() as session:
+            session.add_all(
+                [
+                    result(
+                        4,
+                        datetime(2026, 1, 4),
+                        eval_status="completed",
+                        entry_triggered=True,
+                        outcome="win",
+                        simulated_return_pct=1.0,
+                    ),
+                    result(
+                        3,
+                        datetime(2026, 1, 3),
+                        eval_status="insufficient_data",
+                        entry_triggered=False,
+                        outcome=None,
+                        simulated_return_pct=None,
+                    ),
+                    result(
+                        2,
+                        datetime(2026, 1, 2),
+                        eval_status="completed",
+                        entry_triggered=True,
+                        outcome="neutral",
+                        simulated_return_pct=-0.03,
+                    ),
+                    result(
+                        1,
+                        datetime(2026, 1, 1),
+                        eval_status="completed",
+                        entry_triggered=True,
+                        outcome="loss",
+                        simulated_return_pct=-1.0,
+                    ),
+                ]
+            )
+            session.commit()
+
+        rows = self.repo.list_results(
+            code="BTCUSDT",
+            engine_version="btc-plan-v5",
+            net_loss_only=True,
+            limit=1,
+        )
+
+        self.assertEqual([row.analysis_history_id for row in rows], [2])
 
 
 if __name__ == "__main__":

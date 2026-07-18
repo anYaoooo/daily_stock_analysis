@@ -218,6 +218,7 @@ class CryptoBacktestRepository:
         horizon: Optional[str] = None,
         plan_type: Optional[str] = None,
         engine_version: Optional[str] = None,
+        net_loss_only: bool = False,
         limit: Optional[int] = None,
     ) -> list[CryptoBacktestResult]:
         with self.db.get_session() as session:
@@ -227,6 +228,17 @@ class CryptoBacktestRepository:
                 plan_type=plan_type,
                 engine_version=engine_version,
             )
+            if net_loss_only:
+                conditions.extend(
+                    [
+                        CryptoBacktestResult.eval_status == "completed",
+                        CryptoBacktestResult.entry_triggered.is_(True),
+                        or_(
+                            CryptoBacktestResult.outcome == "loss",
+                            CryptoBacktestResult.simulated_return_pct < 0,
+                        ),
+                    ]
+                )
             query = (
                 select(CryptoBacktestResult)
                 .where(and_(*conditions) if conditions else True)

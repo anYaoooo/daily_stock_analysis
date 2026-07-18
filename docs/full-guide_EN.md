@@ -1001,6 +1001,7 @@ Features:
 - Supports notification priority and sound settings
 - Free quota sufficient for personal use (10,000 messages/month)
 - Messages retained for 7 days
+- Each message is limited to 1024 characters. Long reports are split at paragraph or line boundaries with page numbers in the title to avoid truncation.
 
 ---
 
@@ -1238,6 +1239,10 @@ Set the following variables in `.env` (all optional, have defaults):
 ### Auto-run
 
 Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v5` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, then checks price geometry, minimum risk/reward, cost coverage, and volume confirmation at both the planned price and the next-candle fill. A gap beyond the target or below the quality threshold is recorded as a rejected fill rather than a trade. Qualified plans then apply SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Perpetual plans also require complete mark-price and funding histories to estimate liquidation, funding cost, and maker/taker fees. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing v2/v3/v4 results remain auditable but are never mixed with v5 metrics.
+
+### BTC Loss Review
+
+The Backtest page calls `GET /api/v1/backtest/crypto/loss-review` and reads only executed net-loss trades from the current backtest engine. Reviews classify losses as costs exceeding gross profit, stop-loss/liquidation exits, direction mismatches, or targets not reached before exit. They return execution, exit, fee, funding, and indicator-snapshot evidence with targeted improvements for entry confirmation, targets, holding periods, or cost thresholds. Repeated indicator tags are occurrence patterns, not causal proof. When a record has no time-linked macro or news evidence, the response explicitly states that the loss cannot be attributed to external factors.
 
 After a single-symbol BTC analysis completes, full report notifications use the BTC-specific template instead of the generic stock decision dashboard. Each plan renders direction, entry, stop, and target as separate numeric lines, followed by a dedicated execution-conditions section for zones, triggers, invalidation, risk/reward, sizing, confidence, and no-trade reasons. This avoids broken mobile tables and keeps critical prices out of prose.
 

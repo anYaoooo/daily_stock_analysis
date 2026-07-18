@@ -6,6 +6,7 @@ import type {
   BacktestDeleteResponse,
   BacktestResultsResponse,
   BacktestResultItem,
+  CryptoBacktestLossReviewResponse,
   PerformanceMetrics,
   BacktestPhaseFilter,
   BacktestTimeframeFilter,
@@ -163,6 +164,20 @@ export const backtestApi = {
       limit: data.limit,
       items: (data.items || []).map(item => toCamelCase<BacktestResultItem>(item)),
     };
+  },
+
+  /**
+   * Review current-engine BTC backtest losses with deterministic evidence.
+   */
+  getLossReview: async (params: { code?: string; limit?: number } = {}): Promise<CryptoBacktestLossReviewResponse> => {
+    const queryParams: Record<string, string | number> = {};
+    if (params.code) queryParams.code = params.code;
+    if (params.limit) queryParams.limit = params.limit;
+    const response = await apiClient.get<Record<string, unknown>>(
+      '/api/v1/backtest/crypto/loss-review',
+      { params: queryParams },
+    );
+    return toCamelCase<CryptoBacktestLossReviewResponse>(response.data);
   },
 
   /**

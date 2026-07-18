@@ -5,11 +5,13 @@ import BacktestPage from '../BacktestPage';
 
 const {
   mockGetHistory,
+  mockGetLossReview,
   mockGetOverallPerformance,
   mockRunSelected,
   mockDeleteRecords,
 } = vi.hoisted(() => ({
   mockGetHistory: vi.fn(),
+  mockGetLossReview: vi.fn(),
   mockGetOverallPerformance: vi.fn(),
   mockRunSelected: vi.fn(),
   mockDeleteRecords: vi.fn(),
@@ -18,6 +20,7 @@ const {
 vi.mock('../../api/backtest', () => ({
   backtestApi: {
     getHistory: mockGetHistory,
+    getLossReview: mockGetLossReview,
     getOverallPerformance: mockGetOverallPerformance,
     runSelected: mockRunSelected,
   },
@@ -71,6 +74,38 @@ const basePerformance = {
       },
     },
   },
+};
+
+const baseLossReview = {
+  engineVersion: 'btc-plan-v5',
+  reviewedResults: 1,
+  lossCount: 1,
+  causeBreakdown: { direction_mismatch: 1 },
+  indicatorPatterns: [{
+    dimension: 'volume',
+    key: 'low',
+    lossCount: 1,
+    note: '仅表示亏损样本中的共同特征，不代表已证明的因果关系。',
+  }],
+  improvementSuggestions: ['按指标组合与周期拆分亏损样本，验证量能、多周期方向和关键位确认是否需要收紧。'],
+  items: [{
+    analysisHistoryId: 7,
+    code: 'BTCUSDT',
+    planType: 'daily_long',
+    horizon: 'daily',
+    direction: 'long',
+    simulatedReturnPct: -1.2,
+    netPnl: -12,
+    primaryCause: 'direction_mismatch',
+    causeGroup: 'methodology',
+    confidence: 'medium',
+    title: '方向判断与后续走势不一致',
+    explanation: '回测窗口内的实际价格方向没有支持该交易计划。',
+    evidence: ['计划方向：long'],
+    improvement: '提高量能和多周期方向确认门槛。',
+    externalContext: '没有直接的外部事件证据。',
+    indicatorTags: {},
+  }],
 };
 
 const baseHistoryItem = {
@@ -138,6 +173,7 @@ beforeEach(() => {
     items: [baseHistoryItem],
   });
   mockGetOverallPerformance.mockResolvedValue(basePerformance);
+  mockGetLossReview.mockResolvedValue(baseLossReview);
   mockRunSelected.mockResolvedValue({
     processed: 1,
     saved: 1,
@@ -161,6 +197,8 @@ describe('BacktestPage', () => {
     expect(screen.getByText('指标分组复盘')).toBeInTheDocument();
     expect(screen.getByText('价格行为 · breakout')).toBeInTheDocument();
     expect(screen.getByText('策略契约胜率')).toBeInTheDocument();
+    expect(screen.getByText('亏损复盘')).toBeInTheDocument();
+    expect(screen.getByText('方向判断与后续走势不一致')).toBeInTheDocument();
     expect(screen.getByText('独立成交 / 已完成评估')).toBeInTheDocument();
     expect(screen.getByText('不可评估 / 等待数据')).toBeInTheDocument();
     expect(screen.getByText('原始触发 / 重叠排除')).toBeInTheDocument();
@@ -173,11 +211,22 @@ describe('BacktestPage', () => {
       page: 1,
       limit: 20,
     });
+    expect(mockGetLossReview).toHaveBeenCalledWith({ code: 'BTC' });
 
     fireEvent.click(screen.getByRole('button', { name: '详情' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText('PA breakout')).toBeInTheDocument();
     expect(screen.getByText('结构化执行契约')).toBeInTheDocument();
+  });
+
+  it('keeps core backtest data available when loss review loading fails', async () => {
+    mockGetLossReview.mockRejectedValueOnce(new Error('loss review unavailable'));
+
+    renderPage();
+
+    expect(await screen.findByText('BTCUSDT')).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'BTC 回测历史分析记录' })).toBeInTheDocument();
+    expect(screen.queryByText('亏损复盘')).not.toBeInTheDocument();
   });
 
   it('sends analysis mode, direction, plan type, and result status filters', async () => {

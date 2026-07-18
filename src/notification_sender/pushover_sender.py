@@ -6,6 +6,7 @@ Pushover 发送提醒服务
 1. 通过 Pushover API 发送 Pushover 消息
 """
 import logging
+import math
 from typing import Optional
 from datetime import datetime
 import requests
@@ -15,6 +16,9 @@ from src.formatters import markdown_to_plain_text
 
 
 logger = logging.getLogger(__name__)
+
+
+PUSHOVER_MAX_MESSAGE_LENGTH = 1024
 
 
 class PushoverSender:
@@ -82,13 +86,10 @@ class PushoverSender:
             date_str = datetime.now().strftime('%Y-%m-%d')
             title = f"📈 股票分析报告 - {date_str}"
         
-        # Pushover 消息限制 1024 字符
-        max_length = 1024
-        
         # 转换 Markdown 为纯文本（Pushover 支持 HTML，但纯文本更通用）
         plain_content = markdown_to_plain_text(content)
         
-        if len(plain_content) <= max_length:
+        if len(plain_content) <= PUSHOVER_MAX_MESSAGE_LENGTH:
             # 单条消息发送
             return self._send_pushover_message(api_url, user_key, api_token, plain_content, title, timeout_seconds=timeout_seconds)
         else:
@@ -99,7 +100,7 @@ class PushoverSender:
                 api_token,
                 plain_content,
                 title,
-                max_length,
+                PUSHOVER_MAX_MESSAGE_LENGTH,
                 timeout_seconds=timeout_seconds,
             )
       
@@ -172,40 +173,7 @@ class PushoverSender:
         """
         import time
         
-        # 按段落（分隔线或双换行）分割
-        if "────────" in content:
-            sections = content.split("────────")
-            separator = "────────"
-        else:
-            sections = content.split("\n\n")
-            separator = "\n\n"
-        
-        chunks = []
-        current_chunk = []
-        current_length = 0
-        
-        for section in sections:
-            # 计算添加这个 section 后的实际长度
-            # join() 只在元素之间放置分隔符，不是每个元素后面
-            # 所以：第一个元素不需要分隔符，后续元素需要一个分隔符连接
-            if current_chunk:
-                # 已有元素，添加新元素需要：当前长度 + 分隔符 + 新 section
-                new_length = current_length + len(separator) + len(section)
-            else:
-                # 第一个元素，不需要分隔符
-                new_length = len(section)
-            
-            if new_length > max_length:
-                if current_chunk:
-                    chunks.append(separator.join(current_chunk))
-                current_chunk = [section]
-                current_length = len(section)
-            else:
-                current_chunk.append(section)
-                current_length = new_length
-        
-        if current_chunk:
-            chunks.append(separator.join(current_chunk))
+        chunks = self._split_pushover_content(content, max_length)
         
         total_chunks = len(chunks)
         success_count = 0
@@ -234,3 +202,33 @@ class PushoverSender:
                 time.sleep(1)
 
         return success_count == total_chunks
+
+    @staticmethod
+    def _split_pushover_content(content: str, max_length: int) -> list[str]:
+        """Split plain text without leaving an oversized section or tiny tail."""
+
+        if len(content) <= max_length:
+            return [content]
+
+        chunks = []
+        remaining = content
+        while len(remaining) > max_length:
+            chunk_count = math.ceil(len(remaining) / max_length)
+            target = math.ceil(len(remaining) / chunk_count)
+            split_at = PushoverSender._find_split_point(remaining, target)
+            chunks.append(remaining[:split_at])
+            remaining = remaining[split_at:]
+
+        chunks.append(remaining)
+        return chunks
+
+    @staticmethod
+    def _find_split_point(content: str, target: int) -> int:
+        """Prefer a nearby paragraph or line boundary, falling back to a hard cut."""
+
+        minimum_preferred = max(1, target // 2)
+        for separator in ("\n\n", "\n", " "):
+            split_at = content.rfind(separator, 0, target + 1)
+            if split_at >= minimum_preferred:
+                return split_at + len(separator)
+        return target

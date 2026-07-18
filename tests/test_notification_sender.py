@@ -1144,6 +1144,30 @@ class TestPushoverSender(unittest.TestCase):
         self.assertGreaterEqual(mock_post.call_count, 2)
         self.assertTrue(all(call.kwargs["timeout"] == 9 for call in mock_post.call_args_list))
 
+    @mock.patch("time.sleep")
+    @mock.patch("src.notification_sender.pushover_sender.requests.post")
+    def test_long_technical_analysis_is_split_without_truncating_or_isolating_tail(
+        self, mock_post, _mock_sleep
+    ):
+        mock_post.return_value = _response(200, {"status": 1})
+        cfg = _config(pushover_user_key="U", pushover_api_token="T")
+        sender = PushoverSender(cfg)
+        content = (
+            "### 技术分析\n\n"
+            + "技术分析内容" * 180
+            + "\n\n---\n\n*AI生成，仅供参考，不构成投资建议*"
+        )
+
+        result = sender.send_to_pushover(content)
+
+        self.assertTrue(result)
+        messages = [call.kwargs["data"]["message"] for call in mock_post.call_args_list]
+        self.assertGreater(len(messages), 1)
+        self.assertTrue(all(len(message) <= 1024 for message in messages))
+        self.assertTrue(any("技术分析" in message for message in messages))
+        self.assertIn("AI生成，仅供参考，不构成投资建议", "".join(messages))
+        self.assertGreater(len(messages[-1]), 100)
+
 
 class TestPushplusSender(unittest.TestCase):
     """Unit tests for PushplusSender."""

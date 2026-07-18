@@ -12,6 +12,7 @@ import type {
   CryptoBacktestDirectionFilter,
   CryptoBacktestHistoryItem,
   CryptoBacktestHistoryPlan,
+  CryptoBacktestLossReviewResponse,
   CryptoBacktestPlanTypeFilter,
   CryptoBacktestResultStatusFilter,
   PerformanceMetrics,
@@ -225,6 +226,46 @@ const IndicatorGroupCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ 
   );
 };
 
+const LossReviewCard: React.FC<{ review: CryptoBacktestLossReviewResponse | null }> = ({ review }) => {
+  if (!review) return null;
+
+  return (
+    <Card padding="md" className="text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="label-uppercase">亏损复盘</span>
+        <Badge variant={review.lossCount ? 'danger' : 'default'}>{review.lossCount} 笔</Badge>
+      </div>
+      <p className="mt-2 text-xs text-muted-text">当前引擎 {review.engineVersion} · 已复盘 {review.reviewedResults} 笔净亏损</p>
+      {!review.items.length ? (
+        <p className="mt-3 text-xs text-secondary-text">暂无可归因的净亏损成交，后续回测会自动纳入复盘。</p>
+      ) : (
+        <div className="mt-3 divide-y divide-border/60">
+          {review.items.slice(0, 3).map((item) => (
+            <div key={`${item.analysisHistoryId}-${item.planType}`} className="py-3 first:pt-0 last:pb-0">
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-xs font-medium text-foreground">{item.title}</span>
+                <Badge variant={item.causeGroup === 'execution' ? 'warning' : 'danger'}>{pct(item.simulatedReturnPct)}</Badge>
+              </div>
+              <p className="mt-1 text-xs text-secondary-text">{item.explanation}</p>
+              <p className="mt-1 text-xs text-muted-text">改进：{item.improvement}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {review.indicatorPatterns.length ? (
+        <div className="mt-3 border-t border-border/60 pt-3 text-xs text-muted-text">
+          共同特征：{review.indicatorPatterns.map((item) => `${item.dimension}.${item.key} (${item.lossCount})`).join(' · ')}
+        </div>
+      ) : null}
+      {review.improvementSuggestions.length ? (
+        <ul className="mt-3 space-y-1 border-t border-border/60 pt-3 text-xs text-secondary-text">
+          {review.improvementSuggestions.slice(0, 2).map((suggestion) => <li key={suggestion}>{suggestion}</li>)}
+        </ul>
+      ) : null}
+    </Card>
+  );
+};
+
 const PlanSummary: React.FC<{
   plan: CryptoBacktestHistoryPlan;
   runningKey: string | null;
@@ -313,6 +354,7 @@ const BacktestPage: React.FC = () => {
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
   const [dailyMetrics, setDailyMetrics] = useState<PerformanceMetrics | null>(null);
   const [intradayMetrics, setIntradayMetrics] = useState<PerformanceMetrics | null>(null);
+  const [lossReview, setLossReview] = useState<CryptoBacktestLossReviewResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunningBatch, setIsRunningBatch] = useState(false);
   const [runningRecordId, setRunningRecordId] = useState<number | null>(null);
@@ -335,7 +377,7 @@ const BacktestPage: React.FC = () => {
   const fetchData = useCallback(async (page = currentPage) => {
     setIsLoading(true);
     try {
-      const [historyResponse, performance] = await Promise.all([
+      const [historyResponse, performance, review] = await Promise.all([
         backtestApi.getHistory({
           code: codeFilter.trim() || 'BTC',
           analysisMode: analysisModeFilter,
@@ -346,6 +388,7 @@ const BacktestPage: React.FC = () => {
           limit: PAGE_SIZE,
         }),
         backtestApi.getOverallPerformance({ analysisMode: analysisModeFilter }),
+        backtestApi.getLossReview({ code: codeFilter.trim() || 'BTC' }).catch(() => null),
       ]);
       const [dailyPerformance, intradayPerformance] = await Promise.all([
         backtestApi.getOverallPerformance({ analysisMode: 'daily' }),
@@ -357,6 +400,7 @@ const BacktestPage: React.FC = () => {
       setMetrics(performance);
       setDailyMetrics(dailyPerformance);
       setIntradayMetrics(intradayPerformance);
+      setLossReview(review);
       setError(null);
     } catch (err) {
       setError(getParsedApiError(err));
@@ -556,6 +600,7 @@ const BacktestPage: React.FC = () => {
             </div>
           </Card>
           <IndicatorGroupCard metrics={metrics} />
+          <LossReviewCard review={lossReview} />
           <Card padding="md" className="text-sm">
             <span className="label-uppercase">选择</span>
             <div className="mt-3 flex items-center justify-between text-secondary-text">

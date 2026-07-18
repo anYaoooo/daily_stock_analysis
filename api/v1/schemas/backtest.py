@@ -181,6 +181,36 @@ class CryptoBacktestResultsResponse(BaseModel):
     items: List[CryptoBacktestResultItem] = Field(default_factory=list)
 
 
+class CryptoBacktestLossReviewItem(BaseModel):
+    analysis_history_id: int
+    code: str
+    plan_type: str
+    horizon: str
+    direction: str
+    analysis_created_at: Optional[str] = None
+    simulated_return_pct: Optional[float] = None
+    net_pnl: Optional[float] = None
+    primary_cause: str
+    cause_group: str
+    confidence: str
+    title: str
+    explanation: str
+    evidence: List[str] = Field(default_factory=list)
+    improvement: str
+    external_context: str
+    indicator_tags: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CryptoBacktestLossReviewResponse(BaseModel):
+    engine_version: str
+    reviewed_results: int
+    loss_count: int
+    cause_breakdown: Dict[str, int] = Field(default_factory=dict)
+    indicator_patterns: List[Dict[str, Any]] = Field(default_factory=list)
+    improvement_suggestions: List[str] = Field(default_factory=list)
+    items: List[CryptoBacktestLossReviewItem] = Field(default_factory=list)
+
+
 class PerformanceMetrics(BaseModel):
     scope: str
     code: Optional[str] = None
