@@ -176,7 +176,14 @@ class AlertApiTestCase(unittest.TestCase):
 
         detail_resp = self.client.get(f"/api/v1/alerts/rules/{created['id']}")
         self.assertEqual(detail_resp.status_code, 200, detail_resp.text)
-        self.assertFalse(detail_resp.json()["cooldown_active"])
+        self.assertTrue(detail_resp.json()["cooldown_active"])
+
+        repo.rearm_cooldown(
+            rule_id=created["id"],
+            target="600519",
+            severity="warning",
+        )
+        self.assertFalse(self.client.get(f"/api/v1/alerts/rules/{created['id']}").json()["cooldown_active"])
 
     def test_rule_update_rejects_empty_payload(self) -> None:
         rule = self._create_rule()

@@ -705,16 +705,14 @@ class AlertWorkerTestCase(unittest.TestCase):
 
         self.assertEqual(first["triggered"], 1)
         self.assertEqual(first["recorded"], 1)
-        self.assertEqual(second["triggered"], 1)
+        self.assertEqual(second["triggered"], 0)
         self.assertEqual(second["recorded"], 0)
         triggers = self._triggers(rule_id=rule["id"], status="triggered")
         self.assertEqual(len(triggers), 1)
         self.assertEqual(triggers[0]["target"], "000858")
         self.assertEqual(triggers[0]["data_source"], "daily_data")
         self.assertEqual(triggers[0]["data_timestamp"], "2026-05-15T00:00:00")
-        cooldown_attempts = self._notifications(channel="__cooldown__")
-        self.assertEqual(len(cooldown_attempts), 1)
-        self.assertEqual(cooldown_attempts[0]["trigger_id"], triggers[0]["id"])
+        self.assertEqual(self._notifications(channel="__cooldown__"), [])
         notifier.send_with_results.assert_called_once()
 
     def test_technical_indicator_rules_share_run_once_daily_cache(self) -> None:
@@ -750,7 +748,7 @@ class AlertWorkerTestCase(unittest.TestCase):
             second = worker.run_once()
 
         self.assertEqual(first["triggered"], 2)
-        self.assertEqual(second["triggered"], 2)
+        self.assertEqual(second["triggered"], 0)
         self.assertEqual(len(self._triggers(status="triggered")), 2)
         self.assertEqual(manager.get_daily_data.call_count, 2)
         manager.get_daily_data.assert_called_with("600519", days=33)
@@ -784,17 +782,15 @@ class AlertWorkerTestCase(unittest.TestCase):
 
         self.assertEqual(first["triggered"], 1)
         self.assertEqual(first["recorded"], 1)
-        self.assertEqual(second["triggered"], 1)
+        self.assertEqual(second["triggered"], 0)
         self.assertEqual(second["recorded"], 0)
         triggers = self._triggers(rule_id=rule["id"], status="triggered")
         self.assertEqual(len(triggers), 1)
         self.assertEqual(triggers[0]["data_timestamp"], "2026-05-15T00:00:00")
-        cooldown_attempts = self._notifications(channel="__cooldown__")
-        self.assertEqual(len(cooldown_attempts), 1)
-        self.assertEqual(cooldown_attempts[0]["trigger_id"], triggers[0]["id"])
+        self.assertEqual(self._notifications(channel="__cooldown__"), [])
         notifier.send_with_results.assert_called_once()
 
-    def test_db_triggered_history_keeps_distinct_data_timestamps(self) -> None:
+    def test_db_triggered_history_stays_latched_across_new_data_timestamps(self) -> None:
         rule = self._create_rule(
             name="MA",
             target="600519",
@@ -830,15 +826,12 @@ class AlertWorkerTestCase(unittest.TestCase):
             second = worker.run_once()
 
         self.assertEqual(first["recorded"], 1)
-        self.assertEqual(second["recorded"], 1)
+        self.assertEqual(second["recorded"], 0)
         triggers = self._triggers(rule_id=rule["id"], status="triggered")
-        self.assertEqual(len(triggers), 2)
-        self.assertEqual(
-            {item["data_timestamp"] for item in triggers},
-            {"2026-05-15T00:00:00", "2026-05-16T00:00:00"},
-        )
+        self.assertEqual(len(triggers), 1)
+        self.assertEqual(triggers[0]["data_timestamp"], "2026-05-15T00:00:00")
 
-    def test_cooldown_zero_reuses_same_trigger_history_but_keeps_notifications(self) -> None:
+    def test_cooldown_zero_still_latches_until_condition_clears(self) -> None:
         rule = self._create_rule(
             name="MA",
             target="600519",
@@ -866,13 +859,13 @@ class AlertWorkerTestCase(unittest.TestCase):
             second = worker.run_once()
 
         self.assertEqual(first["notified"], 1)
-        self.assertEqual(second["notified"], 1)
+        self.assertEqual(second["notified"], 0)
         self.assertEqual(second["recorded"], 0)
         triggers = self._triggers(rule_id=rule["id"], status="triggered")
         self.assertEqual(len(triggers), 1)
         notifications = self._notifications(trigger_id=triggers[0]["id"])
-        self.assertEqual(len(notifications), 2)
-        self.assertEqual(notifier.send_with_results.call_count, 2)
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifier.send_with_results.call_count, 1)
 
     def test_db_triggered_history_deduplicates_per_rule_id(self) -> None:
         first_rule = self._create_rule(
@@ -1067,7 +1060,7 @@ class AlertWorkerTestCase(unittest.TestCase):
 
         self.assertEqual(first["triggered"], 1)
         self.assertEqual(first["recorded"], 1)
-        self.assertEqual(second["triggered"], 1)
+        self.assertEqual(second["triggered"], 0)
         self.assertEqual(second["recorded"], 0)
         notifier.send_with_results.assert_called_once()
         self.assertEqual(notifier.send_with_results.call_args.kwargs["route_type"], "alert")
@@ -1295,7 +1288,7 @@ class AlertWorkerTestCase(unittest.TestCase):
         self.assertEqual(len(triggers), 1)
         self.assertEqual(triggers[0]["target"], "300750")
 
-    def test_db_cooldown_suppresses_duplicate_notifications_but_expires(self) -> None:
+    def test_db_alert_latch_suppresses_while_condition_stays_true(self) -> None:
         self._create_rule(target="600519", cooldown_policy={"cooldown_seconds": 60})
         notifier = self._notifier()
         now = {"value": 1000.0}
@@ -1317,11 +1310,73 @@ class AlertWorkerTestCase(unittest.TestCase):
             now["value"] += 61
             worker.run_once()
 
+        self.assertEqual(notifier.send_with_results.call_count, 1)
+        self.assertEqual(len(self._triggers(status="triggered")), 1)
+        self.assertEqual(self._notifications(channel="__cooldown__"), [])
+
+    def test_db_alert_rearms_after_condition_clears(self) -> None:
+        self._create_rule(target="600519", cooldown_policy={"cooldown_seconds": 60})
+        notifier = self._notifier(self._dispatch_result(True), self._dispatch_result(True))
+
+        worker = AlertWorker(
+            config_provider=lambda: self._config(),
+            service=self.service,
+            notifier=notifier,
+        )
+        with patch(
+            "src.agent.events.EventMonitor._get_realtime_quote",
+            new=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(price=1810.0),
+                    SimpleNamespace(price=1790.0),
+                    SimpleNamespace(price=1810.0),
+                ]
+            ),
+        ):
+            first = worker.run_once()
+            cleared = worker.run_once()
+            retriggered = worker.run_once()
+
+        self.assertEqual(first["triggered"], 1)
+        self.assertEqual(cleared["triggered"], 0)
+        self.assertEqual(retriggered["triggered"], 1)
         self.assertEqual(notifier.send_with_results.call_count, 2)
-        self.assertEqual(len(self._triggers(status="triggered")), 3)
-        cooldown_attempts = self._notifications(channel="__cooldown__")
-        self.assertEqual(len(cooldown_attempts), 1)
-        self.assertEqual(cooldown_attempts[0]["error_code"], "cooldown_active")
+        self.assertEqual(len(self._triggers(status="triggered")), 2)
+
+    def test_db_alert_hysteresis_requires_clearance_margin_before_rearm(self) -> None:
+        self._create_rule(
+            target="600519",
+            cooldown_policy={"cooldown_seconds": 60, "hysteresis_pct": 1.0},
+        )
+        notifier = self._notifier(self._dispatch_result(True), self._dispatch_result(True))
+
+        worker = AlertWorker(
+            config_provider=lambda: self._config(),
+            service=self.service,
+            notifier=notifier,
+        )
+        with patch(
+            "src.agent.events.EventMonitor._get_realtime_quote",
+            new=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(price=1810.0),
+                    SimpleNamespace(price=1790.0),
+                    SimpleNamespace(price=1810.0),
+                    SimpleNamespace(price=1780.0),
+                    SimpleNamespace(price=1810.0),
+                ]
+            ),
+        ):
+            worker.run_once()
+            worker.run_once()
+            still_latched = worker.run_once()
+            worker.run_once()
+            retriggered = worker.run_once()
+
+        self.assertEqual(still_latched["cooldown_suppressed"], 1)
+        self.assertEqual(retriggered["triggered"], 1)
+        self.assertEqual(notifier.send_with_results.call_count, 2)
+        self.assertEqual(len(self._triggers(status="triggered")), 2)
 
     def test_db_cooldown_read_failure_uses_fingerprint_fallback(self) -> None:
         self._create_rule(target="600519", cooldown_policy={"cooldown_seconds": 60})
@@ -1337,7 +1392,7 @@ class AlertWorkerTestCase(unittest.TestCase):
         )
         with patch.object(
             self.service.repo,
-            "get_active_cooldown",
+            "get_rule_cooldown_summary",
             side_effect=RuntimeError("database locked token=secret-token"),
         ), patch(
             "src.agent.events.EventMonitor._get_realtime_quote",
@@ -1351,13 +1406,10 @@ class AlertWorkerTestCase(unittest.TestCase):
 
         self.assertEqual(first["notified"], 1)
         self.assertEqual(second["cooldown_suppressed"], 1)
-        self.assertEqual(third["notified"], 1)
-        self.assertEqual(notifier.send_with_results.call_count, 2)
-        self.assertEqual(len(self._triggers(status="triggered")), 3)
-        suppressed_attempts = self._notifications(channel="__cooldown_read_failed__")
-        self.assertEqual(len(suppressed_attempts), 1)
-        self.assertEqual(suppressed_attempts[0]["error_code"], "cooldown_read_failed")
-        self.assertNotIn("secret-token", suppressed_attempts[0]["diagnostics"] or "")
+        self.assertEqual(third["cooldown_suppressed"], 1)
+        self.assertEqual(notifier.send_with_results.call_count, 1)
+        self.assertEqual(len(self._triggers(status="triggered")), 1)
+        self.assertEqual(self._notifications(channel="__cooldown_read_failed__"), [])
 
     def test_failed_db_notification_does_not_start_read_failure_fallback_window(self) -> None:
         self._create_rule(target="600519", cooldown_policy={"cooldown_seconds": 60})
@@ -1373,7 +1425,7 @@ class AlertWorkerTestCase(unittest.TestCase):
         )
         with patch.object(
             self.service.repo,
-            "get_active_cooldown",
+            "get_rule_cooldown_summary",
             side_effect=RuntimeError("database locked"),
         ), patch(
             "src.agent.events.EventMonitor._get_realtime_quote",
@@ -1389,9 +1441,9 @@ class AlertWorkerTestCase(unittest.TestCase):
         self.assertEqual(second["notified"], 1)
         self.assertEqual(third["cooldown_suppressed"], 1)
         self.assertEqual(notifier.send_with_results.call_count, 2)
-        self.assertEqual(len(self._notifications(channel="__cooldown_read_failed__")), 1)
+        self.assertEqual(self._notifications(channel="__cooldown_read_failed__"), [])
 
-    def test_db_rule_with_cooldown_zero_is_not_suppressed_by_fingerprint(self) -> None:
+    def test_db_rule_with_cooldown_zero_uses_edge_trigger_latch(self) -> None:
         self._create_rule(target="600519", cooldown_policy={"cooldown_seconds": 0})
         notifier = self._notifier()
         now = {"value": 1000.0}
@@ -1411,8 +1463,8 @@ class AlertWorkerTestCase(unittest.TestCase):
             now["value"] += 10
             worker.run_once()
 
-        self.assertEqual(notifier.send_with_results.call_count, 2)
-        self.assertEqual(len(self._triggers(status="triggered")), 2)
+        self.assertEqual(notifier.send_with_results.call_count, 1)
+        self.assertEqual(len(self._triggers(status="triggered")), 1)
         self.assertEqual(self._notifications(channel="__cooldown__"), [])
 
     def test_legacy_rule_still_uses_fingerprint_suppression(self) -> None:
@@ -1473,7 +1525,7 @@ class AlertWorkerTestCase(unittest.TestCase):
         self.assertEqual(third["notified"], 1)
         self.assertEqual(fourth["notified"], 0)
         self.assertEqual(notifier.send_with_results.call_count, 3)
-        self.assertEqual(len(self._triggers(status="triggered")), 4)
+        self.assertEqual(len(self._triggers(status="triggered")), 3)
 
     def test_p6_watchlist_expands_to_child_keys_for_db_cooldown_fallback(self) -> None:
         self._create_rule(

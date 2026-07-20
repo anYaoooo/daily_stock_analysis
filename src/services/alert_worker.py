@@ -152,6 +152,16 @@ class AlertWorker:
                 }
 
             record_status = result.get("record_status")
+            if runtime_rule.source == "db" and record_status != "triggered":
+                self._rearm_db_rule_safely(runtime_rule, result)
+
+            cooldown_decision = DBCooldownDecision()
+            if record_status == "triggered" and runtime_rule.source == "db":
+                cooldown_decision = self._check_db_cooldown(runtime_rule)
+                if cooldown_decision.suppressed:
+                    stats["cooldown_suppressed"] += 1
+                    continue
+
             if record_status in WRITABLE_TRIGGER_STATUSES:
                 trigger_write = self._record_trigger_safely(runtime_rule, result, record_status)
                 trigger_id = trigger_write.trigger_id
@@ -165,11 +175,6 @@ class AlertWorker:
             if record_status == "triggered":
                 stats["triggered"] += 1
                 if runtime_rule.source == "db":
-                    cooldown_decision = self._check_db_cooldown(runtime_rule, trigger_id)
-                    if cooldown_decision.suppressed:
-                        stats["cooldown_suppressed"] += 1
-                        stats["notification_attempts"] += 1
-                        continue
                     dispatch = self._send_notification_safely(runtime_rule, result)
                     stats["notification_attempts"] += self._record_notification_attempts_safely(trigger_id, dispatch)
                     if self._dispatch_has_real_channel_success(dispatch):
@@ -597,28 +602,18 @@ class AlertWorker:
                 return True
         return False
 
-    def _check_db_cooldown(self, runtime_rule: RuntimeAlertRule, trigger_id: Optional[int]) -> DBCooldownDecision:
-        """Return the DB cooldown decision for this trigger.
-
-        Active persisted cooldowns record a ``__cooldown__`` synthetic
-        notification attempt. If reading the cooldown state fails, the worker
-        uses the process-local fingerprint as a temporary guard so DB outages
-        do not turn persisted rules into one-notification-per-cycle spam.
-        """
+    def _check_db_cooldown(self, runtime_rule: RuntimeAlertRule) -> DBCooldownDecision:
+        """Suppress a DB rule while its previous trigger remains latched."""
         cooldown_seconds = self._cooldown_seconds(runtime_rule)
-        if cooldown_seconds <= 0:
-            return DBCooldownDecision()
         rule_id = self.service._runtime_rule_id(runtime_rule.rule)
         if rule_id <= 0:
             return DBCooldownDecision()
 
-        now_dt = self._now_datetime()
         try:
-            cooldown = self.service.repo.get_active_cooldown(
+            cooldown = self.service.repo.get_rule_cooldown_summary(
                 rule_id=rule_id,
                 target=self._effective_target(runtime_rule),
                 severity=runtime_rule.severity,
-                now=now_dt,
             )
         except Exception as exc:
             logger.warning(
@@ -627,70 +622,64 @@ class AlertWorker:
                 self.service._sanitize_text(str(exc) or "cooldown read failed"),
             )
             fallback_key = self._db_cooldown_fallback_key(runtime_rule.key)
-            if self._should_notify(fallback_key, ttl_seconds=cooldown_seconds):
+            fallback_ttl = max(cooldown_seconds, self.fingerprint_ttl_seconds)
+            if self._should_notify(fallback_key, ttl_seconds=fallback_ttl):
                 return DBCooldownDecision(
                     suppressed=False,
                     fallback_key=fallback_key,
-                    fallback_ttl_seconds=cooldown_seconds,
+                    fallback_ttl_seconds=fallback_ttl,
                 )
-            self._record_cooldown_read_failure_suppression(trigger_id, exc)
             return DBCooldownDecision(suppressed=True)
 
-        if cooldown is None:
+        if cooldown is None or cooldown.state != "active":
             return DBCooldownDecision()
-
-        from src.notification import ChannelAttemptResult, NotificationDispatchResult
-
-        self._record_notification_attempts_safely(
-            trigger_id,
-            NotificationDispatchResult(
-                dispatched=False,
-                success=False,
-                status="cooldown_active",
-                channel_results=[
-                    ChannelAttemptResult(
-                        channel="__cooldown__",
-                        success=False,
-                        error_code="cooldown_active",
-                        retryable=False,
-                        diagnostics=(
-                            f"cooldown_until={cooldown.cooldown_until.isoformat()}"
-                            if cooldown.cooldown_until else "cooldown active"
-                        ),
-                    )
-                ],
-                message="alert cooldown active",
-            ),
-        )
         return DBCooldownDecision(suppressed=True)
 
-    def _record_cooldown_read_failure_suppression(self, trigger_id: Optional[int], exc: Exception) -> None:
-        from src.notification import ChannelAttemptResult, NotificationDispatchResult
+    def _rearm_db_rule_safely(self, runtime_rule: RuntimeAlertRule, result: Dict[str, Any]) -> None:
+        if not self._condition_has_cleared(runtime_rule, result):
+            return
+        rule_id = self.service._runtime_rule_id(runtime_rule.rule)
+        if rule_id <= 0:
+            return
+        try:
+            self.service.repo.rearm_cooldown(
+                rule_id=rule_id,
+                target=self._effective_target(runtime_rule),
+                severity=runtime_rule.severity,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[AlertWorker] Failed to re-arm alert state for %s: %s",
+                self._display_target(runtime_rule),
+                self.service._sanitize_text(str(exc) or "alert re-arm failed"),
+            )
 
-        sanitized = self.service._sanitize_text(str(exc) or "cooldown read failed")
-        self._record_notification_attempts_safely(
-            trigger_id,
-            NotificationDispatchResult(
-                dispatched=False,
-                success=False,
-                status="cooldown_read_failed",
-                channel_results=[
-                    ChannelAttemptResult(
-                        channel="__cooldown_read_failed__",
-                        success=False,
-                        error_code="cooldown_read_failed",
-                        retryable=False,
-                        diagnostics=sanitized,
-                    )
-                ],
-                message=sanitized,
-            ),
-        )
+    @staticmethod
+    def _condition_has_cleared(runtime_rule: RuntimeAlertRule, result: Dict[str, Any]) -> bool:
+        if result.get("status") != "not_triggered":
+            return False
+        policy = runtime_rule.cooldown_policy if isinstance(runtime_rule.cooldown_policy, dict) else {}
+        try:
+            hysteresis_pct = max(0.0, float(policy.get("hysteresis_pct") or 0.0))
+        except (TypeError, ValueError):
+            hysteresis_pct = 0.0
+        if hysteresis_pct <= 0:
+            return True
+
+        observed = AlertWorker._optional_float(result.get("observed_value"))
+        threshold = AlertWorker._optional_float(result.get("threshold"))
+        direction = str(getattr(runtime_rule.rule, "direction", "") or "").strip().lower()
+        if observed is None or threshold is None or threshold == 0:
+            return True
+        margin = abs(threshold) * hysteresis_pct / 100
+        if direction in {"above", "up"}:
+            return observed <= threshold - margin
+        if direction in {"below", "down"}:
+            return observed >= threshold + margin
+        return True
 
     def _upsert_db_cooldown_safely(self, runtime_rule: RuntimeAlertRule, result: Dict[str, Any]) -> None:
         cooldown_seconds = self._cooldown_seconds(runtime_rule)
-        if cooldown_seconds <= 0:
-            return
         rule_id = self.service._runtime_rule_id(runtime_rule.rule)
         if rule_id <= 0:
             return

@@ -3,11 +3,17 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import pandas as pd
 
 _SUPPORTED_CRYPTO_CODES = {"BTC", "BTCUSDT", "BTC-USD", "BTC/USD"}
+_BAR_DURATION_BY_PERIOD = {
+    "hourly": timedelta(hours=1),
+    "four_hour": timedelta(hours=4),
+    "daily": timedelta(days=1),
+}
 
 
 def _is_supported_crypto_code(code: str) -> bool:
@@ -34,6 +40,99 @@ def _pct_change(current: Optional[float], base: Optional[float]) -> Optional[flo
     if current is None or base is None or base <= 0:
         return None
     return (current - base) / base * 100
+
+
+def _utc_timestamp(value: Any) -> Optional[pd.Timestamp]:
+    try:
+        timestamp = pd.to_datetime(value, utc=True, errors="coerce")
+    except (TypeError, ValueError):
+        return None
+    if pd.isna(timestamp):
+        return None
+    return pd.Timestamp(timestamp)
+
+
+def _analysis_as_of(df: pd.DataFrame, override: Optional[datetime]) -> pd.Timestamp:
+    if override is not None:
+        timestamp = _utc_timestamp(override)
+        if timestamp is not None:
+            return timestamp
+    timestamp = _utc_timestamp(df.attrs.get("fetched_at"))
+    if timestamp is not None:
+        return timestamp
+    return pd.Timestamp(datetime.now(timezone.utc))
+
+
+def _infer_period(df: pd.DataFrame, open_times: pd.Series) -> Optional[str]:
+    configured = str(df.attrs.get("period") or "").strip().lower()
+    if configured in _BAR_DURATION_BY_PERIOD:
+        return configured
+
+    valid_times = open_times.dropna().sort_values()
+    if len(valid_times) < 2:
+        return None
+    median_delta = valid_times.diff().dropna().median()
+    if median_delta <= pd.Timedelta(hours=1, minutes=30):
+        return "hourly"
+    if median_delta <= pd.Timedelta(hours=6):
+        return "four_hour"
+    if median_delta <= pd.Timedelta(days=2):
+        return "daily"
+    return None
+
+
+def _split_closed_bars(
+    df: pd.DataFrame,
+    *,
+    as_of: Optional[datetime],
+) -> tuple[pd.DataFrame, Optional[Dict[str, Any]], Dict[str, Any]]:
+    """Separate exchange-confirmed candles from the currently forming candle."""
+    if "date" not in df.columns:
+        return pd.DataFrame(), None, {"reason": "missing_bar_open_time"}
+
+    ordered = df.sort_values("date").copy()
+    open_times = pd.to_datetime(ordered["date"], utc=True, errors="coerce")
+    period = _infer_period(df, open_times)
+    duration = _BAR_DURATION_BY_PERIOD.get(period or "")
+    if duration is None or open_times.isna().any():
+        return pd.DataFrame(), None, {
+            "reason": "unknown_bar_period_or_timestamp",
+            "period": period,
+        }
+
+    snapshot_at = _analysis_as_of(df, as_of)
+    close_times = open_times + duration
+    closed_mask = close_times <= snapshot_at
+    closed = ordered.loc[closed_mask].copy()
+    partial = ordered.loc[~closed_mask].copy()
+
+    live_partial_bar = None
+    if not partial.empty:
+        latest_index = partial.index[-1]
+        latest = partial.loc[latest_index]
+        latest_open = open_times.loc[latest_index]
+        latest_close = close_times.loc[latest_index]
+        live_partial_bar = {
+            "is_closed": False,
+            "open_time": latest_open.isoformat(),
+            "close_time": latest_close.isoformat(),
+            "price": _round(_safe_float(latest.get("close"))),
+            "volume": _round(_safe_float(latest.get("volume")), 4),
+        }
+
+    latest_closed_at = None
+    if not closed.empty:
+        latest_index = closed.index[-1]
+        latest_closed_at = open_times.loc[latest_index].isoformat()
+    metadata = {
+        "period": period,
+        "as_of": snapshot_at.isoformat(),
+        "closed_bar_count": int(len(closed)),
+        "partial_bar_count": int(len(partial)),
+        "latest_closed_bar_open_time": latest_closed_at,
+        "indicators_use_closed_bars_only": True,
+    }
+    return closed, live_partial_bar, metadata
 
 
 def _build_event_context(
@@ -128,6 +227,7 @@ def build_crypto_technical_context(
     code: str,
     *,
     lookback: int = 60,
+    as_of: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
     """Build Price Action/Fibonacci/Volume/VWAP/EMA context for supported crypto symbols."""
     if not _is_supported_crypto_code(code) or df is None or df.empty:
@@ -137,7 +237,8 @@ def build_crypto_technical_context(
     if not required.issubset(set(df.columns)):
         return None
 
-    bars = df.sort_values("date").tail(max(20, lookback)).copy()
+    closed_bars, live_partial_bar, bar_metadata = _split_closed_bars(df, as_of=as_of)
+    bars = closed_bars.tail(max(20, lookback)).copy()
     if len(bars) < 20:
         return None
 
@@ -260,6 +361,8 @@ def build_crypto_technical_context(
     return {
         "framework": "Price Action + Fibonacci + Volume + VWAP + EMA",
         "lookback_bars": int(len(bars)),
+        "bar_state": bar_metadata,
+        "live_partial_bar": live_partial_bar,
         "price_action": {
             "state": price_action,
             "recent_high": _round(recent_high),

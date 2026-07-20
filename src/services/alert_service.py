@@ -1198,11 +1198,7 @@ class AlertService:
     def _serialize_cooldown_summary(row: Optional[AlertCooldownRecord]) -> Dict[str, Any]:
         if row is None:
             return {"last_triggered_at": None, "cooldown_until": None, "cooldown_active": False}
-        cooldown_active = bool(
-            row.state == "active"
-            and row.cooldown_until is not None
-            and row.cooldown_until > datetime.now()
-        )
+        cooldown_active = row.state == "active"
         return {
             "last_triggered_at": row.last_triggered_at.isoformat() if row.last_triggered_at else None,
             "cooldown_until": row.cooldown_until.isoformat() if row.cooldown_until else None,

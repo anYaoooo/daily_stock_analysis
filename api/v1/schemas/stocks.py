@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-股票数据相关模型
+BTC 数据相关模型
 ===================================
 
 职责：
-1. 定义股票实时行情模型
+1. 定义 BTC 实时行情模型
 2. 定义历史 K 线数据模型
 """
 
@@ -30,10 +30,10 @@ class StockNewsItem(BaseModel):
 
 
 class StockQuote(BaseModel):
-    """股票实时行情"""
+    """BTC 实时行情（类名保留用于 API 兼容）。"""
     
-    stock_code: str = Field(..., description="股票代码")
-    stock_name: Optional[str] = Field(None, description="股票名称")
+    stock_code: str = Field(..., description="BTC 规范代码")
+    stock_name: Optional[str] = Field(None, description="BTC 显示名称")
     current_price: float = Field(..., description="当前价格")
     change: Optional[float] = Field(None, description="涨跌额")
     change_percent: Optional[float] = Field(None, description="涨跌幅 (%)")
@@ -48,17 +48,17 @@ class StockQuote(BaseModel):
     
     model_config = ConfigDict(json_schema_extra={
         "example": {
-            "stock_code": "600519",
-            "stock_name": "贵州茅台",
-            "current_price": 1800.00,
-            "change": 15.00,
-            "change_percent": 0.84,
-            "open": 1785.00,
-            "high": 1810.00,
-            "low": 1780.00,
-            "prev_close": 1785.00,
-            "volume": 10000000,
-            "amount": 18000000000,
+            "stock_code": "BTC",
+            "stock_name": "Bitcoin",
+            "current_price": 64000.00,
+            "change": 520.00,
+            "change_percent": 0.82,
+            "open": 63480.00,
+            "high": 64500.00,
+            "low": 63000.00,
+            "prev_close": 63480.00,
+            "volume": 12345.67,
+            "amount": 790122880.00,
             "update_time": "2024-01-01T15:00:00"
         }
     })
@@ -116,8 +116,8 @@ class StockHistoryResponse(BaseModel):
     
     model_config = ConfigDict(json_schema_extra={
         "example": {
-            "stock_code": "600519",
-            "stock_name": "贵州茅台",
+            "stock_code": "BTC",
+            "stock_name": "Bitcoin",
             "period": "daily",
             "data": []
         }

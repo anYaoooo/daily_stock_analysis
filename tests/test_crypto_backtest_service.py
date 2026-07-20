@@ -325,6 +325,30 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         self.assertFalse(plan["backtestable"])
         self.assertEqual(item["backtest_status"], "skipped")
 
+    def test_extract_plans_respects_daily_wait_direction(self):
+        analysis = AnalysisHistory(
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "long_plan": {
+                                "direction": "wait",
+                                "no_trade_reason": "风险收益不符合执行标准",
+                            }
+                        }
+                    }
+                }
+            ),
+        )
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+
+        plans = service._extract_plans(analysis)
+
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0].plan_type, "daily_long")
+        self.assertEqual(plans[0].direction, "wait")
+
     def test_history_record_treats_disabled_directional_plan_as_no_trade(self):
         analysis = AnalysisHistory(
             id=14,

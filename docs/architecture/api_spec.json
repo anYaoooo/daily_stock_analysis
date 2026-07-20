@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Daily Stock Analysis API",
-    "description": "A股/港股/美股自选股智能分析系统 API\n\n## 功能模块\n- 股票分析：触发 AI 智能分析\n- 历史记录：查询历史分析报告\n- 股票数据：获取行情数据\n\n## 认证方式\n支持可选管理员认证：ADMIN_AUTH_ENABLED=true 时，除登录、状态、健康检查和 OpenAPI 文档外，/api/v1/* 需要有效管理员会话 Cookie；关闭时不强制认证。",
+    "title": "BTC Analysis API",
+    "description": "BTC 智能分析系统 API\n\n## 功能模块\n- BTC 分析：触发 AI 智能分析\n- 历史记录：查询 BTC 历史分析报告\n- BTC 数据：获取行情数据\n\n## 认证方式\n支持可选管理员认证：ADMIN_AUTH_ENABLED=true 时，除登录、状态、健康检查和 OpenAPI 文档外，/api/v1/* 需要有效管理员会话 Cookie；关闭时不强制认证。",
     "version": "1.0.0"
   },
   "servers": [
@@ -18,7 +18,7 @@
     },
     {
       "name": "Analysis",
-      "description": "股票分析相关接口"
+      "description": "BTC 分析相关接口"
     },
     {
       "name": "History",
@@ -127,8 +127,8 @@
         "tags": [
           "Analysis"
         ],
-        "summary": "触发股票分析",
-        "description": "启动 AI 智能分析任务，支持单只或多只股票批量分析",
+        "summary": "触发 BTC 分析",
+        "description": "启动 BTC 智能分析任务；支持 BTC、BTCUSDT、BTC-USD、BTC/USD、BTCUSD 别名，统一规范为 BTC",
         "operationId": "triggerAnalysis",
         "requestBody": {
           "required": true,
@@ -179,7 +179,7 @@
             }
           },
           "409": {
-            "description": "股票正在分析中，拒绝重复提交",
+            "description": "BTC 正在分析中，拒绝重复提交",
             "content": {
               "application/json": {
                 "schema": {
@@ -260,7 +260,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "example": "event: task_created\ndata: {\"task_id\": \"abc123\", \"stock_code\": \"600519\", \"status\": \"pending\"}\n\n"
+                  "example": "event: task_created\ndata: {\"task_id\": \"abc123\", \"stock_code\": \"BTC\", \"status\": \"pending\"}\n\n"
                 }
               }
             }
@@ -274,13 +274,13 @@
           "History"
         ],
         "summary": "获取历史分析列表",
-        "description": "分页获取历史分析记录摘要，支持按股票代码、报告类型和日期范围筛选",
+        "description": "分页获取 BTC 历史分析记录摘要，支持按 BTC 代码、报告类型和日期范围筛选",
         "operationId": "getHistoryList",
         "parameters": [
           {
             "name": "stock_code",
             "in": "query",
-            "description": "股票代码筛选",
+            "description": "BTC 代码筛选",
             "schema": {
               "type": "string"
             }
@@ -1739,18 +1739,18 @@
         "properties": {
           "stock_code": {
             "type": "string",
-            "description": "单只股票代码",
-            "example": "600519"
+            "description": "BTC 代码或别名",
+            "example": "BTC"
           },
           "stock_codes": {
             "type": "array",
-            "description": "多只股票代码（与 stock_code 二选一）",
+            "description": "兼容旧客户端的列表字段；仅允许 BTC 别名，归一后只执行一个 BTC 任务",
             "items": {
               "type": "string"
             },
             "example": [
-              "600519",
-              "000858"
+              "BTC",
+              "BTCUSDT"
             ]
           },
           "report_type": {
@@ -1860,7 +1860,7 @@
           },
           "stock_code": {
             "type": "string",
-            "description": "股票代码"
+            "description": "BTC 规范代码"
           },
           "status": {
             "type": "string",
@@ -1895,7 +1895,7 @@
         "properties": {
           "stock_code": {
             "type": "string",
-            "description": "股票代码"
+            "description": "BTC 规范代码"
           },
           "existing_task_id": {
             "type": "string",
@@ -1991,11 +1991,11 @@
           },
           "stock_code": {
             "type": "string",
-            "description": "股票代码"
+            "description": "BTC 规范代码"
           },
           "stock_name": {
             "type": "string",
-            "description": "股票名称"
+            "description": "BTC 显示名称"
           },
           "status": {
             "type": "string",
@@ -2105,13 +2105,13 @@
           },
           "message": {
             "type": "string",
-            "example": "股票 600519 正在分析中",
+            "example": "BTC 正在分析中",
             "description": "错误信息"
           },
           "stock_code": {
             "type": "string",
-            "example": "600519",
-            "description": "股票代码"
+            "example": "BTC",
+            "description": "BTC 规范代码"
           },
           "existing_task_id": {
             "type": "string",
@@ -2382,7 +2382,7 @@
       },
       "StockQuote": {
         "type": "object",
-        "description": "股票实时行情",
+        "description": "BTC 实时行情",
         "properties": {
           "stock_code": {
             "type": "string"
@@ -4003,12 +4003,12 @@
           },
           "stock_code": {
             "type": "string",
-            "description": "股票代码"
+            "description": "BTC 规范代码"
           },
           "stock_name": {
             "type": "string",
             "nullable": true,
-            "description": "股票名称"
+            "description": "BTC 显示名称"
           },
           "status": {
             "type": "string",

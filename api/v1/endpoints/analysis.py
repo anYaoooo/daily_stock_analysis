@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ===================================
-股票分析接口
+BTC 分析接口
 ===================================
 
 职责：
@@ -12,7 +12,7 @@
 
 特性：
 - 异步任务队列：分析任务异步执行，不阻塞请求
-- 防重复提交：相同股票代码正在分析时返回 409
+- 防重复提交：BTC 正在分析时返回 409
 - SSE 实时推送：任务状态变化实时通知前端
 """
 
@@ -20,7 +20,6 @@ import asyncio
 import copy
 import json
 import logging
-import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -54,17 +53,15 @@ from api.v1.schemas.history import (
     ReportDetails,
 )
 from api.v1.schemas.run_flow import RunFlowSnapshot
-from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import Config
 from src.analysis_context_pack_overview import (
     extract_analysis_context_pack_overview,
     sanitize_context_snapshot_for_api,
 )
 from src.market_phase_summary import extract_market_phase_summary, render_market_phase_summary
+from src.core.btc_only import canonical_btc_code
 from src.report_language import get_localized_stock_name, normalize_report_language
 from src.schemas.decision_action import build_action_fields
-from src.services.name_to_code_resolver import resolve_name_to_code
-from src.services.stock_code_utils import is_code_like
 from src.services.task_queue import (
     get_task_queue,
     DuplicateTaskError,
@@ -84,9 +81,6 @@ from src.utils.sniper_points import extract_directional_strategy_plans
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-_SUPPORTED_FREE_TEXT_RE = re.compile(r"^[A-Za-z0-9.*\-+\u3400-\u9fff\s]+$")
-
 
 def _get_task_trace_id(task: Any) -> Optional[str]:
     trace_id = getattr(task, "trace_id", None)
@@ -110,49 +104,26 @@ def _with_request_report_language(config: Config, report_language: Optional[str]
 
 
 def _invalid_analysis_input_error() -> HTTPException:
-    return api_error(400, "validation_error", "请输入有效的股票代码或股票名称")
-
-
-def _is_obviously_invalid_analysis_input(text: str) -> bool:
-    """Reject mixed alphanumeric noise and unsupported symbols early."""
-    if not text or is_code_like(text):
-        return False
-
-    if not _SUPPORTED_FREE_TEXT_RE.fullmatch(text):
-        return True
-
-    has_letters = any(ch.isalpha() and ch.isascii() for ch in text)
-    has_digits = any(ch.isdigit() for ch in text)
-    return has_letters and has_digits
+    return api_error(
+        400,
+        "validation_error",
+        "当前系统仅支持 BTC；可使用 BTC、BTCUSDT、BTC-USD、BTC/USD 或 BTCUSD",
+    )
 
 
 def _resolve_and_normalize_input(raw_value: str) -> str:
-    """
-    Resolve and normalize a stock input for analysis requests.
-
-    Code-like values keep the existing canonical path.
-    Non-code inputs must resolve to a known stock code. Obvious garbage
-    input is rejected before expensive resolver and task-queue work.
-    """
+    """Normalize a supported BTC alias before queue or analyzer work."""
     text = (raw_value or "").strip()
     if not text:
         return ""
-
-    if is_code_like(text):
-        return canonical_stock_code(text)
-
-    if _is_obviously_invalid_analysis_input(text):
+    try:
+        return canonical_btc_code(text)
+    except ValueError:
         raise _invalid_analysis_input_error()
-
-    resolved = resolve_name_to_code(text)
-    if resolved:
-        return canonical_stock_code(resolved)
-
-    raise _invalid_analysis_input_error()
 
 
 # ============================================================
-# POST /analyze - 触发股票分析
+# POST /analyze - 触发 BTC 分析
 # ============================================================
 
 @router.post(
@@ -165,11 +136,11 @@ def _resolve_and_normalize_input(raw_value: str) -> str:
             "model": Union[TaskAccepted, BatchTaskAcceptedResponse],
         },
         400: {"description": "请求参数错误", "model": ErrorResponse},
-        409: {"description": "股票正在分析中，拒绝重复提交", "model": DuplicateTaskErrorResponse},
+        409: {"description": "BTC 正在分析中，拒绝重复提交", "model": DuplicateTaskErrorResponse},
         500: {"description": "分析失败", "model": ErrorResponse},
     },
-    summary="触发股票分析",
-    description="启动 AI 智能分析任务，支持同步和异步模式。异步模式下相同股票代码不允许重复提交。"
+    summary="触发 BTC 分析",
+    description="启动 BTC AI 分析任务，支持同步和异步模式。所有受支持别名统一规范为 BTC，运行中的 BTC 任务不允许重复提交。"
 )
 def trigger_analysis(
         request: AnalyzeRequest,
@@ -178,7 +149,7 @@ def trigger_analysis(
     """
     触发股票分析
     
-    启动 AI 智能分析任务，支持单只或多只股票批量分析
+    启动 BTC AI 智能分析任务。stock_codes 仅作为兼容字段，所有 BTC 别名会归一并去重。
     
     流程：
     1. 校验请求参数
@@ -208,31 +179,14 @@ def trigger_analysis(
     if not stock_codes:
         raise api_error(400, "validation_error", "必须提供 stock_code 或 stock_codes 参数")
 
-    # Normalize and de-duplicate inputs while preserving compatibility.
+    # Normalize all public aliases at the API boundary before task de-duplication.
     resolved = [_resolve_and_normalize_input(c) for c in stock_codes]
-    
-    seen = set()
-    unique_codes = []
-    for code in resolved:
-        if not code:
-            continue
-        # Use normalize_stock_code to ensure '600519' and '600519.SH' are merged
-        norm = normalize_stock_code(code)
-        if norm not in seen:
-            seen.add(norm)
-            unique_codes.append(code)
-    
-    stock_codes = unique_codes
-
-    # Limit the number of stocks in a single request to prevent DoS
-    MAX_BATCH_SIZE = 50
-    if len(stock_codes) > MAX_BATCH_SIZE:
-        raise api_error(400, "validation_error", f"单次分析请求最多支持 {MAX_BATCH_SIZE} 只股票")
+    stock_codes = list(dict.fromkeys(code for code in resolved if code))
 
     if not stock_codes:
-        raise api_error(400, "validation_error", "股票代码不能为空或仅包含空白字符")
+        raise api_error(400, "validation_error", "BTC 代码不能为空或仅包含空白字符")
 
-    # Sync mode only supports single-stock analysis.
+    # Alias de-duplication guarantees at most one BTC analysis task.
     if not request.async_mode:
         if len(stock_codes) > 1:
             raise api_error(
@@ -261,7 +215,7 @@ def _handle_async_analysis_batch(
     is_single = len(stock_codes) == 1
     preserve_batch_metadata = request.selection_source in {"import", "image"}
 
-    stock_name = request.stock_name if is_single else None
+    stock_name = "Bitcoin" if is_single else None
     original_query = request.original_query if (is_single or preserve_batch_metadata) else None
     selection_source = request.selection_source if (is_single or preserve_batch_metadata) else None
     notify = getattr(request, "notify", True)

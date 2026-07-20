@@ -89,6 +89,41 @@ class CryptoBacktestEngine:
         return cls._evaluate_legacy_plan(plan=plan, forward_bars=forward_bars, config=config)
 
     @classmethod
+    def validate_execution_plan(
+        cls,
+        *,
+        plan: CryptoPlan,
+        config: CryptoPlanBacktestConfig,
+    ) -> list[str]:
+        """Return the v5 execution checks used before a plan can be actionable."""
+
+        direction = (plan.direction or "").strip().lower()
+        if direction not in {"long", "short"}:
+            return ["unsupported_direction"]
+        if plan.entry_price is None or plan.entry_price <= 0:
+            return ["missing_entry_price"]
+        if plan.stop_loss is None or plan.take_profit is None:
+            return ["missing_exit_prices"]
+
+        contract, contract_errors = cls._validated_contract(
+            plan.execution_contract,
+            direction=direction,
+        )
+        if contract_errors:
+            return [f"invalid_execution_contract:{error}" for error in contract_errors]
+
+        if str(config.engine_version).strip().lower() != "btc-plan-v5":
+            return []
+
+        return cls._plan_quality_errors(
+            plan=plan,
+            contract=contract,
+            entry_price=float(plan.entry_price),
+            config=config,
+            require_volume_gate=True,
+        )
+
+    @classmethod
     def _evaluate_legacy_plan(
         cls,
         *,

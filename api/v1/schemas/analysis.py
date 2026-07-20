@@ -31,17 +31,17 @@ AnalysisPhase = Literal["auto", "premarket", "intraday", "postmarket"]
 
 
 class AnalyzeRequest(BaseModel):
-    """Analysis request parameters"""
+    """BTC analysis request parameters."""
     
     stock_code: Optional[str] = Field(
         None, 
-        description="单只股票代码", 
-        json_schema_extra={"example": "600519"},
+        description="BTC 代码或别名",
+        json_schema_extra={"example": "BTC"},
     )
     stock_codes: Optional[List[str]] = Field(
         None, 
-        description="多只股票代码（与 stock_code 二选一）",
-        json_schema_extra={"example": ["600519", "000858"]},
+        description="兼容旧客户端的列表字段；仅允许 BTC 别名，归一后只执行一个 BTC 任务",
+        json_schema_extra={"example": ["BTC", "BTCUSDT"]},
     )
     report_type: str = Field(
         "detailed",
@@ -62,17 +62,17 @@ class AnalyzeRequest(BaseModel):
     )
     stock_name: Optional[str] = Field(
         None,
-        description="用户选中的股票名称（自动补全时提供）",
-        json_schema_extra={"example": "贵州茅台"},
+        description="兼容字段；BTC 分析统一使用 Bitcoin",
+        json_schema_extra={"example": "Bitcoin"},
     )
     original_query: Optional[str] = Field(
         None,
-        description="用户原始输入（如茅台、gzmt、600519）",
-        json_schema_extra={"example": "茅台"},
+        description="用户原始 BTC 输入",
+        json_schema_extra={"example": "BTCUSDT"},
     )
     selection_source: Optional[str] = Field(
         None,
-        description="股票选择来源：manual(手动输入) | autocomplete(自动补全) | import(导入) | image(图片识别)",
+        description="BTC 选择来源：manual(手动输入) | autocomplete(自动补全) | import(导入) | image(图片识别)",
         pattern=SELECTION_SOURCE_PATTERN,
         json_schema_extra={"example": "autocomplete"},
     )
@@ -94,13 +94,13 @@ class AnalyzeRequest(BaseModel):
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
-            "stock_code": "600519",
+            "stock_code": "BTC",
             "report_type": "detailed",
             "force_refresh": False,
             "async_mode": False,
             "analysis_phase": "auto",
-            "stock_name": "贵州茅台",
-            "original_query": "茅台",
+            "stock_name": "Bitcoin",
+            "original_query": "BTC",
             "selection_source": "autocomplete",
             "notify": True,
             "report_language": "zh",
@@ -144,8 +144,8 @@ class AnalysisResultResponse(BaseModel):
     
     query_id: str = Field(..., description="分析记录唯一标识")
     trace_id: Optional[str] = Field(None, description="诊断 trace ID")
-    stock_code: str = Field(..., description="股票代码")
-    stock_name: Optional[str] = Field(None, description="股票名称")
+    stock_code: str = Field(..., description="BTC 规范代码")
+    stock_name: Optional[str] = Field(None, description="BTC 显示名称")
     report: Optional[Any] = Field(None, description="分析报告")
     diagnostic_summary: Optional[Any] = Field(None, description="运行诊断摘要")
     created_at: str = Field(..., description="创建时间")
@@ -153,8 +153,8 @@ class AnalysisResultResponse(BaseModel):
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "query_id": "abc123def456",
-            "stock_code": "600519",
-            "stock_name": "贵州茅台",
+            "stock_code": "BTC",
+            "stock_name": "Bitcoin",
             "report": {
                 "summary": {
                     "sentiment_score": 75,
@@ -194,7 +194,7 @@ class BatchTaskAcceptedItem(BaseModel):
 
     task_id: str = Field(..., description="任务 ID，用于查询状态")
     trace_id: Optional[str] = Field(None, description="诊断 trace ID")
-    stock_code: str = Field(..., description="股票代码")
+    stock_code: str = Field(..., description="BTC 规范代码")
     status: str = Field(
         ...,
         description="任务状态",
@@ -206,9 +206,9 @@ class BatchTaskAcceptedItem(BaseModel):
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "task_id": "task_abc123",
-            "stock_code": "600519",
+            "stock_code": "BTC",
             "status": "pending",
-            "message": "分析任务已加入队列: 600519",
+            "message": "分析任务已加入队列: BTC",
             "analysis_phase": "auto"
         }
     })
@@ -217,15 +217,15 @@ class BatchTaskAcceptedItem(BaseModel):
 class BatchDuplicateTaskItem(BaseModel):
     """批量异步任务中的重复提交项。"""
 
-    stock_code: str = Field(..., description="股票代码")
+    stock_code: str = Field(..., description="BTC 规范代码")
     existing_task_id: str = Field(..., description="已存在的任务 ID")
     message: str = Field(..., description="错误信息")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
-            "stock_code": "600519",
+            "stock_code": "BTC",
             "existing_task_id": "task_existing_123",
-            "message": "股票 600519 正在分析中 (task_id: task_existing_123)"
+            "message": "BTC 正在分析中 (task_id: task_existing_123)"
         }
     })
 
@@ -242,17 +242,17 @@ class BatchTaskAcceptedResponse(BaseModel):
             "accepted": [
                 {
                     "task_id": "task_abc123",
-                    "stock_code": "600519",
+                    "stock_code": "BTC",
                     "status": "pending",
-                    "message": "分析任务已加入队列: 600519",
+                    "message": "分析任务已加入队列: BTC",
                     "analysis_phase": "auto"
                 }
             ],
             "duplicates": [
                 {
-                    "stock_code": "000858",
+                    "stock_code": "BTC",
                     "existing_task_id": "task_existing_456",
-                    "message": "股票 000858 正在分析中 (task_id: task_existing_456)"
+                    "message": "BTC 正在分析中 (task_id: task_existing_456)"
                 }
             ],
             "message": "已提交 1 个任务，1 个重复跳过"
@@ -291,7 +291,7 @@ class TaskStatus(BaseModel):
         None, 
         description="错误信息（仅在 failed 时存在）"
     )
-    stock_name: Optional[str] = Field(None, description="股票名称")
+    stock_name: Optional[str] = Field(None, description="BTC 显示名称")
     original_query: Optional[str] = Field(None, description="用户原始输入")
     selection_source: Optional[str] = Field(
         None,
@@ -312,8 +312,8 @@ class TaskStatus(BaseModel):
             "result": None,
             "market_review_report": None,
             "error": None,
-            "stock_name": "贵州茅台",
-            "original_query": "茅台",
+            "stock_name": "Bitcoin",
+            "original_query": "BTCUSDT",
             "selection_source": "autocomplete",
             "analysis_phase": "auto",
             "skills": ["bull_trend"]
@@ -330,8 +330,8 @@ class TaskInfo(BaseModel):
     
     task_id: str = Field(..., description="任务 ID")
     trace_id: Optional[str] = Field(None, description="诊断 trace ID")
-    stock_code: str = Field(..., description="股票代码")
-    stock_name: Optional[str] = Field(None, description="股票名称")
+    stock_code: str = Field(..., description="BTC 规范代码")
+    stock_name: Optional[str] = Field(None, description="BTC 显示名称")
     status: TaskStatusEnum = Field(..., description="任务状态")
     progress: int = Field(0, description="进度百分比 (0-100)", ge=0, le=100)
     message: Optional[str] = Field(None, description="状态消息")
@@ -352,8 +352,8 @@ class TaskInfo(BaseModel):
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "task_id": "abc123def456",
-            "stock_code": "600519",
-            "stock_name": "贵州茅台",
+            "stock_code": "BTC",
+            "stock_name": "Bitcoin",
             "status": "processing",
             "progress": 50,
             "message": "正在分析中...",
@@ -362,7 +362,7 @@ class TaskInfo(BaseModel):
             "started_at": "2026-02-05T10:30:01",
             "completed_at": None,
             "error": None,
-            "original_query": "茅台",
+            "original_query": "BTCUSDT",
             "selection_source": "autocomplete",
             "analysis_phase": "auto",
             "skills": ["bull_trend"]
@@ -393,14 +393,14 @@ class DuplicateTaskErrorResponse(BaseModel):
     
     error: str = Field("duplicate_task", description="错误类型")
     message: str = Field(..., description="错误信息")
-    stock_code: str = Field(..., description="股票代码")
+    stock_code: str = Field(..., description="BTC 规范代码")
     existing_task_id: str = Field(..., description="已存在的任务 ID")
     
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "error": "duplicate_task",
-            "message": "股票 600519 正在分析中",
-            "stock_code": "600519",
+            "message": "BTC 正在分析中",
+            "stock_code": "BTC",
             "existing_task_id": "abc123def456"
         }
     })

@@ -1164,8 +1164,9 @@ PUSHOVER_API_TOKEN=your_api_token
 
 ### BTC 公共行情
 - 免费，无需配置；默认通过 CCXT/REST 读取 OKX，失败时依次降级到 Binance、Bybit 公共接口
-- 当前支持比特币标的：`BTC`、`BTCUSDT`、`BTC-USD`、`BTC/USD`
+- 当前支持比特币标的：`BTC`、`BTCUSDT`、`BTC-USD`、`BTC/USD`、`BTCUSD`，分析入口统一规范为 `BTC`，非 BTC 输入在进入任务队列前返回 400
 - 提供实时行情与日 K 数据，并在数据源路由中独立识别为加密货币，避免被误判为美股 ticker
+- 技术分析只使用已闭合 K 线计算 EMA、VWAP、量比、ATR、突破与事件；当前形成中的 K 线通过 `crypto_technical.live_partial_bar` 独立保留，不参与信号确认
 
 ### CCXT 私有交易接口
 - 通过 `CRYPTO_TRADING_EXCHANGE=okx|bybit` 选择交易所，默认 `okx`；交易接口不会接入分析流程自动执行。API 位于 `/api/v1/crypto-trading/*`，支持查询余额、持仓、挂单、单个订单，以及显式下单、撤单、设置杠杆和保证金模式。
@@ -1478,7 +1479,7 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/api/v1/analysis/analyze` | POST | 触发股票分析 |
+| `/api/v1/analysis/analyze` | POST | 触发 BTC 分析；BTC 别名统一规范为 `BTC`，非 BTC 输入返回 400 |
 | `/api/v1/analysis/market-review` | POST | 后台触发大盘复盘；请求体可传 `{"send_notification": true}`；与 `main.py --market-review` 与 `bot` 复用同一套 `GeminiAnalyzer/SearchService/NotificationService` 组装语义 |
 | `/api/v1/analysis/tasks` | GET | 查询任务列表 |
 | `/api/v1/analysis/tasks/stream` | GET (SSE) | 订阅任务实时状态流；`task_progress` 可选携带 `flow_event` 增量运行流事件 |
@@ -1505,7 +1506,7 @@ FastAPI 提供 RESTful API 服务，支持配置管理和触发分析。
 | `/api/health` | GET | 健康检查 |
 | `/docs` | GET | API Swagger 文档 |
 
-> 说明：`POST /api/v1/analysis/analyze` 在 `async_mode=false` 时仅支持单只股票；批量 `stock_codes` 需使用 `async_mode=true`。异步 `202` 响应对单股返回 `task_id`，对批量返回 `accepted` / `duplicates` 汇总结构。
+> 说明：`POST /api/v1/analysis/analyze` 的 `stock_codes` 仅作为旧客户端兼容字段；列表中只能包含 BTC 别名，归一去重后始终最多执行一个 BTC 任务。任意非 BTC 元素会使整次请求失败，不会部分入队。
 > 说明：`POST /api/v1/analysis/analyze` 支持使用 `skills` 传入策略 skill ID 列表；若未传则按服务端默认策略执行。为兼容历史调用，`strategies` 字段仍作为兼容别名保留。
 > 说明：`POST /api/v1/analysis/analyze` 支持 `analysis_phase=auto|premarket|intraday|postmarket`，默认 `auto`。非 `auto` 只覆盖本次分析阶段与派生阶段标记，不改写真实交易日历时间；accepted response、内存 task status、任务列表和 SSE 会回显请求阶段，最终报告阶段以 `report.meta.market_phase_summary.phase` 为准。
 > 说明：`POST /api/v1/analysis/analyze` 支持 `report_language=zh|en`，并兼容 `reportLanguage` 作为别名；未传时回退到全局 `REPORT_LANGUAGE`（或环境中的 `Config.report_language`）。该字段仅影响本次分析的报告文本、`report.meta.report_language` 与持久化展示，不会持久化为运行时配置。

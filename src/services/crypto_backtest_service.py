@@ -736,9 +736,13 @@ class CryptoBacktestService:
         include_daily_plans = analysis_mode != "hourly"
         extracted: list[CryptoPlan] = []
         if include_daily_plans and plans.get("long_plan"):
-            extracted.append(self._plan_from_payload("daily_long", "daily", "long", plans["long_plan"]))
+            long_payload = plans["long_plan"] or {}
+            long_direction = self._normalize_direction(long_payload.get("direction")) if long_payload.get("direction") else "long"
+            extracted.append(self._plan_from_payload("daily_long", "daily", long_direction, long_payload))
         if include_daily_plans and plans.get("short_plan"):
-            extracted.append(self._plan_from_payload("daily_short", "daily", "short", plans["short_plan"]))
+            short_payload = plans["short_plan"] or {}
+            short_direction = self._normalize_direction(short_payload.get("direction")) if short_payload.get("direction") else "short"
+            extracted.append(self._plan_from_payload("daily_short", "daily", short_direction, short_payload))
         if plans.get("intraday_plan"):
             intraday_plan = plans["intraday_plan"] or {}
             direction = self._normalize_direction(intraday_plan.get("direction"))

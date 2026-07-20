@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] BTC 分析在落库前复用 `btc-plan-v5` 执行校验；不满足风险收益、成本覆盖、量能或契约要求的多空方案会降为观望并说明原因，避免报告给出不可交易且不可回测的建议。
+- [修复] BTC 技术分析将当前未闭合日线/小时线从 EMA、VWAP、量比、ATR、突破和事件识别中剔除，并以独立 `live_partial_bar` 元数据保留实时价格，避免盘初成交量被误判为极度缩量。
+- [改进] `POST /api/v1/analysis/analyze` 统一接受并规范 `BTC`、`BTCUSDT`、`BTC-USD`、`BTC/USD`、`BTCUSD`，在任务队列前拒绝全部非 BTC 输入，Web 首页提交同步使用同一契约。
+- [修复] DB 告警规则改为持久化边沿触发：成功通知后锁存到条件清除，抑制轮询不再写重复 trigger 或 `__cooldown__` 伪通知，并支持可选 `hysteresis_pct` 回差后重新 armed。
+- [测试] pytest 自动隔离 Agent 模拟 LLM 用量写入，避免 `total_tokens=10` 等测试遥测污染运行数据库和用量看板。
+- [文档] BTC 分析、行情和历史 API schema 示例统一为 Bitcoin/BTC，并更新告警状态与回滚说明。
 - [新功能] BTC 回测页新增当前引擎亏损复盘，按执行成本、风险退出、方向失配和持有期路径输出可追溯证据、共同指标特征与分析改进建议。
 - [修复] Pushover 长报告按 1024 字符上限分段发送，超长技术分析不再截断或将 AI 免责声明单独发送。
 - [改进] BTC 回测默认升级为 `btc-plan-v5`，在计划价和下一根实际成交价两阶段校验多空点位、最低风险收益比、成本覆盖与量能确认，跳空破坏计划时放弃成交并与 v4 历史结果隔离。

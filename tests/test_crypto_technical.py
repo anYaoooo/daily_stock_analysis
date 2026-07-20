@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -96,3 +96,64 @@ def test_build_crypto_technical_context_flags_selloff_rebound_candidate() -> Non
 
 def test_build_crypto_technical_context_ignores_regular_stocks() -> None:
     assert build_crypto_technical_context(_btc_bars(), "AAPL") is None
+
+
+def test_build_crypto_technical_context_excludes_live_hourly_bar_from_indicators() -> None:
+    start = datetime(2026, 7, 15, tzinfo=timezone.utc)
+    rows = []
+    for idx in range(65):
+        rows.append(
+            {
+                "date": start + timedelta(hours=idx),
+                "open": 63000 + idx,
+                "high": 63100 + idx,
+                "low": 62900 + idx,
+                "close": 63050 + idx,
+                "volume": 1000 + idx,
+            }
+        )
+    bars = pd.DataFrame(rows)
+    latest_open = start + timedelta(hours=64)
+    bars.loc[bars.index[-1], "close"] = 62000
+    bars.loc[bars.index[-1], "volume"] = 1
+    bars.attrs.update(
+        {
+            "period": "hourly",
+            "fetched_at": (latest_open + timedelta(minutes=7)).isoformat(),
+        }
+    )
+
+    context = build_crypto_technical_context(bars, "BTC", lookback=72)
+
+    assert context is not None
+    assert context["lookback_bars"] == 64
+    assert context["bar_state"]["closed_bar_count"] == 64
+    assert context["bar_state"]["partial_bar_count"] == 1
+    assert context["bar_state"]["indicators_use_closed_bars_only"] is True
+    assert context["volume"]["latest"] == 1063
+    assert context["volume"]["ratio"] != 0.0
+    assert context["live_partial_bar"]["price"] == 62000
+    assert context["live_partial_bar"]["volume"] == 1
+
+
+def test_build_crypto_technical_context_excludes_current_daily_bar() -> None:
+    bars = _btc_bars()
+    current_day = datetime(2026, 7, 18, tzinfo=timezone.utc)
+    partial = bars.iloc[-1].copy()
+    partial["date"] = current_day.date()
+    partial["close"] = 1
+    partial["volume"] = 1
+    bars = pd.concat([bars, pd.DataFrame([partial])], ignore_index=True)
+    bars.attrs.update(
+        {
+            "period": "daily",
+            "fetched_at": (current_day + timedelta(hours=14, minutes=7)).isoformat(),
+        }
+    )
+
+    context = build_crypto_technical_context(bars, "BTC")
+
+    assert context is not None
+    assert context["bar_state"]["partial_bar_count"] == 1
+    assert context["live_partial_bar"]["price"] == 1
+    assert context["price_action"]["close_change_pct"] > 0

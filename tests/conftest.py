@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import os
+import sys
 import time
 import threading
 from collections.abc import Awaitable, Callable
@@ -101,6 +102,24 @@ LEGACY_STOCK_TEST_NAMES_BY_FILE = {
             "test_trigger_market_review_rejects_duplicate_submission",
             "test_trigger_market_review_rejects_when_shared_lock_is_held",
             "test_trigger_market_review_submits_even_when_configured_markets_closed",
+            # Retired multi-market analysis input contract. BTC coverage lives
+            # in test_btc_analysis_api_contract.py.
+            "test_trigger_analysis_rejects_blank_only_stock_inputs",
+            "test_trigger_analysis_rejects_obviously_invalid_mixed_input_before_resolution",
+            "test_trigger_analysis_rejects_unresolvable_alpha_garbage",
+            "test_trigger_analysis_accepts_us_suffix_code",
+            "test_trigger_analysis_accepts_camel_case_report_language_alias",
+            "test_trigger_analysis_async_passes_and_returns_analysis_phase",
+            "test_trigger_analysis_accepts_hk_suffix_code_from_autocomplete",
+            "test_trigger_analysis_accepts_bse_code_from_autocomplete",
+            "test_trigger_analysis_accepts_bse_suffix_code_from_autocomplete",
+            "test_trigger_analysis_rejects_non_bse_code_with_bj_exchange_hint",
+            "test_trigger_analysis_accepts_hk_prefixed_code",
+            "test_trigger_analysis_allows_stock_names_with_star_and_hyphen",
+            "test_trigger_analysis_accepts_resolvable_free_text_input",
+            "test_trigger_analysis_preserves_batch_metadata",
+            "test_trigger_analysis_rejects_cross_request_duplicate_for_equivalent_code_shapes",
+            "test_trigger_analysis_batch_does_not_apply_single_stock_name_to_all_tasks",
         }
     ),
     "test_analyzer_news_prompt.py": frozenset(
@@ -158,6 +177,14 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "legacy_stock: quarantined pre-BTC-only stock-market coverage",
     )
+
+
+@pytest.fixture(autouse=True)
+def isolate_agent_usage_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never let mocked Agent usage reach the configured runtime database."""
+    runner = sys.modules.get("src.agent.runner")
+    if runner is not None:
+        monkeypatch.setattr(runner, "_persist_usage", lambda *_args, **_kwargs: None)
 
 
 @pytest.hookimpl(tryfirst=True)

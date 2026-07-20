@@ -196,20 +196,20 @@ P3 不做：
 
 P4 让真实告警触发具备可排障的通知结果，并让通过 Alert API 创建的持久化规则具备可重启保持的业务冷却状态。
 
-- DB 持久化规则的 `triggered` 历史按 `rule_id + target + data_source + data_timestamp` 做同一数据点去重：同一触发事件只保留最早一条 `alert_triggers`，重复轮询命中会复用已有触发记录；`data_timestamp` 缺失时不做去重，避免误合并无法证明同源的数据点。即使后续被冷却或通知降噪抑制，仍通过 `alert_notifications` 记录对应的通知尝试或 synthetic 抑制状态。
+- DB 持久化规则使用边沿触发状态机。首次真实渠道通知成功后，`alert_cooldowns.state` 写为 `active`，表示该规则/目标已锁存；条件持续成立时不会新增 `alert_triggers` 或 `alert_notifications`。只有评估重新返回 `not_triggered`，且满足可选回差条件后，状态才改为 `armed`，下一次越过阈值可再次触发。
+- `triggered` 历史仍按 `rule_id + target + data_source + data_timestamp` 对同一数据点做 best-effort 去重，但去重只作为并发与同源保护，不再承担持续条件的抑制语义。
 - `alert_notifications` 记录真实 per-channel notification attempt，包括 `channel`、`success`、`error_code`、`retryable`、`latency_ms` 和脱敏后的 `diagnostics`。
 - 非渠道发送状态使用 synthetic channel 记录：
-  - `__cooldown__`：告警业务冷却抑制，`error_code="cooldown_active"`。
-  - `__cooldown_read_failed__`：读取持久化冷却状态失败后，由 worker 进程内临时兜底抑制，`error_code="cooldown_read_failed"`。
   - `__noise_suppressed__`：通知基础设施降噪抑制，`error_code="noise_suppressed"`。
   - `__no_channel__`：alert 路由未命中任何可用通知渠道。
   - `__dispatch__`：通知调度级 fallback 或异常。
 - cooldown 分层：
-  - DB 持久化规则正常路径使用 `alert_cooldowns` 作为告警业务冷却，不再由 worker 进程内 fingerprint 决定；仅当读取持久化冷却状态失败时，临时使用进程内 fingerprint 防止同一规则在 DB 异常期间每轮重复推送。
+  - DB 持久化规则正常路径使用 `alert_cooldowns` 保存锁存/armed 状态；读取状态失败时临时使用进程内 fingerprint 防止 DB 异常期间每轮重复推送，抑制轮次不写伪通知记录。
   - legacy `AGENT_EVENT_ALERT_RULES_JSON` 规则继续使用 worker 进程内 fingerprint，不写 `alert_cooldowns`。
   - `notification_noise.py` 仍作为通知基础设施层的全局安全网；它不是告警业务 cooldown，且被其抑制时不会写入或延长 `alert_cooldowns`。
-- DB 规则的 `cooldown_policy.cooldown_seconds` 归一为非负整数；缺失时使用默认 24 小时业务冷却，`0` 表示关闭 DB 业务冷却。
-- `GET /api/v1/alerts/rules` 会返回只读 `last_triggered_at` / `cooldown_until` / `cooldown_active` 摘要；`cooldown_active` 由后端按同一冷却时间语义计算，Web 不在浏览器本地解析 naive ISO 字符串来推断状态。
+- DB 规则的 `cooldown_policy.cooldown_seconds` 归一为非负整数，缺失时使用默认 24 小时；该时间用于状态摘要和 DB 读取失败时的临时保护。即使为 `0`，成功通知后的边沿锁存仍生效，直到条件清除。
+- `cooldown_policy.hysteresis_pct` 为可选非负百分比。价格类规则只有回到阈值另一侧并超过该回差后才重新 armed；缺失或 `0` 时在首次明确 `not_triggered` 后重新 armed。
+- `GET /api/v1/alerts/rules` 返回只读 `last_triggered_at` / `cooldown_until` / `cooldown_active` 摘要；`cooldown_active` 直接反映持久化 `state=active`，不会因为时间到期而在条件仍成立时误报已解锁。
 - Web 告警中心只读展示冷却状态和通知结果，不提供 cooldown policy 编辑表单。
 
 P4 不做：
@@ -422,7 +422,7 @@ Desktop 不新增原生告警管理界面；桌面用户复用内置或外部 We
 
 worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_triggers` 作为评估历史；正常未触发不写历史。`skipped` 表示规则本轮没有可评估条件，例如 market 非交易日或缺少上一交易日基线；`degraded` 表示数据源、持仓快照、历史快照或解析过程出现异常，结果不可用于触发通知。
 
-真实触发后会写入 `alert_notifications` 和 `alert_cooldowns`；DB 持久化规则按 `rule_id + target + data_source + data_timestamp` 对同一数据点做 best-effort 去重。legacy JSON 规则继续只使用进程内 fingerprint，不写持久化冷却。
+真实触发并成功送达至少一个真实渠道后会写入 `alert_cooldowns` 锁存状态；持续命中只增加 worker 的 `cooldown_suppressed` 计数，不写重复 trigger 或伪通知。条件清除后状态重新 armed。legacy JSON 规则继续只使用进程内 fingerprint，不写持久化状态。
 
 回滚 P8 只需 revert 文档、配置说明和 Web 文案改动；没有数据库迁移或用户数据清理。回滚早期 Phase 时，已创建的持久化规则不会自动删除，按下方 Phase 回滚说明处理。
 

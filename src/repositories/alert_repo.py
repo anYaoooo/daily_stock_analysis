@@ -241,6 +241,32 @@ class AlertRepository:
             session.refresh(row)
             return row
 
+    def rearm_cooldown(
+        self,
+        *,
+        rule_id: int,
+        target: str,
+        severity: Optional[str],
+    ) -> bool:
+        """Re-arm a latched alert after its condition has cleared."""
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(AlertCooldownRecord)
+                .where(
+                    AlertCooldownRecord.rule_id == rule_id,
+                    AlertCooldownRecord.target == target,
+                    AlertCooldownRecord.severity == severity,
+                    AlertCooldownRecord.state == "active",
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return False
+            row.state = "armed"
+            row.updated_at = datetime.now()
+            session.commit()
+            return True
+
     def get_rule_cooldown_summary(
         self,
         *,

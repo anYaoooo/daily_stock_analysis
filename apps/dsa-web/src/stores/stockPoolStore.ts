@@ -4,8 +4,8 @@ import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import { historyApi } from '../api/history';
 import type { AnalysisReport, HistoryItem, HistoryListResponse, ReportLanguage, StockBarItem, StockHistoryFilters, StockHistoryRange, TaskInfo } from '../types/analysis';
+import { normalizeBtcAnalysisCode } from '../utils/btc';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
-import { isObviouslyInvalidStockQuery, looksLikeStockCode, validateStockCode } from '../utils/validation';
 
 const PAGE_SIZE = 20;
 const STOCK_HISTORY_PAGE_SIZE = 20;
@@ -746,7 +746,6 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     const state = get();
     const rawStockCode = options?.stockCode ?? state.query;
     const stockCodeInput = rawStockCode.trim();
-    const stockName = options?.stockName;
     const selectionSource = options?.selectionSource ?? state.selectionSource;
     const originalQuery = (options?.originalQuery ?? state.query).trim();
     const notify = options?.notify ?? state.notify;
@@ -754,23 +753,14 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     const skills = options?.skills;
 
     if (!stockCodeInput) {
-      set({ inputError: '请输入股票代码', duplicateError: null });
+      set({ inputError: '请输入 BTC 或 BTCUSDT', duplicateError: null });
       return;
     }
 
-    if (selectionSource !== 'autocomplete' && isObviouslyInvalidStockQuery(stockCodeInput)) {
-      set({ inputError: '请输入有效的股票代码或股票名称', duplicateError: null });
+    const normalizedStockCode = normalizeBtcAnalysisCode(stockCodeInput);
+    if (!normalizedStockCode) {
+      set({ inputError: '当前系统仅支持 BTC', duplicateError: null });
       return;
-    }
-
-    let normalizedStockCode = stockCodeInput;
-    if (selectionSource === 'autocomplete' || looksLikeStockCode(stockCodeInput)) {
-      const { valid, message, normalized } = validateStockCode(stockCodeInput);
-      if (!valid) {
-        set({ inputError: message, duplicateError: null });
-        return;
-      }
-      normalizedStockCode = normalized;
     }
 
     set({
@@ -785,7 +775,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
       await analysisApi.analyzeAsync({
         stockCode: normalizedStockCode,
         reportType: 'detailed',
-        stockName,
+        stockName: 'Bitcoin',
         originalQuery: originalQuery || stockCodeInput,
         selectionSource,
         notify,
@@ -809,7 +799,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
 
       if (error instanceof DuplicateTaskError) {
         set({
-          duplicateError: `股票 ${error.stockCode} 正在分析中，请等待完成`,
+          duplicateError: `BTC 正在分析中，请等待完成`,
         });
         return;
       }

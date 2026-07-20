@@ -22,8 +22,8 @@ class HistoryItem(BaseModel):
 
     id: Optional[int] = Field(None, description="分析历史记录主键 ID")
     query_id: str = Field(..., description="分析记录关联 query_id（批量分析时重复）")
-    stock_code: str = Field(..., description="股票代码")
-    stock_name: Optional[str] = Field(None, description="股票名称")
+    stock_code: str = Field(..., description="BTC 规范代码")
+    stock_name: Optional[str] = Field(None, description="BTC 显示名称")
     report_type: Optional[str] = Field(None, description="报告类型")
     trend_prediction: Optional[str] = Field(None, description="趋势预测")
     analysis_summary: Optional[str] = Field(None, description="分析摘要")
@@ -52,8 +52,8 @@ class HistoryItem(BaseModel):
         "example": {
             "id": 1234,
             "query_id": "abc123",
-            "stock_code": "600519",
-            "stock_name": "贵州茅台",
+            "stock_code": "BTC",
+            "stock_name": "Bitcoin",
             "report_type": "detailed",
             "sentiment_score": 75,
             "operation_advice": "持有",
@@ -325,8 +325,8 @@ class AnalysisReport(BaseModel):
         "example": {
             "meta": {
                 "query_id": "abc123",
-                "stock_code": "600519",
-                "stock_name": "贵州茅台",
+                "stock_code": "BTC",
+                "stock_name": "Bitcoin",
                 "report_type": "detailed",
                 "report_language": "zh",
                 "created_at": "2024-01-01T12:00:00"
@@ -372,7 +372,7 @@ class MarkdownReportResponse(BaseModel):
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
-            "content": "# 📊 贵州茅台 (600519) 分析报告\n\n> 分析日期：**2024-01-01**\n\n..."
+            "content": "# Bitcoin (BTC) 分析报告\n\n> 分析日期：**2024-01-01**\n\n..."
         }
     })
 
@@ -404,8 +404,8 @@ class StockBarItem(BaseModel):
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "id": 1234,
-            "stock_code": "600519",
-            "stock_name": "贵州茅台",
+            "stock_code": "BTC",
+            "stock_name": "Bitcoin",
             "report_type": "detailed",
             "sentiment_score": 75,
             "operation_advice": "持有",
@@ -464,11 +464,11 @@ class RunDiagnosticSummaryResponse(BaseModel):
         "example": {
             "trace_id": "task_abc123",
             "query_id": "task_abc123",
-            "stock_code": "600519",
+            "stock_code": "BTC",
             "status": "degraded",
             "status_label": "部分降级",
             "reason": "实时行情失败：timeout",
             "components": {},
-            "copy_text": "trace_id: task_abc123\nstock_code: 600519\n...",
+            "copy_text": "trace_id: task_abc123\nstock_code: BTC\n...",
         }
     })

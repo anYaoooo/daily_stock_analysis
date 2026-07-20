@@ -487,14 +487,14 @@ describe('stockPoolStore', () => {
 
   it('surfaces duplicate task errors without replacing the dashboard error state', async () => {
     vi.mocked(analysisApi.analyzeAsync).mockRejectedValue(
-      new DuplicateTaskError('600519', 'task-1', '股票 600519 正在分析中'),
+      new DuplicateTaskError('BTC', 'task-1', 'BTC 正在分析中'),
     );
 
-    useStockPoolStore.getState().setQuery('600519');
+    useStockPoolStore.getState().setQuery('BTC');
     await useStockPoolStore.getState().submitAnalysis();
 
     const state = useStockPoolStore.getState();
-    expect(state.duplicateError).toContain('600519');
+    expect(state.duplicateError).toContain('BTC');
     expect(state.error).toBeNull();
     expect(state.isAnalyzing).toBe(false);
   });
@@ -505,23 +505,23 @@ describe('stockPoolStore', () => {
     await useStockPoolStore.getState().submitAnalysis();
 
     const state = useStockPoolStore.getState();
-    expect(state.inputError).toBe('请输入有效的股票代码或股票名称');
+    expect(state.inputError).toBe('当前系统仅支持 BTC');
     expect(state.isAnalyzing).toBe(false);
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
   });
 
-  it('accepts HK suffix codes from autocomplete without local validation errors', async () => {
+  it('normalizes BTC aliases from autocomplete without local validation errors', async () => {
     vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({
-      taskId: 'task-hk-1',
-      stockCode: '00700.HK',
+      taskId: 'task-btc-1',
+      stockCode: 'BTC',
       status: 'pending',
       message: 'accepted',
     } as never);
 
     await useStockPoolStore.getState().submitAnalysis({
-      stockCode: '00700.HK',
-      stockName: '腾讯控股',
-      originalQuery: '00700',
+      stockCode: 'BTCUSDT',
+      stockName: 'Bitcoin',
+      originalQuery: 'BTCUSDT',
       selectionSource: 'autocomplete',
     });
 
@@ -529,10 +529,10 @@ describe('stockPoolStore', () => {
     expect(state.inputError).toBeUndefined();
     expect(state.isAnalyzing).toBe(false);
     expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
-      stockCode: '00700.HK',
+      stockCode: 'BTC',
       reportType: 'detailed',
-      stockName: '腾讯控股',
-      originalQuery: '00700',
+      stockName: 'Bitcoin',
+      originalQuery: 'BTCUSDT',
       selectionSource: 'autocomplete',
       notify: true,
     }));
@@ -848,12 +848,13 @@ describe('stockPoolStore', () => {
     } as never);
 
     await useStockPoolStore.getState().submitAnalysis({
-      stockCode: '600519',
+      stockCode: 'BTCUSDT',
       forceRefresh: true,
     });
 
     expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
-      stockCode: '600519',
+      stockCode: 'BTC',
+      stockName: 'Bitcoin',
       forceRefresh: true,
     }));
   });

@@ -64,11 +64,13 @@ from src.report_language import (
 from src.schemas.decision_action import build_action_fields
 from src.schemas.report_schema import AnalysisReportSchema
 from src.schemas.crypto_instrument import resolve_crypto_instrument
+from src.core.crypto_backtest_engine import CryptoBacktestEngine, CryptoPlan, CryptoPlanBacktestConfig
 from src.core.trading_calendar import get_market_for_stock
 from src.market_context import get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
 from src.market_phase_prompt import format_market_phase_prompt_section
 from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
+from src.utils.sniper_points import parse_sniper_value
 
 logger = logging.getLogger(__name__)
 
@@ -1694,6 +1696,118 @@ def populate_decision_action_fields(
     return result
 
 
+def align_btc_execution_plans(
+    result: AnalysisResult,
+    *,
+    runtime_config: Any,
+) -> AnalysisResult:
+    """Downgrade BTC advice when its generated plans fail the active execution contract."""
+
+    if str(getattr(runtime_config, "crypto_backtest_engine_version", "")).strip().lower() != "btc-plan-v5":
+        return result
+
+    dashboard = result.dashboard if isinstance(result.dashboard, dict) else {}
+    battle_plan = dashboard.get("battle_plan") if isinstance(dashboard, dict) else None
+    if not isinstance(battle_plan, dict):
+        return result
+
+    config = CryptoPlanBacktestConfig(
+        neutral_band_pct=float(getattr(runtime_config, "crypto_backtest_neutral_band_pct", 0.2)),
+        engine_version="btc-plan-v5",
+        initial_equity=float(getattr(runtime_config, "crypto_backtest_initial_equity", 10000.0)),
+        risk_per_trade_pct=float(getattr(runtime_config, "crypto_backtest_risk_per_trade_pct", 1.0)),
+        max_notional_pct=float(getattr(runtime_config, "crypto_backtest_max_notional_pct", 100.0)),
+        leverage=float(getattr(runtime_config, "crypto_backtest_leverage", 1.0)),
+        fee_rate_bps=float(getattr(runtime_config, "crypto_backtest_fee_rate_bps", 5.0)),
+        slippage_bps=float(getattr(runtime_config, "crypto_backtest_slippage_bps", 2.0)),
+        maker_fee_rate_bps=float(getattr(runtime_config, "crypto_backtest_maker_fee_rate_bps", 2.0)),
+        taker_fee_rate_bps=float(getattr(runtime_config, "crypto_backtest_taker_fee_rate_bps", 5.0)),
+        maintenance_margin_rate=float(getattr(runtime_config, "crypto_backtest_maintenance_margin_rate", 0.005)),
+        minimum_risk_reward=float(getattr(runtime_config, "crypto_backtest_minimum_risk_reward", 1.2)),
+        minimum_volume_ratio=float(getattr(runtime_config, "crypto_backtest_minimum_volume_ratio", 1.0)),
+    )
+    plans = (
+        ("long_plan", "daily_long", "daily", "long"),
+        ("short_plan", "daily_short", "daily", "short"),
+        ("intraday_plan", "intraday", "intraday", "wait"),
+    )
+    valid_directions: set[str] = set()
+    validation_failures: list[str] = []
+    has_plan = False
+
+    for key, plan_type, horizon, default_direction in plans:
+        payload = battle_plan.get(key)
+        if not isinstance(payload, dict):
+            continue
+        has_plan = True
+        direction = str(payload.get("direction") or default_direction).strip().lower()
+        if key == "intraday_plan" and payload.get("enabled") is False:
+            direction = "wait"
+        if direction not in {"long", "short"}:
+            payload["direction"] = "wait"
+            if key == "intraday_plan":
+                payload["enabled"] = False
+            continue
+
+        plan = CryptoPlan(
+            plan_type=plan_type,
+            horizon=horizon,
+            direction=direction,
+            entry_price=parse_sniper_value(payload.get("entry_price")),
+            stop_loss=parse_sniper_value(payload.get("stop_loss")),
+            take_profit=parse_sniper_value(payload.get("take_profit")),
+            raw_plan=dict(payload),
+            execution_contract=(
+                dict(payload["execution_contract"])
+                if isinstance(payload.get("execution_contract"), dict)
+                else None
+            ),
+        )
+        errors = CryptoBacktestEngine.validate_execution_plan(plan=plan, config=config)
+        if not errors:
+            payload["direction"] = direction
+            valid_directions.add(direction)
+            continue
+
+        error_text = ", ".join(errors)
+        validation_failures.append(f"{key}: {error_text}")
+        payload["direction"] = "wait"
+        if key == "intraday_plan":
+            payload["enabled"] = False
+        payload["no_trade_reason"] = (
+            f"未通过执行校验（{error_text}），等待重新给出满足风控与确认条件的计划。"
+            if normalize_report_language(result.report_language) == "zh"
+            else f"Execution validation failed ({error_text}); wait for a plan that meets risk and confirmation rules."
+        )
+
+    expected_direction = {"buy": "long", "sell": "short"}.get(str(result.decision_type or "").lower())
+    should_downgrade = has_plan and (
+        not valid_directions or (expected_direction is not None and expected_direction not in valid_directions)
+    )
+    if not should_downgrade:
+        return result
+
+    language = normalize_report_language(result.report_language)
+    reason = "; ".join(validation_failures) or (
+        "当前没有通过执行校验的多空计划" if language == "zh" else "no long or short plan passed execution validation"
+    )
+    result.operation_advice = "观望，等待可执行交易条件" if language == "zh" else "Watch and wait for an executable setup"
+    result.decision_type = "hold"
+    result.action = "watch"
+    if language == "zh":
+        result.risk_warning = f"{result.risk_warning}；{reason}".strip("；")
+    else:
+        result.risk_warning = f"{result.risk_warning}; {reason}".strip("; ")
+    core = dashboard.get("core_conclusion")
+    if not isinstance(core, dict):
+        core = {}
+        dashboard["core_conclusion"] = core
+    core["signal_type"] = "🟡观望" if language == "zh" else "🟡 Watch"
+    core["one_sentence"] = result.operation_advice
+    result.dashboard = dashboard
+    return populate_decision_action_fields(result, explicit_action="watch")
+
+
 class GeminiAnalyzer:
     """
     Gemini AI 分析器
@@ -3075,6 +3189,8 @@ class GeminiAnalyzer:
                 result.analysis_mode = analysis_mode
                 result.analysis_timeframe = analysis_timeframe
                 normalize_chip_structure_availability(result, context.get("chip"))
+                if is_crypto_context:
+                    align_btc_execution_plans(result, runtime_config=config)
 
                 # 内容完整性校验（可选）
                 if not config.report_integrity_enabled:
