@@ -10,6 +10,7 @@ import pytest
 from src.analyzer import AnalysisResult
 from src.config import Config
 from src.services.decision_signal_extractor import (
+    _apply_crypto_plan_freeze,
     build_decision_signal_payload_from_report,
     extract_and_persist_from_analysis_result,
 )
@@ -155,6 +156,10 @@ def test_build_payload_prefers_active_intraday_strategy_plan() -> None:
                 "position_hint": "单笔风险不超过 0.5%",
                 "confidence": "中：等待右侧确认",
                 "reason": "急跌后收复 VWAP，存在日内右侧机会",
+                "execution_contract": {
+                    "version": "btc-execution-v1",
+                    "entry": {"setup_type": "pullback"},
+                },
             },
         },
         "phase_decision": {
@@ -189,7 +194,9 @@ def test_build_payload_prefers_active_intraday_strategy_plan() -> None:
     ]
     assert payload["reason"] == "急跌后收复 VWAP，存在日内右侧机会"
     assert payload["metadata"]["strategy_plan"]["source"] == "intraday_plan"
+    assert payload["metadata"]["strategy_plan"]["setup_type"] == "pullback"
     assert payload["metadata"]["strategy_plan"]["risk_reward"] == "1:2.1"
+    assert payload["evidence"]["strategy_plan"]["setup_type"] == "pullback"
     assert payload["evidence"]["strategy_plan"]["position_hint"] == "单笔风险不超过 0.5%"
 
 
@@ -375,3 +382,91 @@ def test_extract_and_persist_missing_price_plan_does_not_fabricate_fields(isolat
     assert item["entry_high"] is None
     assert item["stop_loss"] is None
     assert item["target_price"] is None
+
+
+def test_crypto_plan_freeze_archives_same_direction_candidate() -> None:
+    class Service:
+        def get_latest_active(self, **_kwargs):
+            return {
+                "items": [
+                    {
+                        "id": 7,
+                        "action": "buy",
+                        "horizon": "intraday",
+                        "created_at": "2026-07-22T00:00:00",
+                        "expires_at": "2026-07-22T04:00:00",
+                    }
+                ]
+            }
+
+        def update_status(self, *_args, **_kwargs):
+            raise AssertionError("same-direction freeze must not mutate the active plan")
+
+    payload = {
+        "market": "crypto",
+        "stock_code": "BTC",
+        "action": "buy",
+        "horizon": "intraday",
+        "metadata": {"strategy_plan": {"entry_price": 67000}},
+    }
+
+    frozen = _apply_crypto_plan_freeze(payload, Service())
+
+    assert frozen["status"] == "archived"
+    assert frozen["metadata"]["plan_lifecycle"] == {
+        "state": "superseded_candidate",
+        "frozen_by_signal_id": 7,
+        "frozen_until": "2026-07-22T04:00:00",
+        "reason": "active_plan_still_valid",
+    }
+
+
+def test_crypto_plan_freeze_allows_direction_reversal() -> None:
+    class Service:
+        def get_latest_active(self, **_kwargs):
+            return {
+                "items": [
+                    {
+                        "id": 7,
+                        "action": "buy",
+                        "horizon": "intraday",
+                        "created_at": "2026-07-22T00:00:00",
+                        "expires_at": "2026-07-22T04:00:00",
+                    }
+                ]
+            }
+
+        def update_status(self, *_args, **_kwargs):
+            raise AssertionError("direction reversal is handled after create")
+
+    payload = {
+        "market": "crypto",
+        "stock_code": "BTC",
+        "action": "sell",
+        "horizon": "intraday",
+    }
+
+    assert _apply_crypto_plan_freeze(payload, Service()) == payload
+
+
+def test_wait_plan_does_not_publish_fake_entry_range() -> None:
+    result = _result(operation_advice="观望", decision_type="hold")
+    result.dashboard["battle_plan"]["intraday_plan"] = {
+        "enabled": False,
+        "direction": "wait",
+        "entry_zone": "66000-67000",
+        "no_trade_reason": "等待确认",
+    }
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=903,
+        trace_id="trace-903",
+        query_source="schedule",
+        report_type="simple",
+    )
+
+    assert payload is not None
+    assert "entry_low" not in payload
+    assert "entry_high" not in payload

@@ -146,7 +146,6 @@ class CryptoBacktestEngine:
         if entry_index is None:
             return {
                 **cls._base(plan, eval_status="completed"),
-                "entry_triggered": False,
                 "outcome": "no_entry",
                 "direction_correct": None,
                 "start_price": plan.entry_price,
@@ -201,6 +200,9 @@ class CryptoBacktestEngine:
 
         return {
             **cls._base(plan, eval_status="completed"),
+            "signal_triggered": True,
+            "signal_triggered_at": trade_bars[0].timestamp,
+            "order_status": "filled",
             "entry_triggered": True,
             "entry_triggered_at": trade_bars[0].timestamp,
             "start_price": float(plan.entry_price),
@@ -308,7 +310,6 @@ class CryptoBacktestEngine:
                 return result
             return {
                 **cls._base(plan, eval_status="completed"),
-                "entry_triggered": False,
                 "outcome": "no_entry",
                 "direction_correct": None,
                 "start_price": plan.entry_price,
@@ -330,9 +331,17 @@ class CryptoBacktestEngine:
         fill_index = trigger_index + 1
         if fill_index >= len(window_bars):
             result = cls._insufficient(plan, "entry_confirmed_awaiting_fill_bar")
+            signal_at = window_bars[trigger_index].timestamp
+            result.update(
+                {
+                    "signal_triggered": True,
+                    "signal_triggered_at": signal_at,
+                    "order_status": "pending_fill",
+                }
+            )
             result["diagnostics"].update(
                 {
-                    "triggered_at": window_bars[trigger_index].timestamp.isoformat(),
+                    "triggered_at": signal_at.isoformat(),
                     "execution_contract": contract,
                 }
             )
@@ -340,6 +349,8 @@ class CryptoBacktestEngine:
 
         fill_bar = window_bars[fill_index]
         fill_price = cls._execution_price(fill_bar, "open")
+        max_holding_bars = int(contract["exit"]["max_holding_bars"])
+        available_trade_bars = list(window_bars[fill_index:])
         if is_quality_gate_engine:
             fill_quality_errors = cls._plan_quality_errors(
                 plan=plan,
@@ -349,8 +360,17 @@ class CryptoBacktestEngine:
                 require_volume_gate=False,
             )
             if fill_quality_errors:
+                missed_moves = cls._missed_move_metrics(
+                    direction=direction,
+                    reference_price=fill_price,
+                    bars=available_trade_bars[:max_holding_bars],
+                )
                 return {
                     **cls._base(plan, eval_status="completed"),
+                    "signal_triggered": True,
+                    "signal_triggered_at": window_bars[trigger_index].timestamp,
+                    "order_status": "rejected",
+                    "order_rejection_reason": ",".join(fill_quality_errors),
                     "entry_triggered": False,
                     "entry_triggered_at": None,
                     "outcome": "no_entry",
@@ -363,18 +383,18 @@ class CryptoBacktestEngine:
                     "simulated_exit_price": None,
                     "simulated_exit_reason": "fill_quality_gate_rejected",
                     "simulated_return_pct": None,
+                    **missed_moves,
                     "diagnostics": {
                         "reason": "fill_quality_gate_rejected",
                         "triggered_at": window_bars[trigger_index].timestamp.isoformat(),
                         "rejected_fill_at": fill_bar.timestamp.isoformat(),
                         "rejected_fill_price": fill_price,
                         "quality_errors": fill_quality_errors,
+                        "missed_move": missed_moves,
                         "execution_contract": contract,
                         "execution": cls._execution_config(config),
                     },
                 }
-        max_holding_bars = int(contract["exit"]["max_holding_bars"])
-        available_trade_bars = list(window_bars[fill_index:])
         trade_bars = available_trade_bars[:max_holding_bars]
         end_close = cls._execution_price(trade_bars[-1], "close")
         target_result = cls._evaluate_targets(
@@ -420,6 +440,9 @@ class CryptoBacktestEngine:
         if not target_hit and not holding_complete and not evaluation_complete:
             return {
                 **cls._base(plan, eval_status="insufficient_data"),
+                "signal_triggered": True,
+                "signal_triggered_at": window_bars[trigger_index].timestamp,
+                "order_status": "filled",
                 "entry_triggered": True,
                 "entry_triggered_at": fill_bar.timestamp,
                 "start_price": fill_price,
@@ -470,6 +493,9 @@ class CryptoBacktestEngine:
         )
         return {
             **cls._base(plan, eval_status="completed"),
+            "signal_triggered": True,
+            "signal_triggered_at": window_bars[trigger_index].timestamp,
+            "order_status": "filled",
             "entry_triggered": True,
             "entry_triggered_at": fill_bar.timestamp,
             "start_price": fill_price,
@@ -537,6 +563,8 @@ class CryptoBacktestEngine:
         supported = {
             "close_above",
             "close_below",
+            "low_lte",
+            "high_gte",
             "volume_ratio_gte",
             "volume_ratio_lte",
             "close_above_vwap",
@@ -552,7 +580,14 @@ class CryptoBacktestEngine:
                 errors.append(f"unsupported_condition:{condition_type or 'missing'}")
                 continue
             normalized = {"type": condition_type}
-            if condition_type in {"close_above", "close_below", "volume_ratio_gte", "volume_ratio_lte"}:
+            if condition_type in {
+                "close_above",
+                "close_below",
+                "low_lte",
+                "high_gte",
+                "volume_ratio_gte",
+                "volume_ratio_lte",
+            }:
                 try:
                     normalized["value"] = float(condition.get("value"))
                 except (TypeError, ValueError):
@@ -577,6 +612,10 @@ class CryptoBacktestEngine:
         except (TypeError, ValueError):
             errors.append("invalid_bar_limit")
             confirmation_bars, max_wait_bars, max_holding_bars = 1, 24, 24
+        setup_type = str(entry.get("setup_type") or value.get("setup_type") or "breakout").strip().lower()
+        if setup_type not in {"breakout", "pullback"}:
+            errors.append("unsupported_setup_type")
+            setup_type = "breakout"
         if not 1 <= confirmation_bars <= 3:
             errors.append("confirmation_bars_out_of_range")
         if max_wait_bars < 1 or max_holding_bars < 1:
@@ -586,6 +625,7 @@ class CryptoBacktestEngine:
             "version": "btc-execution-v1",
             "instrument": instrument.to_contract() if instrument is not None else {},
             "entry": {
+                "setup_type": setup_type,
                 "logic": "all",
                 "conditions": normalized_conditions,
                 "confirmation_bars": confirmation_bars,
@@ -647,7 +687,23 @@ class CryptoBacktestEngine:
             if net_target_return_pct < max(float(config.neutral_band_pct), 0.0):
                 errors.append("target_does_not_clear_cost_and_neutral_band")
 
-        if require_volume_gate:
+        setup_type = str((contract.get("entry") or {}).get("setup_type") or "breakout")
+        condition_types = {
+            str(condition.get("type") or "")
+            for condition in (contract.get("entry") or {}).get("conditions") or []
+        }
+        if setup_type == "pullback":
+            required_touch = "low_lte" if direction == "long" else "high_gte"
+            close_confirmations = (
+                {"close_above", "close_above_vwap"}
+                if direction == "long"
+                else {"close_below", "close_below_vwap"}
+            )
+            if required_touch not in condition_types:
+                errors.append("missing_pullback_touch_condition")
+            if not condition_types.intersection(close_confirmations):
+                errors.append("missing_pullback_close_confirmation")
+        elif require_volume_gate:
             volume_thresholds = [
                 float(condition["value"])
                 for condition in (contract.get("entry") or {}).get("conditions") or []
@@ -695,8 +751,9 @@ class CryptoBacktestEngine:
                 consecutive = 0
         return None
 
-    @staticmethod
+    @classmethod
     def _condition_matches(
+        cls,
         bar: CryptoBarLike,
         condition: dict[str, Any],
         *,
@@ -715,6 +772,10 @@ class CryptoBacktestEngine:
             return close > float(condition["value"])
         if condition_type == "close_below":
             return close < float(condition["value"])
+        if condition_type == "low_lte":
+            return cls._execution_price(bar, "low") <= float(condition["value"])
+        if condition_type == "high_gte":
+            return cls._execution_price(bar, "high") >= float(condition["value"])
         if condition_type == "volume_ratio_gte":
             return bar.volume_ratio is not None and float(bar.volume_ratio) >= float(condition["value"])
         if condition_type == "volume_ratio_lte":
@@ -736,6 +797,8 @@ class CryptoBacktestEngine:
     ) -> dict[str, Any]:
         rows = list(results)
         completed = [row for row in rows if getattr(row, "eval_status", None) == "completed"]
+        signal_triggered = [row for row in completed if cls._row_signal_triggered(row)]
+        rejected_orders = [row for row in signal_triggered if cls._row_order_status(row) == "rejected"]
         raw_triggered = [row for row in completed if getattr(row, "entry_triggered", None) is True]
         structured_engine = str(engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4", "btc-plan-v5"}
         if structured_engine:
@@ -759,11 +822,23 @@ class CryptoBacktestEngine:
             plan_type = str(getattr(row, "plan_type", "") or "unknown")
             bucket = by_plan_type.setdefault(
                 plan_type,
-                {"total": 0, "completed": 0, "triggered": 0, "wins": 0, "losses": 0},
+                {
+                    "total": 0,
+                    "completed": 0,
+                    "signal_triggered": 0,
+                    "orders_rejected": 0,
+                    "triggered": 0,
+                    "wins": 0,
+                    "losses": 0,
+                },
             )
             bucket["total"] += 1
             if getattr(row, "eval_status", None) == "completed":
                 bucket["completed"] += 1
+            if cls._row_signal_triggered(row):
+                bucket["signal_triggered"] += 1
+            if cls._row_order_status(row) == "rejected":
+                bucket["orders_rejected"] += 1
             if id(row) in independent_ids:
                 bucket["triggered"] += 1
             if id(row) in independent_ids and getattr(row, "outcome", None) == "win":
@@ -839,6 +914,17 @@ class CryptoBacktestEngine:
             "equity_curve": equity_curve,
             "diagnostics": {
                 "sample_confidence": sample_confidence,
+                "signal_triggered_count": len(signal_triggered),
+                "rejected_order_count": len(rejected_orders),
+                "order_fill_rate_pct": (
+                    round(len(raw_triggered) / len(signal_triggered) * 100, 2)
+                    if signal_triggered
+                    else None
+                ),
+                "avg_missed_favorable_move_pct": cls._average(
+                    getattr(row, "missed_favorable_move_pct", None)
+                    for row in rejected_orders
+                ),
                 "metric_semantics": (
                     "structured_execution_contract"
                     if structured_engine
@@ -848,6 +934,26 @@ class CryptoBacktestEngine:
                 "overlap_excluded_count": len(overlap_excluded),
             },
         }
+
+    @staticmethod
+    def _row_signal_triggered(row: Any) -> bool:
+        value = getattr(row, "signal_triggered", None)
+        if value is not None:
+            return value is True
+        if getattr(row, "entry_triggered", None) is True:
+            return True
+        return getattr(row, "simulated_exit_reason", None) == "fill_quality_gate_rejected"
+
+    @staticmethod
+    def _row_order_status(row: Any) -> str:
+        value = str(getattr(row, "order_status", None) or "").strip().lower()
+        if value:
+            return value
+        if getattr(row, "entry_triggered", None) is True:
+            return "filled"
+        if getattr(row, "simulated_exit_reason", None) == "fill_quality_gate_rejected":
+            return "rejected"
+        return "not_triggered"
 
     @staticmethod
     def _independent_triggered_rows(rows: Sequence[Any]) -> tuple[list[Any], list[Any]]:
@@ -878,6 +984,12 @@ class CryptoBacktestEngine:
 
     @staticmethod
     def _base(plan: CryptoPlan, *, eval_status: str) -> dict[str, Any]:
+        if eval_status == "insufficient_data":
+            order_status = "not_evaluated"
+        elif eval_status == "skipped":
+            order_status = "not_applicable"
+        else:
+            order_status = "not_triggered"
         return {
             "plan_type": plan.plan_type,
             "horizon": plan.horizon,
@@ -886,6 +998,14 @@ class CryptoBacktestEngine:
             "stop_loss": plan.stop_loss,
             "take_profit": plan.take_profit,
             "eval_status": eval_status,
+            "signal_triggered": False,
+            "signal_triggered_at": None,
+            "order_status": order_status,
+            "order_rejection_reason": None,
+            "entry_triggered": False,
+            "entry_triggered_at": None,
+            "missed_favorable_move_pct": None,
+            "missed_adverse_move_pct": None,
         }
 
     @classmethod
@@ -942,6 +1062,32 @@ class CryptoBacktestEngine:
         if value is None:
             value = getattr(bar, field, None)
         return float(value)
+
+    @classmethod
+    def _missed_move_metrics(
+        cls,
+        *,
+        direction: str,
+        reference_price: float,
+        bars: Sequence[CryptoBarLike],
+    ) -> dict[str, Optional[float]]:
+        if reference_price <= 0 or not bars:
+            return {
+                "missed_favorable_move_pct": None,
+                "missed_adverse_move_pct": None,
+            }
+        highest = max(cls._execution_price(bar, "high") for bar in bars)
+        lowest = min(cls._execution_price(bar, "low") for bar in bars)
+        if direction == "short":
+            favorable = (reference_price - lowest) / reference_price * 100.0
+            adverse = (highest - reference_price) / reference_price * 100.0
+        else:
+            favorable = (highest - reference_price) / reference_price * 100.0
+            adverse = (reference_price - lowest) / reference_price * 100.0
+        return {
+            "missed_favorable_move_pct": round(max(favorable, 0.0), 4),
+            "missed_adverse_move_pct": round(max(adverse, 0.0), 4),
+        }
 
     @staticmethod
     def _mark_price(bar: CryptoBarLike, field: str) -> float:

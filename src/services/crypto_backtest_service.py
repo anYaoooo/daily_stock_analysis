@@ -1225,6 +1225,10 @@ class CryptoBacktestService:
             entry_price=evaluation.get("entry_price"),
             stop_loss=evaluation.get("stop_loss"),
             take_profit=evaluation.get("take_profit"),
+            signal_triggered=evaluation.get("signal_triggered"),
+            signal_triggered_at=evaluation.get("signal_triggered_at"),
+            order_status=evaluation.get("order_status"),
+            order_rejection_reason=evaluation.get("order_rejection_reason"),
             entry_triggered=evaluation.get("entry_triggered"),
             entry_triggered_at=evaluation.get("entry_triggered_at"),
             start_price=evaluation.get("start_price"),
@@ -1242,6 +1246,8 @@ class CryptoBacktestService:
             simulated_exit_price=evaluation.get("simulated_exit_price"),
             simulated_exit_reason=evaluation.get("simulated_exit_reason"),
             simulated_return_pct=evaluation.get("simulated_return_pct"),
+            missed_favorable_move_pct=evaluation.get("missed_favorable_move_pct"),
+            missed_adverse_move_pct=evaluation.get("missed_adverse_move_pct"),
             raw_plan_json=json.dumps(plan.raw_plan, ensure_ascii=False, default=str),
             diagnostics_json=json.dumps(evaluation.get("diagnostics") or {}, ensure_ascii=False, default=str),
         )
@@ -1278,9 +1284,9 @@ class CryptoBacktestService:
                 engine_version=engine_version,
             )
             diagnostics = {
+                **(data.get("diagnostics") or {}),
                 "risk_metrics": data.get("risk_metrics") or {},
                 "equity_curve": data.get("equity_curve") or [],
-                "sample_confidence": (data.get("diagnostics") or {}).get("sample_confidence") or {},
             }
             if scope == "overall":
                 diagnostics["indicator_group_breakdown"] = indicator_group_breakdown
@@ -1316,6 +1322,16 @@ class CryptoBacktestService:
     def _result_to_dict(row: CryptoBacktestResult) -> dict[str, Any]:
         diagnostics = parse_json_field(row.diagnostics_json) or {}
         analysis_mode = horizon_to_analysis_mode(row.horizon)
+        signal_triggered = CryptoBacktestEngine._row_signal_triggered(row)
+        order_status = CryptoBacktestEngine._row_order_status(row)
+        signal_triggered_at = row.signal_triggered_at
+        if signal_triggered_at is None and signal_triggered:
+            signal_triggered_at = diagnostics.get("triggered_at")
+        elif signal_triggered_at is not None:
+            signal_triggered_at = signal_triggered_at.isoformat()
+        order_rejection_reason = row.order_rejection_reason
+        if not order_rejection_reason and order_status == "rejected":
+            order_rejection_reason = ",".join(diagnostics.get("quality_errors") or []) or None
         return {
             "analysis_history_id": row.analysis_history_id,
             "code": row.code,
@@ -1333,6 +1349,10 @@ class CryptoBacktestService:
             "entry_price": row.entry_price,
             "stop_loss": row.stop_loss,
             "take_profit": row.take_profit,
+            "signal_triggered": signal_triggered,
+            "signal_triggered_at": signal_triggered_at,
+            "order_status": order_status,
+            "order_rejection_reason": order_rejection_reason,
             "entry_triggered": row.entry_triggered,
             "entry_triggered_at": row.entry_triggered_at.isoformat() if row.entry_triggered_at else None,
             "direction_correct": row.direction_correct,
@@ -1341,7 +1361,10 @@ class CryptoBacktestService:
             "hit_take_profit": row.hit_take_profit,
             "first_hit": row.first_hit,
             "first_hit_at": row.first_hit_at.isoformat() if row.first_hit_at else None,
+            "simulated_exit_reason": row.simulated_exit_reason,
             "simulated_return_pct": row.simulated_return_pct,
+            "missed_favorable_move_pct": row.missed_favorable_move_pct,
+            "missed_adverse_move_pct": row.missed_adverse_move_pct,
             "trade": diagnostics.get("trade") or {},
             "execution": diagnostics.get("execution") or {},
             "diagnostics": diagnostics,
@@ -1508,7 +1531,7 @@ class CryptoBacktestService:
         ]
         if any((direction_filter, plan_type_filter, result_status_filter)) and not plan_items:
             return None
-        terminal_statuses = {"completed", "win", "loss", "neutral", "no_entry", "skipped"}
+        terminal_statuses = {"completed", "win", "loss", "neutral", "no_entry", "signal_rejected", "skipped"}
         if not plan_items:
             backtest_status = "no_plan"
         elif all(item["backtest_status"] == "skipped" for item in plan_items):
@@ -1577,9 +1600,16 @@ class CryptoBacktestService:
         else:
             backtest_status = "pending"
         analysis_mode = horizon_to_analysis_mode(plan.horizon)
+        execution_contract = plan.execution_contract if isinstance(plan.execution_contract, dict) else {}
+        contract_entry = execution_contract.get("entry")
+        setup_value = execution_contract.get("setup_type")
+        if isinstance(contract_entry, dict):
+            setup_value = contract_entry.get("setup_type") or setup_value
+        setup_type = str(setup_value).strip().lower() if setup_value else None
         return {
             "plan_type": plan.plan_type,
             "horizon": plan.horizon,
+            "setup_type": setup_type,
             "analysis_mode": analysis_mode,
             "analysis_timeframe": analysis_timeframe_label(analysis_mode),
             "direction": plan.direction,
@@ -1654,6 +1684,8 @@ class CryptoBacktestService:
     @staticmethod
     def _plan_result_status(row: CryptoBacktestResult) -> str:
         if row.eval_status == "completed":
+            if CryptoBacktestEngine._row_order_status(row) == "rejected":
+                return "signal_rejected"
             return str(row.outcome or "completed")
         return str(row.eval_status or "pending")
 

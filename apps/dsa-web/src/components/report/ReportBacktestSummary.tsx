@@ -103,6 +103,7 @@ function statusBadge(status: string, language: 'zh' | 'en'): React.ReactNode {
       loss: '亏损',
       neutral: '持平',
       no_entry: '未触发',
+      signal_rejected: '信号触发后拒单',
       pending: '待回测',
       invalid_plan: '计划缺字段',
       no_plan: '无计划',
@@ -116,6 +117,7 @@ function statusBadge(status: string, language: 'zh' | 'en'): React.ReactNode {
       loss: 'Loss',
       neutral: 'Flat',
       no_entry: 'No entry',
+      signal_rejected: 'Signal rejected at fill',
       pending: 'Pending',
       invalid_plan: 'Missing fields',
       no_plan: 'No plan',
@@ -128,10 +130,32 @@ function statusBadge(status: string, language: 'zh' | 'en'): React.ReactNode {
     ? 'success'
     : normalized === 'loss' || normalized === 'invalid_plan'
       ? 'danger'
-      : normalized === 'neutral' || normalized === 'no_entry' || normalized === 'partial' || normalized === 'insufficient_data'
+      : normalized === 'neutral' || normalized === 'no_entry' || normalized === 'signal_rejected' || normalized === 'partial' || normalized === 'insufficient_data'
         ? 'warning'
         : 'default';
   return <Badge variant={variant}>{labels[language][normalized as keyof typeof labels.zh] ?? normalized}</Badge>;
+}
+
+function orderStatusLabel(value: string | undefined, language: 'zh' | 'en'): string {
+  const labels = {
+    zh: {
+      filled: '已成交',
+      rejected: '已拒单',
+      pending_fill: '等待成交',
+      not_triggered: '未生成委托',
+      not_evaluated: '待评估',
+      not_applicable: '不适用',
+    },
+    en: {
+      filled: 'Filled',
+      rejected: 'Rejected',
+      pending_fill: 'Awaiting fill',
+      not_triggered: 'No order',
+      not_evaluated: 'Pending evaluation',
+      not_applicable: 'N/A',
+    },
+  } as const;
+  return labels[language][value as keyof typeof labels.zh] ?? value ?? '--';
 }
 
 function pct(value?: number | null): string {
@@ -157,6 +181,15 @@ const PlanBacktestCard: React.FC<{
         <Badge variant={plan.horizon === 'intraday' ? 'warning' : 'info'}>
           {planTypeLabel(plan.planType, language)}
         </Badge>
+        {plan.setupType ? (
+          <Badge variant="default">
+            {plan.setupType === 'pullback'
+              ? language === 'zh' ? '回踩' : 'Pullback'
+              : plan.setupType === 'breakout'
+              ? language === 'zh' ? '突破' : 'Breakout'
+              : plan.setupType}
+          </Badge>
+        ) : null}
         <Badge variant={plan.direction === 'short' ? 'danger' : plan.direction === 'long' ? 'success' : 'default'}>
           {directionLabel(plan.direction, language)}
         </Badge>
@@ -171,13 +204,22 @@ const PlanBacktestCard: React.FC<{
       </div>
 
       {latest ? (
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-text sm:grid-cols-5">
-          <span>{text.trigger} {latest.entryTriggered ? text.yes : text.no}</span>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-text sm:grid-cols-4">
+          <span>{language === 'zh' ? '信号' : 'Signal'} {latest.signalTriggered ? text.yes : text.no}</span>
+          <span>{language === 'zh' ? '委托' : 'Order'} {orderStatusLabel(latest.orderStatus, language)}</span>
+          <span>{language === 'zh' ? '成交' : 'Fill'} {latest.entryTriggered ? text.yes : text.no}</span>
           <span>{text.entryPrice} {latest.entryPrice ?? '--'}</span>
           <span>{text.netReturn} {pct(latest.simulatedReturnPct)}</span>
           <span>{text.netPnl} {money(trade.netPnl)}</span>
           <span>{text.rMultiple} {money(trade.rMultiple)}</span>
+          <span>{language === 'zh' ? '错失有利波动' : 'Missed favorable move'} {pct(latest.missedFavorableMovePct)}</span>
         </div>
+      ) : null}
+      {latest?.orderStatus === 'rejected' ? (
+        <p className="mt-2 text-xs text-warning">
+          {language === 'zh' ? '信号成立但拒绝成交：' : 'Signal triggered but fill rejected: '}
+          {latest.orderRejectionReason || latest.simulatedExitReason || '--'}
+        </p>
       ) : null}
 
       {!plan.backtestable ? (

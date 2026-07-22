@@ -1110,6 +1110,7 @@ class HistoryService:
                     f"| 依据 | {intraday.get('reason', 'N/A')} |",
                     "",
                 ])
+            self._append_btc_execution_ladders(report_lines, battle)
             # 仓位策略
             position = battle.get('position_strategy', {})
             if position:
@@ -1188,6 +1189,47 @@ class HistoryService:
         if not text or text in ("-", "—", "N/A", "None"):
             return "N/A"
         return text
+
+    @classmethod
+    def _append_btc_execution_ladders(cls, report_lines: List[str], battle_plan: Dict[str, Any]) -> None:
+        """Render optional staged BTC execution plans without changing legacy reports."""
+        plan_items = (
+            ("日线多单", battle_plan.get("long_plan")),
+            ("日线空单", battle_plan.get("short_plan")),
+            ("小时线日内", battle_plan.get("intraday_plan")),
+        )
+        ladders = [
+            (label, plan.get("execution_ladder"))
+            for label, plan in plan_items
+            if isinstance(plan, dict) and isinstance(plan.get("execution_ladder"), dict)
+        ]
+        if not ladders:
+            return
+
+        report_lines.extend([
+            "**🪜 BTC 分步执行**",
+            "",
+            "| 计划 | 阶段 | 价格/区间 | 触发条件 | 仓位/动作 |",
+            "|------|------|-----------|----------|-----------|",
+        ])
+        for plan_label, ladder in ladders:
+            scenario = cls._clean_sniper_value(ladder.get("scenario"))
+            current_action = cls._clean_sniper_value(ladder.get("current_action"))
+            trial = ladder.get("trial_entry") if isinstance(ladder.get("trial_entry"), dict) else {}
+            confirm = ladder.get("confirmation_add") if isinstance(ladder.get("confirmation_add"), dict) else {}
+            invalidation = ladder.get("invalidation") if isinstance(ladder.get("invalidation"), dict) else {}
+
+            trial_price = trial.get("entry_price") or trial.get("entry_zone")
+            trial_action = trial.get("position_hint") or ("未启用" if trial.get("enabled") is False else "试仓")
+            confirm_action = confirm.get("position_hint") or ("未启用" if confirm.get("enabled") is False else "确认后加仓")
+            invalidation_action = invalidation.get("action") or "撤销/退出"
+
+            report_lines.extend([
+                f"| {plan_label}（{scenario}；当前={current_action}） | 试仓 | {cls._clean_sniper_value(trial_price)} | {cls._clean_sniper_value(trial.get('trigger_condition'))} | {cls._clean_sniper_value(trial_action)} |",
+                f"| {plan_label} | 确认加仓 | {cls._clean_sniper_value(confirm.get('entry_price'))} | {cls._clean_sniper_value(confirm.get('trigger_condition'))} | {cls._clean_sniper_value(confirm_action)} |",
+                f"| {plan_label} | 失效 | {cls._clean_sniper_value(invalidation.get('price'))} | {cls._clean_sniper_value(invalidation.get('condition'))} | {cls._clean_sniper_value(invalidation_action)} |",
+            ])
+        report_lines.append("")
 
     def _get_signal_level(self, result: AnalysisResult) -> Tuple[str, str, str]:
         """Get signal level based on sentiment score and decision type."""

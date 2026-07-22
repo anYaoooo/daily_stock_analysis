@@ -2062,6 +2062,85 @@ class TestAnalyzeWithAgentStockName(unittest.TestCase):
             self.assertEqual(history_context["diagnostics"]["trace_id"], "trace-1391")
             self.assertEqual(history_context["stock_name"], "科创芯片ETF")
 
+    def test_analyze_with_agent_aligns_btc_plan_before_history_save(self):
+        """Agent 结果必须在落库前执行与普通分析一致的 BTC 计划校验。"""
+        with patch('src.core.pipeline.get_config') as mock_config, \
+             patch('src.core.pipeline.get_db'), \
+             patch('src.core.pipeline.DataFetcherManager'), \
+             patch('src.core.pipeline.GeminiAnalyzer'), \
+             patch('src.core.pipeline.NotificationService'), \
+             patch('src.core.pipeline.SearchService'), \
+             patch('src.core.pipeline.fill_price_position_if_needed'), \
+             patch('src.core.pipeline.stabilize_decision_with_structure'), \
+             patch('src.core.pipeline.align_btc_execution_plans') as mock_align:
+
+            mock_cfg = MagicMock()
+            mock_cfg.max_workers = 2
+            mock_cfg.agent_mode = True
+            mock_cfg.agent_max_steps = 10
+            mock_cfg.agent_skills = []
+            mock_cfg.bocha_api_keys = []
+            mock_cfg.tavily_api_keys = []
+            mock_cfg.anspire_api_keys = []
+            mock_cfg.brave_api_keys = []
+            mock_cfg.serpapi_keys = []
+            mock_cfg.searxng_base_urls = []
+            mock_cfg.searxng_public_instances_enabled = False
+            mock_cfg.news_max_age_days = 7
+            mock_cfg.enable_realtime_quote = True
+            mock_cfg.enable_chip_distribution = True
+            mock_cfg.realtime_source_priority = []
+            mock_cfg.save_context_snapshot = False
+            mock_cfg.report_language = "zh"
+            mock_cfg.report_integrity_enabled = False
+            mock_config.return_value = mock_cfg
+
+            from src.analyzer import AnalysisResult
+            from src.core.pipeline import StockAnalysisPipeline
+            from src.enums import ReportType
+
+            pipeline = StockAnalysisPipeline(config=mock_cfg)
+            pipeline.search_service.is_available = False
+            pipeline._ensure_agent_history = MagicMock()
+            pipeline._load_agent_analysis_context = MagicMock(return_value={})
+            pipeline._build_analysis_context_pack_outputs = MagicMock(return_value=(None, {}))
+            result = AnalysisResult(
+                code="BTCUSDT",
+                name="Bitcoin",
+                sentiment_score=70,
+                trend_prediction="看多",
+                operation_advice="买入",
+                decision_type="buy",
+                dashboard={"battle_plan": {}},
+            )
+            pipeline._agent_result_to_analysis_result = MagicMock(return_value=result)
+
+            events = []
+            mock_align.side_effect = lambda *_args, **_kwargs: events.append("align")
+            pipeline.db.save_analysis_history = MagicMock(
+                side_effect=lambda **_kwargs: events.append("save") or 1
+            )
+            mock_executor = MagicMock()
+            mock_executor.run.return_value = SimpleNamespace(
+                success=True,
+                provider="agent-provider",
+                dashboard={},
+            )
+
+            with patch('src.agent.factory.build_agent_executor', return_value=mock_executor):
+                returned = pipeline._analyze_with_agent(
+                    code="BTCUSDT",
+                    report_type=ReportType.SIMPLE,
+                    query_id="q-btc-agent-align",
+                    stock_name="Bitcoin",
+                    realtime_quote=None,
+                    chip_data=None,
+                )
+
+            self.assertIs(returned, result)
+            mock_align.assert_called_once_with(result, runtime_config=mock_cfg)
+            self.assertEqual(events[:2], ["align", "save"])
+
 
 # ============================================================
 # Agent construction chain (real objects, mocked LLM)

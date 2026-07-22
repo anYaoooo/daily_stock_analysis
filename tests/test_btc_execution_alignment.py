@@ -99,3 +99,40 @@ def test_valid_btc_trade_plan_keeps_directional_advice() -> None:
     assert aligned.dashboard["battle_plan"]["long_plan"]["direction"] == "long"
     assert aligned.operation_advice == "买入"
     assert aligned.decision_type == "buy"
+
+
+def test_execution_ladder_must_match_trial_entry_and_stop_loss() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=70,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="买入",
+        decision_type="buy",
+        dashboard={
+            "battle_plan": {
+                "long_plan": {
+                    "direction": "long",
+                    "entry_price": 100,
+                    "stop_loss": 95,
+                    "take_profit": 110,
+                    "execution_contract": _contract(),
+                    "execution_ladder": {
+                        "scenario": "trend_pullback",
+                        "current_action": "trial",
+                        "trial_entry": {"entry_price": 101},
+                        "confirmation_add": {"entry_price": 104},
+                        "invalidation": {"price": 94},
+                    },
+                },
+            },
+        },
+    )
+
+    aligned = align_btc_execution_plans(result, runtime_config=_runtime_config())
+
+    plan = aligned.dashboard["battle_plan"]["long_plan"]
+    assert plan["direction"] == "wait"
+    assert "execution_ladder_trial_entry_price_mismatch" in plan["no_trade_reason"]
+    assert "execution_ladder_invalidation_price_mismatch" in plan["no_trade_reason"]

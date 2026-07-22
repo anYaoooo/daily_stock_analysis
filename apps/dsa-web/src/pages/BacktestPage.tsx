@@ -62,6 +62,7 @@ function planResultSummary(plans: CryptoBacktestHistoryPlan[]): string {
     loss: '亏损',
     neutral: '持平',
     no_entry: '未触发',
+    signal_rejected: '信号触发后拒单',
     pending: '待回测',
     insufficient_data: '等待数据',
     invalid_plan: '不可评估',
@@ -69,7 +70,9 @@ function planResultSummary(plans: CryptoBacktestHistoryPlan[]): string {
   };
   const counts = new Map<string, number>();
   plans.forEach((plan) => {
-    const status = plan.latestResult?.outcome || plan.backtestStatus || 'pending';
+    const status = plan.latestResult?.orderStatus === 'rejected'
+      ? 'signal_rejected'
+      : plan.latestResult?.outcome || plan.backtestStatus || 'pending';
     counts.set(status, (counts.get(status) ?? 0) + 1);
   });
   return Array.from(counts, ([status, count]) => `${labels[status] ?? status} ${count}`).join(' · ');
@@ -79,6 +82,7 @@ function statusBadge(status: string): React.ReactNode {
   const normalized = status || 'pending';
   if (['win', 'completed'].includes(normalized)) return <Badge variant="success">{normalized === 'win' ? '盈利' : '已回测'}</Badge>;
   if (normalized === 'loss') return <Badge variant="danger">亏损</Badge>;
+  if (normalized === 'signal_rejected') return <Badge variant="warning">信号触发后拒单</Badge>;
   if (['neutral', 'no_entry'].includes(normalized)) return <Badge variant="warning">{normalized === 'no_entry' ? '未触发' : '持平'}</Badge>;
   if (normalized === 'pending') return <Badge variant="default">待回测</Badge>;
   if (normalized === 'skipped') return <Badge variant="default">不计入样本</Badge>;
@@ -87,6 +91,18 @@ function statusBadge(status: string): React.ReactNode {
   if (normalized === 'partial') return <Badge variant="warning">部分回测</Badge>;
   if (normalized === 'insufficient_data') return <Badge variant="warning">等待评估数据</Badge>;
   return <Badge variant="default">{normalized}</Badge>;
+}
+
+function orderStatusLabel(value?: string): string {
+  const labels: Record<string, string> = {
+    filled: '已成交',
+    rejected: '已拒单',
+    pending_fill: '等待成交',
+    not_triggered: '未生成委托',
+    not_evaluated: '待评估',
+    not_applicable: '不适用',
+  };
+  return labels[value || ''] ?? value ?? '--';
 }
 
 function tagValue(tags: Record<string, unknown> | null | undefined, group: string, key: string): string | null {
@@ -132,6 +148,10 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
   const contractMetrics = metricSemantics === 'structured_execution_contract';
   const rawTriggeredCount = metrics.diagnostics?.rawTriggeredCount;
   const overlapExcludedCount = metrics.diagnostics?.overlapExcludedCount;
+  const signalTriggeredCount = metrics.diagnostics?.signalTriggeredCount;
+  const rejectedOrderCount = metrics.diagnostics?.rejectedOrderCount;
+  const orderFillRatePct = metrics.diagnostics?.orderFillRatePct;
+  const avgMissedFavorableMovePct = metrics.diagnostics?.avgMissedFavorableMovePct;
 
   return (
     <Card variant="gradient" padding="md">
@@ -142,6 +162,11 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
       <MetricRow label={contractMetrics ? '策略契约胜率' : '触价代理胜率'} value={pct(metrics.winRatePct)} />
       <MetricRow label="方向准确率" value={pct(metrics.directionAccuracyPct)} />
       <MetricRow label="平均净收益" value={pct(metrics.avgSimulatedReturnPct)} />
+      {typeof signalTriggeredCount === 'number' ? (
+        <MetricRow label="信号 / 成交 / 拒单" value={`${signalTriggeredCount} / ${metrics.triggeredCount ?? 0} / ${typeof rejectedOrderCount === 'number' ? rejectedOrderCount : 0}`} />
+      ) : null}
+      {typeof orderFillRatePct === 'number' ? <MetricRow label="信号成交率" value={pct(orderFillRatePct)} /> : null}
+      {typeof avgMissedFavorableMovePct === 'number' ? <MetricRow label="拒单后平均有利波动" value={pct(avgMissedFavorableMovePct)} /> : null}
       <MetricRow label="独立成交 / 已完成评估" value={`${metrics.triggeredCount ?? 0} / ${metrics.completedCount}`} />
       <MetricRow label="不可评估 / 等待数据" value={`${metrics.skippedCount ?? 0} / ${metrics.insufficientCount ?? 0}`} />
       {typeof rawTriggeredCount === 'number' && typeof overlapExcludedCount === 'number' ? (
@@ -278,6 +303,9 @@ const PlanSummary: React.FC<{
     <div className="rounded-lg border border-white/10 bg-elevated/40 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={plan.horizon === 'intraday' ? 'warning' : 'info'}>{planTypeLabel(plan.planType)}</Badge>
+        {plan.setupType ? (
+          <Badge variant="default">{plan.setupType === 'pullback' ? '回踩' : plan.setupType === 'breakout' ? '突破' : plan.setupType}</Badge>
+        ) : null}
         <Badge variant={plan.direction === 'short' ? 'danger' : plan.direction === 'long' ? 'success' : 'default'}>
           {directionLabel(plan.direction)}
         </Badge>
@@ -301,11 +329,20 @@ const PlanSummary: React.FC<{
       ) : null}
       {latest ? (
         <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-text sm:grid-cols-4">
-          <span>触发 {latest.entryTriggered ? '是' : '否'}</span>
+          <span>信号 {latest.signalTriggered ? '已触发' : '未触发'}</span>
+          <span>委托 {orderStatusLabel(latest.orderStatus)}</span>
+          <span>成交 {latest.entryTriggered ? '是' : '否'}</span>
           <span>入场价 {latest.entryPrice ?? '--'}</span>
           <span>净收益 {pct(latest.simulatedReturnPct)}</span>
           <span>净 PnL {money(trade.netPnl)}</span>
+          <span>错失有利波动 {pct(latest.missedFavorableMovePct)}</span>
+          <span>拒单后不利波动 {pct(latest.missedAdverseMovePct)}</span>
         </div>
+      ) : null}
+      {latest?.orderStatus === 'rejected' ? (
+        <p className="mt-2 text-xs text-warning">
+          信号已经成立，但实际成交价未通过风控：{latest.orderRejectionReason || latest.simulatedExitReason || '成交质量不合格'}
+        </p>
       ) : null}
       {plan.indicatorTags ? (
         <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-text">
@@ -574,7 +611,7 @@ const BacktestPage: React.FC = () => {
           </button>
         </div>
         <p className="mt-2 text-xs text-muted-text">
-          回测页现在以 BTC 历史分析记录为主对象，可按报告选择计划回测，并查看入场触发、收益、PnL 和状态摘要。
+          回测页以 BTC 历史分析记录为主对象，分别展示信号成立、委托状态、实际成交、收益和错失行情。
         </p>
         {runResult ? (
           <div className="mt-2 max-w-4xl">

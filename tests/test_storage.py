@@ -4,11 +4,12 @@ import sys
 import os
 import tempfile
 import threading
+import sqlite3
 from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
-from sqlalchemy import and_, create_engine as sqlalchemy_create_engine, select
+from sqlalchemy import and_, create_engine as sqlalchemy_create_engine, inspect, select
 from sqlalchemy.sql import func
 
 # Ensure src module can be imported
@@ -18,6 +19,39 @@ from src.config import Config
 from src.storage import Base, CURRENT_SCHEMA_VERSION, DatabaseManager, DatabaseSchemaMigration, StockDaily
 
 class TestStorage(unittest.TestCase):
+
+    def test_existing_sqlite_crypto_backtest_table_gets_execution_columns(self):
+        DatabaseManager.reset_instance()
+        temp_dir = tempfile.TemporaryDirectory()
+        db_path = os.path.join(temp_dir.name, "legacy_crypto_backtest.db")
+        connection = sqlite3.connect(db_path)
+        try:
+            connection.execute(
+                "CREATE TABLE crypto_backtest_results (id INTEGER PRIMARY KEY AUTOINCREMENT)"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        db = DatabaseManager(db_url=f"sqlite:///{db_path}")
+        columns = {
+            column["name"]
+            for column in inspect(db._engine).get_columns("crypto_backtest_results")
+        }
+
+        self.assertTrue(
+            {
+                "signal_triggered",
+                "signal_triggered_at",
+                "order_status",
+                "order_rejection_reason",
+                "missed_favorable_move_pct",
+                "missed_adverse_move_pct",
+            }.issubset(columns)
+        )
+
+        DatabaseManager.reset_instance()
+        temp_dir.cleanup()
 
     def test_database_initialization_records_schema_version(self):
         DatabaseManager.reset_instance()

@@ -114,6 +114,10 @@ export interface CryptoBacktestResultItem {
   entryPrice?: number;
   stopLoss?: number;
   takeProfit?: number;
+  signalTriggered?: boolean;
+  signalTriggeredAt?: string;
+  orderStatus?: string;
+  orderRejectionReason?: string;
   entryTriggered?: boolean;
   entryTriggeredAt?: string;
   directionCorrect?: boolean;
@@ -122,7 +126,10 @@ export interface CryptoBacktestResultItem {
   hitTakeProfit?: boolean;
   firstHit?: string;
   firstHitAt?: string;
+  simulatedExitReason?: string;
   simulatedReturnPct?: number;
+  missedFavorableMovePct?: number;
+  missedAdverseMovePct?: number;
   trade: Record<string, unknown>;
   execution: Record<string, unknown>;
   diagnostics: Record<string, unknown>;
@@ -131,6 +138,7 @@ export interface CryptoBacktestResultItem {
 export interface CryptoBacktestHistoryPlan {
   planType: string;
   horizon: string;
+  setupType?: 'breakout' | 'pullback' | string;
   analysisMode?: string;
   analysisTimeframe?: string;
   direction: string;

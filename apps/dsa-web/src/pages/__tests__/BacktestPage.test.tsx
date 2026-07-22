@@ -52,6 +52,10 @@ const basePerformance = {
   equityCurve: [],
   diagnostics: {
     metricSemantics: 'structured_execution_contract',
+    signalTriggeredCount: 3,
+    rejectedOrderCount: 1,
+    orderFillRatePct: 66.67,
+    avgMissedFavorableMovePct: 1.25,
     rawTriggeredCount: 3,
     overlapExcludedCount: 1,
     sampleConfidence: { isLowConfidence: true, sampleCount: 2, minimumSampleCount: 100 },
@@ -125,6 +129,7 @@ const baseHistoryItem = {
     {
       planType: 'daily_long',
       horizon: 'daily',
+      setupType: 'pullback',
       analysisMode: 'daily',
       analysisTimeframe: '日线',
       direction: 'long',
@@ -200,6 +205,9 @@ describe('BacktestPage', () => {
     expect(screen.getByText('亏损复盘')).toBeInTheDocument();
     expect(screen.getByText('方向判断与后续走势不一致')).toBeInTheDocument();
     expect(screen.getByText('独立成交 / 已完成评估')).toBeInTheDocument();
+    expect(screen.getByText('信号 / 成交 / 拒单')).toBeInTheDocument();
+    expect(screen.getByText('信号成交率')).toBeInTheDocument();
+    expect(screen.getByText('拒单后平均有利波动')).toBeInTheDocument();
     expect(screen.getByText('不可评估 / 等待数据')).toBeInTheDocument();
     expect(screen.getByText('原始触发 / 重叠排除')).toBeInTheDocument();
     expect(mockGetHistory).toHaveBeenCalledWith({
@@ -215,8 +223,52 @@ describe('BacktestPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '详情' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('回踩')).toBeInTheDocument();
     expect(screen.getByText('PA breakout')).toBeInTheDocument();
     expect(screen.getByText('结构化执行契约')).toBeInTheDocument();
+  });
+
+  it('shows a triggered signal separately from a rejected fill', async () => {
+    mockGetHistory.mockResolvedValueOnce({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [{
+        ...baseHistoryItem,
+        backtestStatus: 'completed',
+        plans: [{
+          ...baseHistoryItem.plans[0],
+          backtestStatus: 'signal_rejected',
+          latestResult: {
+            analysisHistoryId: 7,
+            code: 'BTCUSDT',
+            planType: 'daily_long',
+            horizon: 'daily',
+            direction: 'long',
+            engineVersion: 'btc-plan-v5',
+            evalStatus: 'completed',
+            outcome: 'no_entry',
+            signalTriggered: true,
+            orderStatus: 'rejected',
+            orderRejectionReason: 'risk_reward_below_minimum',
+            entryTriggered: false,
+            simulatedExitReason: 'fill_quality_gate_rejected',
+            missedFavorableMovePct: 1.5,
+            missedAdverseMovePct: 0.4,
+            trade: {},
+            execution: {},
+            diagnostics: {},
+          },
+        }],
+      }],
+    });
+
+    renderPage();
+    expect(await screen.findByText('信号触发后拒单 1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '详情' }));
+    expect(await screen.findByText('信号 已触发')).toBeInTheDocument();
+    expect(screen.getByText('委托 已拒单')).toBeInTheDocument();
+    expect(screen.getByText(/实际成交价未通过风控/)).toBeInTheDocument();
   });
 
   it('keeps core backtest data available when loss review loading fails', async () => {

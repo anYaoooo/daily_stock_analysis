@@ -245,6 +245,24 @@ def test_create_duplicate_list_detail_latest_and_status_update(client_and_db) ->
     assert missing_resp.status_code == 404
 
 
+def test_create_accepts_crypto_market(client_and_db) -> None:
+    client, _db = client_and_db
+
+    response = client.post(
+        "/api/v1/decision-signals",
+        json=_payload(
+            stock_code="BTC",
+            stock_name="Bitcoin",
+            market="crypto",
+            source_report_id=9901,
+            trace_id="trace-btc-9901",
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["item"]["market"] == "crypto"
+
+
 def test_create_treats_null_lifecycle_fields_as_missing(client_and_db) -> None:
     client, _db = client_and_db
 

@@ -25,6 +25,13 @@ def test_extract_directional_strategy_plans_from_dashboard() -> None:
                         },
                         "exit": {"max_holding_bars": 5},
                     },
+                    "execution_ladder": {
+                        "scenario": "trend_pullback",
+                        "current_action": "trial",
+                        "trial_entry": {"entry_price": 100000, "trigger_condition": "回踩承接"},
+                        "confirmation_add": {"entry_price": 100800, "trigger_condition": "重新站上前高"},
+                        "invalidation": {"price": 99000, "condition": "跌破回踩低点"},
+                    },
                 },
                 "short_plan": {
                     "entry_price": "空单入场：98000",
@@ -54,6 +61,7 @@ def test_extract_directional_strategy_plans_from_dashboard() -> None:
     assert plans["long_plan"]["entry_price"] == "多单入场：100000"
     assert plans["long_plan"]["trigger_condition"] == "突破确认"
     assert plans["long_plan"]["execution_contract"]["entry"]["conditions"][0]["value"] == 100000
+    assert plans["long_plan"]["execution_ladder"]["trial_entry"]["entry_price"] == 100000
     assert plans["short_plan"]["entry_price"] == "空单入场：98000"
     assert plans["short_plan"]["invalidation"] == "重新站回支撑"
     assert plans["intraday_plan"]["enabled"] is True

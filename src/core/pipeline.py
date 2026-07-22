@@ -30,6 +30,7 @@ from data_provider.realtime_types import ChipDistribution
 from src.analyzer import (
     GeminiAnalyzer,
     AnalysisResult,
+    align_btc_execution_plans,
     fill_price_position_if_needed,
     normalize_chip_structure_availability,
     populate_decision_action_fields,
@@ -753,6 +754,8 @@ class StockAnalysisPipeline:
                     report_type=report_type.value,
                     previous_operation_advice=action_source_advice,
                 )
+                if is_crypto_code(code):
+                    align_btc_execution_plans(result, runtime_config=self.config)
 
             # Step 8: 保存分析历史记录
             if result and result.success:
@@ -1363,6 +1366,8 @@ class StockAnalysisPipeline:
                     report_type=report_type.value,
                     previous_operation_advice=action_source_advice,
                 )
+                if is_crypto_code(code):
+                    align_btc_execution_plans(result, runtime_config=self.config)
 
             resolved_stock_name = result.name if result and result.name else stock_name
 

@@ -1409,6 +1409,60 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertIn("Unnamed Stock (AAPL)", markdown)
         self.assertNotIn("核心结论", markdown)
 
+    def test_history_markdown_renders_btc_execution_ladder(self) -> None:
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=62,
+            trend_prediction="看多",
+            operation_advice="轻仓试多",
+            analysis_summary="回踩支撑后等待确认加仓。",
+            dashboard={
+                "battle_plan": {
+                    "long_plan": {
+                        "direction": "long",
+                        "execution_ladder": {
+                            "scenario": "trend_pullback",
+                            "current_action": "trial",
+                            "trial_entry": {
+                                "enabled": True,
+                                "entry_price": 98000,
+                                "trigger_condition": "回踩 98000 后小时线收回 VWAP",
+                                "position_hint": "0.25% 账户风险试仓",
+                            },
+                            "confirmation_add": {
+                                "enabled": True,
+                                "entry_price": 99200,
+                                "trigger_condition": "收盘站上 99200",
+                                "position_hint": "确认后加至 0.5% 总风险",
+                            },
+                            "invalidation": {
+                                "price": 97200,
+                                "condition": "小时线收盘跌破 97200",
+                                "action": "撤销试仓并退出",
+                            },
+                        },
+                    },
+                },
+            },
+        )
+        saved = self.db.save_analysis_history(
+            result=result,
+            query_id="query_btc_execution_ladder_001",
+            report_type="full",
+            news_content="news",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.assertGreater(saved, 0)
+
+        markdown = HistoryService(self.db).get_markdown_report(str(saved))
+
+        self.assertIn("BTC 分步执行", markdown)
+        self.assertIn("0.25% 账户风险试仓", markdown)
+        self.assertIn("收盘站上 99200", markdown)
+        self.assertIn("小时线收盘跌破 97200", markdown)
+
     def test_history_markdown_returns_persisted_market_review_report(self) -> None:
         """Market review history should return the saved Markdown without rebuilding a stock report."""
         result = AnalysisResult(

@@ -151,6 +151,7 @@ def extract_and_persist_from_analysis_result(
         if payload is None:
             return None
         writer = service or DecisionSignalService()
+        payload = _apply_crypto_plan_freeze(payload, writer)
         return writer.create_signal(payload)
     except Exception as exc:
         logger.warning(
@@ -272,6 +273,9 @@ def _entry_values_from_strategy_plan(
     plan: Mapping[str, Any],
     sniper_points: Mapping[str, Any],
 ) -> tuple[Optional[float], Optional[float]]:
+    direction = str(plan.get("direction") or "").strip().lower()
+    if plan and (direction not in {"long", "short"} or not _is_intraday_plan_enabled(plan)):
+        return None, None
     zone_values = _positive_numbers(plan.get("entry_zone"))
     if len(zone_values) >= 2:
         return min(zone_values[0], zone_values[1]), max(zone_values[0], zone_values[1])
@@ -284,6 +288,71 @@ def _entry_values_from_strategy_plan(
     if entry_price is not None:
         return entry_price, None
     return sniper_points.get("ideal_buy"), sniper_points.get("secondary_buy")
+
+
+def _apply_crypto_plan_freeze(
+    payload: Dict[str, Any],
+    service: DecisionSignalService,
+) -> Dict[str, Any]:
+    """Keep an actionable BTC plan fixed until it expires or reverses direction."""
+
+    if payload.get("market") != "crypto":
+        return payload
+    stock_code = str(payload.get("stock_code") or "").strip()
+    horizon = payload.get("horizon")
+    if not stock_code or not horizon:
+        return payload
+
+    active = service.get_latest_active(
+        stock_code=stock_code,
+        market="crypto",
+        limit=20,
+    ).get("items", [])
+    same_horizon = [item for item in active if item.get("horizon") == horizon]
+    new_action = str(payload.get("action") or "").strip().lower()
+    new_direction = _signal_action_direction(new_action)
+
+    if new_direction is not None:
+        for item in same_horizon:
+            if _signal_action_direction(str(item.get("action") or "")) is None:
+                service.update_status(int(item["id"]), status="archived")
+
+    actionable = [
+        item
+        for item in same_horizon
+        if _signal_action_direction(str(item.get("action") or "")) is not None
+    ]
+    if not actionable:
+        return payload
+
+    frozen = min(
+        actionable,
+        key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)),
+    )
+    frozen_direction = _signal_action_direction(str(frozen.get("action") or ""))
+    if new_direction is not None and new_direction != frozen_direction:
+        return payload
+
+    metadata = dict(payload.get("metadata") or {})
+    metadata["plan_lifecycle"] = {
+        "state": "superseded_candidate",
+        "frozen_by_signal_id": frozen.get("id"),
+        "frozen_until": frozen.get("expires_at"),
+        "reason": "active_plan_still_valid",
+    }
+    payload = dict(payload)
+    payload["metadata"] = metadata
+    payload["status"] = "archived"
+    return payload
+
+
+def _signal_action_direction(action: str) -> Optional[str]:
+    normalized = str(action or "").strip().lower()
+    if normalized in {"buy", "add"}:
+        return "long"
+    if normalized in {"sell", "reduce"}:
+        return "short"
+    return None
 
 
 def _positive_numbers(value: Any) -> list[float]:
@@ -422,9 +491,12 @@ def _watch_conditions(dashboard: Mapping[str, Any], plan: Optional[Mapping[str, 
 
 
 def _strategy_plan_metadata(plan_key: Any, plan: Mapping[str, Any]) -> Dict[str, Any]:
+    execution_contract = _as_mapping(plan.get("execution_contract"))
+    contract_entry = _as_mapping(execution_contract.get("entry"))
     metadata = {
         "source": plan_key,
         "plan_type": plan.get("plan_type"),
+        "setup_type": contract_entry.get("setup_type") or plan.get("setup_type"),
         "direction": plan.get("direction"),
         "timeframe": plan.get("timeframe"),
         "analysis_timeframe": plan.get("analysis_timeframe"),

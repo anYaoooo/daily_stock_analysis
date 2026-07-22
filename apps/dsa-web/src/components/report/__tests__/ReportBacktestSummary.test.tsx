@@ -19,6 +19,7 @@ const historyRecord = {
     {
       planType: 'daily_long',
       horizon: 'daily',
+      setupType: 'breakout',
       analysisMode: 'daily',
       analysisTimeframe: '日线',
       direction: 'long',
@@ -39,6 +40,8 @@ const historyRecord = {
         engineVersion: 'btc-plan-v2',
         evalStatus: 'completed',
         entryPrice: 100000,
+        signalTriggered: true,
+        orderStatus: 'filled',
         entryTriggered: true,
         simulatedReturnPct: 1.25,
         trade: {
@@ -68,8 +71,12 @@ describe('ReportBacktestSummary', () => {
     expect(backtestApi.getHistoryRecord).toHaveBeenCalledWith(7);
     expect(await screen.findByText('计划级回测')).toBeInTheDocument();
     expect(screen.getByText('日线多单')).toBeInTheDocument();
+    expect(screen.getByText('突破')).toBeInTheDocument();
     expect(screen.getByText('盈利')).toBeInTheDocument();
     expect(screen.getByText('净收益 1.25%')).toBeInTheDocument();
+    expect(screen.getByText('信号 是')).toBeInTheDocument();
+    expect(screen.getByText('委托 已成交')).toBeInTheDocument();
+    expect(screen.getByText('成交 是')).toBeInTheDocument();
     expect(screen.getByText('净 PnL 125.00')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /回测页/ })).toHaveAttribute('href', '/backtest');
   });

@@ -235,6 +235,7 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                                 "execution_contract": {
                                     "version": "btc-execution-v1",
                                     "entry": {
+                                        "setup_type": "pullback",
                                         "logic": "all",
                                         "conditions": [{"type": "close_above", "value": 100500}],
                                         "confirmation_bars": 1,
@@ -396,6 +397,7 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                                 "execution_contract": {
                                     "version": "btc-execution-v1",
                                     "entry": {
+                                        "setup_type": "pullback",
                                         "logic": "all",
                                         "conditions": [{"type": "close_above", "value": 100000}],
                                         "confirmation_bars": 1,
@@ -430,9 +432,72 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
 
         self.assertEqual(item["backtest_status"], "completed")
         self.assertEqual(item["plans"][0]["backtest_status"], "win")
+        self.assertEqual(item["plans"][0]["setup_type"], "pullback")
         self.assertEqual(item["plans"][0]["execution_contract"]["version"], "btc-execution-v1")
         self.assertEqual(item["plans"][0]["risk_reward"], "1:2")
         self.assertEqual(item["plans"][0]["latest_result"]["trade"]["net_pnl"], 12.3)
+
+    def test_history_result_distinguishes_signal_from_fill_rejection(self):
+        analysis = AnalysisHistory(
+            id=13,
+            code="BTC",
+            raw_result=json.dumps(
+                {
+                    "dashboard": {
+                        "battle_plan": {
+                            "intraday_plan": {
+                                "enabled": True,
+                                "direction": "long",
+                                "entry_price": 100,
+                                "stop_loss": 95,
+                                "take_profit": 108,
+                                "execution_contract": {
+                                    "version": "btc-execution-v1",
+                                    "entry": {
+                                        "logic": "all",
+                                        "conditions": [{"type": "close_above", "value": 99}],
+                                        "confirmation_bars": 1,
+                                        "fill": "next_bar_open",
+                                        "max_wait_bars": 8,
+                                    },
+                                    "exit": {"max_holding_bars": 12},
+                                },
+                            }
+                        }
+                    }
+                }
+            ),
+            created_at=datetime(2026, 1, 1, 8),
+        )
+        result = CryptoBacktestResult(
+            analysis_history_id=13,
+            code="BTCUSDT",
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            engine_version="btc-plan-v5",
+            eval_status="completed",
+            outcome="no_entry",
+            signal_triggered=True,
+            signal_triggered_at=datetime(2026, 1, 1, 9),
+            order_status="rejected",
+            order_rejection_reason="risk_reward_below_minimum",
+            entry_triggered=False,
+            simulated_exit_reason="fill_quality_gate_rejected",
+            missed_favorable_move_pct=1.5,
+            missed_adverse_move_pct=0.4,
+            diagnostics_json=json.dumps({"triggered_at": "2026-01-01T09:00:00"}),
+        )
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+
+        item = service._history_record_to_dict(analysis, {(13, "intraday"): result})
+        latest = item["plans"][0]["latest_result"]
+
+        self.assertEqual(item["plans"][0]["backtest_status"], "signal_rejected")
+        self.assertTrue(latest["signal_triggered"])
+        self.assertFalse(latest["entry_triggered"])
+        self.assertEqual(latest["order_status"], "rejected")
+        self.assertEqual(latest["missed_favorable_move_pct"], 1.5)
 
     def test_indicator_tags_are_extracted_from_snapshot_for_intraday_plan(self):
         analysis = AnalysisHistory(

@@ -20,6 +20,7 @@ STRATEGY_PLAN_KEYS = (
     "entry_zone",
     "stop_loss",
     "take_profit",
+    "execution_ladder",
     "execution_contract",
     "trigger_condition",
     "invalidation",
@@ -40,6 +41,7 @@ INTRADAY_PLAN_KEYS = (
     "entry_zone",
     "stop_loss",
     "take_profit",
+    "execution_ladder",
     "execution_contract",
     "trigger_condition",
     "invalidation",
@@ -193,7 +195,7 @@ def _normalize_strategy_plan(value: Any) -> Optional[Dict[str, Any]]:
             raw_value = value.get(camel_key)
         if raw_value is None:
             continue
-        if key == "execution_contract" and isinstance(raw_value, Mapping):
+        if key in {"execution_contract", "execution_ladder"} and isinstance(raw_value, Mapping):
             normalized[key] = dict(raw_value)
             continue
         text = str(raw_value).strip()
@@ -222,7 +224,7 @@ def _normalize_intraday_plan(value: Any) -> Optional[Dict[str, Any]]:
             raw_value = value.get(camel_key)
         if raw_value is None:
             continue
-        if key == "execution_contract" and isinstance(raw_value, Mapping):
+        if key in {"execution_contract", "execution_ladder"} and isinstance(raw_value, Mapping):
             normalized[key] = dict(raw_value)
             continue
         if key == "enabled" and isinstance(raw_value, bool):

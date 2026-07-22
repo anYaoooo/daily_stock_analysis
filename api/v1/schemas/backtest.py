@@ -106,6 +106,10 @@ class CryptoBacktestResultItem(BaseModel):
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+    signal_triggered: Optional[bool] = None
+    signal_triggered_at: Optional[str] = None
+    order_status: Optional[str] = None
+    order_rejection_reason: Optional[str] = None
     entry_triggered: Optional[bool] = None
     entry_triggered_at: Optional[str] = None
     direction_correct: Optional[bool] = None
@@ -114,7 +118,10 @@ class CryptoBacktestResultItem(BaseModel):
     hit_take_profit: Optional[bool] = None
     first_hit: Optional[str] = None
     first_hit_at: Optional[str] = None
+    simulated_exit_reason: Optional[str] = None
     simulated_return_pct: Optional[float] = None
+    missed_favorable_move_pct: Optional[float] = None
+    missed_adverse_move_pct: Optional[float] = None
     trade: Dict[str, Any] = Field(default_factory=dict)
     execution: Dict[str, Any] = Field(default_factory=dict)
     diagnostics: Dict[str, Any] = Field(default_factory=dict)
@@ -123,6 +130,7 @@ class CryptoBacktestResultItem(BaseModel):
 class CryptoBacktestHistoryPlan(BaseModel):
     plan_type: str
     horizon: str
+    setup_type: Optional[str] = None
     analysis_mode: Optional[str] = None
     analysis_timeframe: Optional[str] = None
     direction: str

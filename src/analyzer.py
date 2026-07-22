@@ -1696,6 +1696,48 @@ def populate_decision_action_fields(
     return result
 
 
+def _validate_btc_execution_ladder(payload: dict[str, Any]) -> list[str]:
+    """Validate numeric invariants between an optional staged plan and its trade plan."""
+    if "execution_ladder" not in payload:
+        return []
+
+    ladder = payload.get("execution_ladder")
+    if not isinstance(ladder, dict):
+        return ["execution_ladder_invalid"]
+
+    errors: list[str] = []
+    current_action = str(ladder.get("current_action") or "").strip().lower()
+    if current_action not in {"trial", "wait"}:
+        errors.append("execution_ladder_current_action_invalid")
+
+    trial = ladder.get("trial_entry")
+    if not isinstance(trial, dict):
+        errors.append("execution_ladder_trial_entry_missing")
+    else:
+        plan_entry = parse_sniper_value(payload.get("entry_price"))
+        trial_entry = parse_sniper_value(trial.get("entry_price"))
+        if trial_entry is None:
+            errors.append("execution_ladder_trial_entry_price_missing")
+        elif plan_entry is not None and abs(plan_entry - trial_entry) > max(1e-6, abs(plan_entry) * 1e-8):
+            errors.append("execution_ladder_trial_entry_price_mismatch")
+
+    invalidation = ladder.get("invalidation")
+    if not isinstance(invalidation, dict):
+        errors.append("execution_ladder_invalidation_missing")
+    else:
+        stop_loss = parse_sniper_value(payload.get("stop_loss"))
+        invalidation_price = parse_sniper_value(invalidation.get("price"))
+        if invalidation_price is None:
+            errors.append("execution_ladder_invalidation_price_missing")
+        elif stop_loss is not None and abs(stop_loss - invalidation_price) > max(1e-6, abs(stop_loss) * 1e-8):
+            errors.append("execution_ladder_invalidation_price_mismatch")
+
+    confirmation_add = ladder.get("confirmation_add")
+    if not isinstance(confirmation_add, dict):
+        errors.append("execution_ladder_confirmation_add_missing")
+    return errors
+
+
 def align_btc_execution_plans(
     result: AnalysisResult,
     *,
@@ -1764,6 +1806,7 @@ def align_btc_execution_plans(
             ),
         )
         errors = CryptoBacktestEngine.validate_execution_plan(plan=plan, config=config)
+        errors.extend(_validate_btc_execution_ladder(payload))
         if not errors:
             payload["direction"] = direction
             valid_directions.add(direction)
@@ -2083,6 +2126,28 @@ class GeminiAnalyzer:
                 "entry_price": 多单入场价数值,
                 "stop_loss": 多单止损价数值,
                 "take_profit": 多单目标价数值,
+                "execution_ladder": {
+                    "scenario": "trend_pullback/liquidity_sweep_reversal/breakout_continuation/range_rejection/wait",
+                    "current_action": "trial/wait",
+                    "trial_entry": {
+                        "enabled": true,
+                        "entry_zone": "试仓价格区间",
+                        "entry_price": 试仓价数值,
+                        "trigger_condition": "试仓触发条件",
+                        "position_hint": "试仓仓位或账户风险预算"
+                    },
+                    "confirmation_add": {
+                        "enabled": true,
+                        "entry_price": 确认加仓价数值,
+                        "trigger_condition": "确认加仓条件",
+                        "position_hint": "确认后追加仓位或总风险预算"
+                    },
+                    "invalidation": {
+                        "price": 失效价数值,
+                        "condition": "失效条件",
+                        "action": "触发后撤销试仓或退出"
+                    }
+                },
                 "execution_contract": {
                     "version": "btc-execution-v1",
                     "instrument": {
@@ -2096,6 +2161,7 @@ class GeminiAnalyzer:
                         "margin_mode": "{crypto_execution_margin_mode}"
                     },
                     "entry": {
+                        "setup_type": "breakout",
                         "logic": "all",
                         "conditions": [
                             {"type": "close_above", "value": 多单确认价数值},
@@ -2124,6 +2190,28 @@ class GeminiAnalyzer:
                 "entry_price": 空单入场价数值,
                 "stop_loss": 空单止损价数值,
                 "take_profit": 空单目标价数值,
+                "execution_ladder": {
+                    "scenario": "trend_pullback/liquidity_sweep_reversal/breakout_continuation/range_rejection/wait",
+                    "current_action": "trial/wait",
+                    "trial_entry": {
+                        "enabled": true,
+                        "entry_zone": "试仓价格区间",
+                        "entry_price": 试仓价数值,
+                        "trigger_condition": "试仓触发条件",
+                        "position_hint": "试仓仓位或账户风险预算"
+                    },
+                    "confirmation_add": {
+                        "enabled": true,
+                        "entry_price": 确认加仓价数值,
+                        "trigger_condition": "确认加仓条件",
+                        "position_hint": "确认后追加仓位或总风险预算"
+                    },
+                    "invalidation": {
+                        "price": 失效价数值,
+                        "condition": "失效条件",
+                        "action": "触发后撤销试仓或退出"
+                    }
+                },
                 "execution_contract": {
                     "version": "btc-execution-v1",
                     "instrument": {
@@ -2137,6 +2225,7 @@ class GeminiAnalyzer:
                         "margin_mode": "{crypto_execution_margin_mode}"
                     },
                     "entry": {
+                        "setup_type": "breakout",
                         "logic": "all",
                         "conditions": [
                             {"type": "close_below", "value": 空单确认价数值},
@@ -2166,6 +2255,28 @@ class GeminiAnalyzer:
                 "entry_price": 小时线日内入场价数值或null,
                 "stop_loss": 小时线日内止损价数值或null,
                 "take_profit": 小时线日内目标价数值或null,
+                "execution_ladder": {
+                    "scenario": "trend_pullback/liquidity_sweep_reversal/breakout_continuation/range_rejection/wait",
+                    "current_action": "trial/wait",
+                    "trial_entry": {
+                        "enabled": true/false,
+                        "entry_zone": "试仓价格区间或等待",
+                        "entry_price": 试仓价数值或null,
+                        "trigger_condition": "试仓触发条件",
+                        "position_hint": "试仓仓位或账户风险预算"
+                    },
+                    "confirmation_add": {
+                        "enabled": true/false,
+                        "entry_price": 确认加仓价数值或null,
+                        "trigger_condition": "确认加仓条件",
+                        "position_hint": "确认后追加仓位或总风险预算"
+                    },
+                    "invalidation": {
+                        "price": 失效价数值或null,
+                        "condition": "失效条件",
+                        "action": "触发后撤销试仓或退出"
+                    }
+                },
                 "execution_contract": {
                     "version": "btc-execution-v1",
                     "instrument": {
@@ -2179,6 +2290,7 @@ class GeminiAnalyzer:
                         "margin_mode": "{crypto_execution_margin_mode}"
                     },
                     "entry": {
+                        "setup_type": "breakout",
                         "logic": "all",
                         "conditions": [
                             {"type": "close_above/close_below", "value": 日内确认价数值},
@@ -3623,13 +3735,15 @@ class GeminiAnalyzer:
 > BTC 冲突判定规则：当短线 Price Action 与中线 EMA/VWAP 冲突时，定义为“反弹/回调或短线推进”，不得直接升级为趋势反转；只有 Price Action、VWAP、EMA、Volume 至少三项同向确认，才可称为趋势延续或反转。
 > BTC 本轮分析模式：{mode_instruction}
 > BTC 双向交易要求：BTC 支持多单和空单，分析时必须同时评估 Long/多单与 Short/空单，不得只给多单买入视角。若多头条件更强，给出多单入场、止损、目标和失效条件；若空头条件更强，给出空单入场/做空开仓、止损、目标和失效条件；若多空都不满足，明确“不做多也不做空，等待确认”。
-> BTC 日线策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 只承载日线级主策略，必须同时输出，分别包含 `plan_type`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`execution_contract`、`trigger_condition`、`invalidation`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件和 `no_trade_reason`，不要省略该方向。
-> BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `plan_type`、`enabled`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`execution_contract`、`trigger_condition`、`invalidation`、`invalid_condition`、`daily_constraint`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件和 `no_trade_reason`。
-> BTC 可回测执行契约：所有 `direction=long/short` 且可交易的 BTC 计划必须同时输出 `execution_contract`，版本固定为 `btc-execution-v1`。`instrument` 必须完整保留系统给出的 `type`、`venue`、`symbol`、`market_symbol`、成交/触发/强平价格类型和保证金模式，不得把现货与永续互换。入场条件只允许 `close_above`、`close_below`、`volume_ratio_gte`、`volume_ratio_lte`、`close_above_vwap`、`close_below_vwap`；`logic` 固定为 `all`，`fill` 固定为 `next_bar_open`，并给出 `confirmation_bars`、`max_wait_bars` 和 `exit.max_holding_bars`。契约必须完整表达 `trigger_condition`，禁止把“站稳、放量、企稳”等额外条件只写在自然语言里。无法用这些原语完整表达时必须设为不交易，不得输出会被降级为触价成交的计划。
-> `execution_contract.entry.conditions[].type` 必须从上述单个枚举值中选择，禁止输出带 `/` 的组合占位字符串；多单通常使用 `close_above`/`close_above_vwap`，空单通常使用 `close_below`/`close_below_vwap`。
+> BTC 日线策略点位强制结构：`dashboard.battle_plan.long_plan` 和 `dashboard.battle_plan.short_plan` 只承载日线级主策略，必须同时输出，分别包含 `plan_type`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`execution_ladder`、`execution_contract`、`trigger_condition`、`invalidation`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。即使最终倾向一边，也要给出另一边的“仅在何条件触发”的备用计划；若某方向暂不满足，写清等待触发条件和 `no_trade_reason`，不要省略该方向。
+> BTC 小时线日内计划强制结构：如果存在小时线数据，必须输出 `dashboard.battle_plan.intraday_plan`，并明确 `plan_type`、`enabled`、`direction`、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`execution_ladder`、`execution_contract`、`trigger_condition`、`invalidation`、`invalid_condition`、`daily_constraint`、`risk_reward`、`position_hint`、`confidence`、`no_trade_reason`、`reason`。这个字段只承载 1 小时线日内交易建议，不得把日线主策略写进这里；如果没有日内机会，`enabled=false`、`direction="wait"`，并写清等待条件和 `no_trade_reason`。
+> BTC 分步执行要求：每个计划必须输出 `execution_ladder`，将交易动作拆为 `trial_entry`（试仓）、`confirmation_add`（确认加仓）和 `invalidation`（撤销/退出）。可交易计划的顶层 `entry_price`、`entry_zone`、`trigger_condition` 与 `execution_contract` 只表示试仓层，必须分别与 `trial_entry.entry_price`、`trial_entry.entry_zone`、`trial_entry.trigger_condition` 一致；`stop_loss` 必须与 `invalidation.price` 一致。确认加仓只能在试仓方向已验证后执行，不能用来替换试仓价或掩盖追价风险。`current_action` 只能是 `trial` 或 `wait`：价格已在试仓区且结构成立时写 `trial`，否则写 `wait` 并说明等待条件。`scenario` 只能是 `trend_pullback`、`liquidity_sweep_reversal`、`breakout_continuation`、`range_rejection` 或 `wait`。未触发时各层可设 `enabled=false`，但仍必须给出明确的等待价或失效价；不得把“观望”作为没有点位和条件的泛化结论。
+> BTC 可回测执行契约：所有 `direction=long/short` 且可交易的 BTC 计划必须同时输出 `execution_contract`，版本固定为 `btc-execution-v1`。`instrument` 必须完整保留系统给出的 `type`、`venue`、`symbol`、`market_symbol`、成交/触发/强平价格类型和保证金模式，不得把现货与永续互换。`entry.setup_type` 只能是 `breakout` 或 `pullback`。入场条件只允许 `close_above`、`close_below`、`low_lte`、`high_gte`、`volume_ratio_gte`、`volume_ratio_lte`、`close_above_vwap`、`close_below_vwap`；`logic` 固定为 `all`，`fill` 固定为 `next_bar_open`，并给出 `confirmation_bars`、`max_wait_bars` 和 `exit.max_holding_bars`。契约必须完整表达 `trigger_condition`，禁止把“站稳、放量、企稳”等额外条件只写在自然语言里。无法用这些原语完整表达时必须设为不交易，不得输出会被降级为触价成交的计划。
+> `execution_contract.entry.conditions[].type` 必须从上述单个枚举值中选择，禁止输出带 `/` 的组合占位字符串。`breakout` 多单通常使用 `close_above` + `volume_ratio_gte` + `close_above_vwap`，空单使用对应的向下条件；`pullback` 多单应使用 `low_lte` 触及支撑后配合 `close_above`/`close_above_vwap` 收回确认，空单使用 `high_gte` 触及压力后配合 `close_below`/`close_below_vwap`。
 > BTC 点位字段格式：`entry_price`、`stop_loss`、`take_profit` 只能填写单个正数，不得混入“突破、回踩、站稳、跌破”等说明文字；区间放入 `entry_zone`，确认逻辑放入 `trigger_condition`，失效说明放入 `invalid_condition`。
 > BTC 计划质量门槛：可交易计划必须满足多单 `stop_loss < entry_price < take_profit`、空单 `take_profit < entry_price < stop_loss`；计划风险收益比不得低于 1:{minimum_risk_reward:g}，目标空间还必须覆盖双边手续费、滑点和中性收益带，否则设为不交易。
-> BTC 量能与确认门槛：可交易计划必须包含 `volume_ratio_gte` 且阈值不得低于 {minimum_volume_ratio:g}；普通突破/跌破使用至少 2 根闭合 K 线确认。Price Action、VWAP、EMA、Volume 未达到至少三项同向，或日线/小时线方向处于 `wait_for_*`、均线 `mixed` 等冲突状态时，默认 `enabled=false`/等待确认，不得勉强给出入场计划。
+> BTC 计划选择规则：趋势已经明确但突破追价会让风险收益不足时，优先生成 `pullback` 计划并冻结支撑/压力、止损、目标和有效 bars，不得在后续报告中随着价格上涨持续抬高同一方向的触发价。只有原计划过期、失效或方向反转后才能启用新计划。
+> BTC 量能与确认门槛：`breakout` 计划必须包含 `volume_ratio_gte` 且阈值不得低于 {minimum_volume_ratio:g}，普通突破/跌破使用至少 2 根闭合 K 线确认；`pullback` 计划以触及关键位后收回为硬条件，量能只用于置信度和仓位降权，不强制作为硬门槛。Price Action、VWAP、EMA 未形成可解释结构，或日线/小时线方向处于 `wait_for_*` 等冲突状态时，默认 `enabled=false`/等待确认，不得勉强给出入场计划。
 > BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。
 > BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；为避免合约语义歧义，`buy` 仅表示 Long / 多单开仓或加多，`sell` 仅表示 Short / 空单开仓、加空或多单风控退出，`hold` 表示 Flat / 空仓等待、持仓观望或区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”；若是平空或平多，必须在文字中明确写“平空/平多”，不要只依赖 `buy`/`sell`。
 """

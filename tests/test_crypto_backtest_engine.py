@@ -36,10 +36,16 @@ class Bar:
 
 class CryptoBacktestEngineTestCase(unittest.TestCase):
     @staticmethod
-    def _contract(*conditions, max_wait_bars=8, max_holding_bars=12):
+    def _contract(
+        *conditions,
+        setup_type="breakout",
+        max_wait_bars=8,
+        max_holding_bars=12,
+    ):
         return {
             "version": "btc-execution-v1",
             "entry": {
+                "setup_type": setup_type,
                 "logic": "all",
                 "conditions": list(conditions),
                 "confirmation_bars": 1,
@@ -541,6 +547,151 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
         assert result["eval_status"] == "skipped"
         assert "volume_confirmation_below_minimum" in result["diagnostics"]["quality_errors"]
 
+    def test_v5_breakout_requires_volume_confirmation(self):
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            entry_price=100,
+            stop_loss=95,
+            take_profit=110,
+            raw_plan={},
+            execution_contract=self._perpetual_contract(
+                {"type": "close_above", "value": 99},
+            ),
+        )
+
+        result = CryptoBacktestEngine.evaluate_plan(
+            plan=plan,
+            forward_bars=[],
+            config=CryptoPlanBacktestConfig(engine_version="btc-plan-v5"),
+        )
+
+        assert result["eval_status"] == "skipped"
+        assert "missing_volume_confirmation" in result["diagnostics"]["quality_errors"]
+
+    def test_v5_long_pullback_triggers_without_volume_gate(self):
+        start = datetime(2026, 1, 1)
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            entry_price=100,
+            stop_loss=95,
+            take_profit=110,
+            raw_plan={},
+            execution_contract=self._perpetual_contract(
+                {"type": "low_lte", "value": 100},
+                {"type": "close_above", "value": 99},
+                setup_type="pullback",
+            ),
+        )
+        bars = [
+            self._perpetual_bar(
+                start,
+                trade_open=101,
+                trade_high=102,
+                trade_low=99,
+                trade_close=100,
+            ),
+            self._perpetual_bar(
+                start + timedelta(hours=1),
+                trade_open=100,
+                trade_high=111,
+                trade_low=99,
+                trade_close=110,
+            ),
+        ]
+
+        result = CryptoBacktestEngine.evaluate_plan(
+            plan=plan,
+            forward_bars=bars,
+            config=CryptoPlanBacktestConfig(
+                engine_version="btc-plan-v5",
+                slippage_bps=0,
+                maker_fee_rate_bps=0,
+                taker_fee_rate_bps=0,
+            ),
+        )
+
+        assert result["eval_status"] == "completed"
+        assert result["signal_triggered"] is True
+        assert result["entry_triggered"] is True
+        assert result["outcome"] == "win"
+
+    def test_v5_pullback_label_cannot_bypass_touch_confirmation(self):
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            entry_price=100,
+            stop_loss=95,
+            take_profit=110,
+            raw_plan={},
+            execution_contract=self._perpetual_contract(
+                {"type": "close_above", "value": 99},
+                setup_type="pullback",
+            ),
+        )
+
+        result = CryptoBacktestEngine.evaluate_plan(
+            plan=plan,
+            forward_bars=[],
+            config=CryptoPlanBacktestConfig(engine_version="btc-plan-v5"),
+        )
+
+        assert result["eval_status"] == "skipped"
+        assert "missing_pullback_touch_condition" in result["diagnostics"]["quality_errors"]
+
+    def test_v5_short_pullback_supports_high_touch_and_close_rejection(self):
+        start = datetime(2026, 1, 1)
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="short",
+            entry_price=100,
+            stop_loss=105,
+            take_profit=90,
+            raw_plan={},
+            execution_contract=self._perpetual_contract(
+                {"type": "high_gte", "value": 100},
+                {"type": "close_below", "value": 101},
+                setup_type="pullback",
+            ),
+        )
+        bars = [
+            self._perpetual_bar(
+                start,
+                trade_open=99,
+                trade_high=101,
+                trade_low=98,
+                trade_close=99,
+            ),
+            self._perpetual_bar(
+                start + timedelta(hours=1),
+                trade_open=100,
+                trade_high=101,
+                trade_low=89,
+                trade_close=90,
+            ),
+        ]
+
+        result = CryptoBacktestEngine.evaluate_plan(
+            plan=plan,
+            forward_bars=bars,
+            config=CryptoPlanBacktestConfig(
+                engine_version="btc-plan-v5",
+                slippage_bps=0,
+                maker_fee_rate_bps=0,
+                taker_fee_rate_bps=0,
+            ),
+        )
+
+        assert result["eval_status"] == "completed"
+        assert result["signal_triggered"] is True
+        assert result["entry_triggered"] is True
+        assert result["outcome"] == "win"
+
     def test_v5_cancels_fill_when_gap_breaks_plan_geometry(self):
         start = datetime(2026, 1, 1)
         plan = CryptoPlan(
@@ -583,8 +734,14 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
 
         assert result["eval_status"] == "completed"
         assert result["outcome"] == "no_entry"
+        assert result["signal_triggered"] is True
+        assert result["signal_triggered_at"] == start
+        assert result["order_status"] == "rejected"
+        assert "long_target_must_be_above_entry" in result["order_rejection_reason"]
         assert result["entry_triggered"] is False
         assert result["simulated_exit_reason"] == "fill_quality_gate_rejected"
+        assert result["missed_favorable_move_pct"] > 0
+        assert result["missed_adverse_move_pct"] > 0
         assert "long_target_must_be_above_entry" in result["diagnostics"]["quality_errors"]
 
     def test_v5_executes_plan_that_passes_quality_gates(self):
@@ -633,6 +790,9 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
         )
 
         assert result["eval_status"] == "completed"
+        assert result["signal_triggered"] is True
+        assert result["signal_triggered_at"] == start
+        assert result["order_status"] == "filled"
         assert result["entry_triggered"] is True
         assert result["simulated_exit_reason"] == "take_profit"
         assert result["outcome"] == "win"

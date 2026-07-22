@@ -6,7 +6,8 @@
 
 当前 BTC 回测系统评估的是历史 BTC 分析报告中给出的交易计划，而不是独立寻找交易信号。它回答的问题是：
 
-- 报告给出的多单、空单或日内计划是否在后续行情中触发入场。
+- 报告给出的多单、空单或日内计划是否在后续行情中形成交易信号。
+- 信号形成后，下一根 K 线的实际成交价是否仍满足风控，委托最终是成交还是被拒绝。
 - 入场后先触发止盈、止损，还是持有到评估窗口结束。
 - 在考虑手续费、滑点、仓位和风险预算后，该计划对账户权益的贡献是多少。
 - 多个历史计划累计后的胜率、收益、回撤和资金曲线如何。
@@ -42,9 +43,11 @@
 - `stop_loss`：止损价。
 - `take_profit`：止盈价。
 - `direction`：多/空方向，日内计划会额外检查 enabled 状态。
-- `execution_contract`：版本为 `btc-execution-v1` 的机器执行契约，完整表达收盘、量比、VWAP、确认 bars、等待 bars、成交方式和最长持有 bars。
+- `execution_contract`：版本为 `btc-execution-v1` 的机器执行契约，完整表达执行模板、价格触达、收盘、量比、VWAP、确认 bars、等待 bars、成交方式和最长持有 bars。
 
-计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。BTC 分析完成后会先复用 v5 的执行校验：不满足风险收益、成本覆盖、量能或执行契约要求的方案会直接降为 `direction=wait`，顶层操作建议同步改为观望并保留 `no_trade_reason`；因此展示为可交易的多空建议必须已经满足与回测相同的静态准入条件。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。v4 引入的标记价格、资金费率、强平与 maker/taker 成本在 v5 中继续保留；v5 额外增加计划价和实际成交价两阶段质量门槛，旧 v2/v3/v4 结果保留审计但不与 v5 指标混合。
+计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。新报告额外提供 `execution_ladder`，按试仓（`trial_entry`）、确认加仓（`confirmation_add`）和失效退出（`invalidation`）分步展示。顶层 `entry_price`、`entry_zone`、`trigger_condition` 和 `execution_contract` 始终对应试仓层，因此回测不把确认加仓当成第二笔模拟成交，也不会从自然语言猜测加仓条件；`stop_loss` 与 `invalidation.price` 使用同一失效位。`execution_contract.entry.setup_type` 支持 `breakout` 和 `pullback`：突破计划要求量能确认，回踩计划可用固定价格触达加收盘收复/承压表达，不强制要求量比门槛。BTC 分析完成后会先复用 v5 的执行校验：不满足风险收益、成本覆盖、量能或执行契约要求的方案会直接降为 `direction=wait`，顶层操作建议同步改为观望并保留 `no_trade_reason`；普通分析与 Agent 分析在落库前执行同一校验。因此展示为可交易的多空建议必须已经满足与回测相同的静态准入条件。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。v4 引入的标记价格、资金费率、强平与 maker/taker 成本在 v5 中继续保留；v5 额外增加计划价和实际成交价两阶段质量门槛，旧 v2/v3/v4 结果保留审计但不与 v5 指标混合。
+
+同一 BTC、同一周期、同一方向已有活动 DecisionSignal 时，新分析产生的同方向候选计划会归档，并记录冻结它的活动信号；只有原计划过期、失效或方向反转时才允许新计划接管。观望信号不会阻挡新的可交易计划。这个生命周期约束用于避免趋势行情中每次分析都抬高入场价，导致计划持续追价而永远无法触发。
 
 每个计划回测结果还会在 `diagnostics.indicator_tags` 中保存生成报告时的低敏 BTC 指标快照标签，当前包括：
 
@@ -93,10 +96,13 @@
 对每个计划，回测引擎只在闭合 K 线上执行 `execution_contract.entry.conditions`。当前支持：
 
 - `close_above` / `close_below`。
+- `low_lte` / `high_gte`。
 - `volume_ratio_gte` / `volume_ratio_lte`。
 - `close_above_vwap` / `close_below_vwap`。
 
-条件逻辑固定为 `all`。全部条件连续满足 `confirmation_bars` 后，计划在下一根 K 线开盘成交；触发 K 线不参与持仓止盈止损。超过 `max_wait_bars` 仍未确认时才记为 `no_entry`。评估窗口尚未结束时记为 `insufficient_data/provisional`，不参与胜率。
+条件逻辑固定为 `all`。突破模板通常用收盘越过关键位加量比确认；回踩模板可用多单 `low_lte + close_above` 或空单 `high_gte + close_below`，表达价格触及固定回踩位后重新收复或承压。全部条件连续满足 `confirmation_bars` 后形成信号，计划尝试在下一根 K 线开盘成交；触发 K 线不参与持仓止盈止损。超过 `max_wait_bars` 仍未确认时才记为 `no_entry`。评估窗口尚未结束时记为 `insufficient_data/provisional`，不参与胜率。
+
+信号形成不等于已经成交。v5 会用下一根开盘价重新检查止损/止盈几何、最低风险收益比和成本覆盖。若跳空后计划失真，则保留 `signal_triggered=true`，同时写入 `order_status=rejected`、拒单原因，以及拒单后评估窗口内的最大有利/不利波动；只有真实成交才写入 `entry_triggered=true`。这样可以区分“分析没有给出机会”和“机会出现但执行门槛过严或成交价恶化”。
 
 ### 4.3 出场规则
 
@@ -236,7 +242,12 @@ else:
 | `horizon` | `daily` / `intraday` |
 | `direction` | `long` / `short` / `wait` |
 | `eval_status` | `completed` / `skipped` / `insufficient_data` |
-| `entry_triggered` | 是否触发入场 |
+| `signal_triggered` | 交易条件是否已经成立 |
+| `order_status` | `filled` / `rejected` / `pending_fill` / `not_triggered` 等委托状态 |
+| `order_rejection_reason` | 信号成立但下一根实际成交价未通过风控时的拒单原因 |
+| `entry_triggered` | 是否已经实际模拟成交 |
+| `missed_favorable_move_pct` | 拒单后评估窗口内相对拒绝价的最大有利波动 |
+| `missed_adverse_move_pct` | 拒单后评估窗口内相对拒绝价的最大不利波动 |
 | `first_hit` | `take_profit` / `stop_loss` / `ambiguous` / `neither` |
 | `simulated_return_pct` | 单笔账户净收益率 |
 | `trade` | 仓位、成交价、手续费、净 PnL 等交易明细 |
@@ -285,8 +296,8 @@ else:
 | --- | --- |
 | `total_evaluations` | 回测尝试总数，包含不可评估和仍在等待数据的计划，不等同于有效样本数 |
 | `completed_count` | 完成评估数 |
-| `triggered_count` | 入场触发数 |
-| `no_entry_count` | 未触发入场数 |
+| `triggered_count` | 去除重叠持仓后的实际成交数 |
+| `no_entry_count` | 未实际成交数，可能包含未形成信号和信号后拒单 |
 | `skipped_count` | 跳过数 |
 | `insufficient_count` | 数据不足数 |
 | `win_count` | 胜数 |
@@ -295,6 +306,10 @@ else:
 | `direction_accuracy_pct` | 方向正确率 |
 | `win_rate_pct` | 胜率，胜 / (胜 + 负) |
 | `avg_simulated_return_pct` | 平均单笔账户净收益率 |
+| `diagnostics.signal_triggered_count` | 已形成交易信号的计划数 |
+| `diagnostics.rejected_order_count` | 信号形成后因成交价质量门槛被拒绝的委托数 |
+| `diagnostics.order_fill_rate_pct` | 实际成交数 / 信号形成数 |
+| `diagnostics.avg_missed_favorable_move_pct` | 拒单后最大有利波动的样本均值 |
 
 交易风险指标：
 
