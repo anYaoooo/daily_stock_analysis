@@ -1517,7 +1517,7 @@ Technical indicator rules use daily-close edge triggers only. Partial-bar handli
 
 ## BTC Opportunity-Triggered Analysis
 
-When `BTC_VOLATILITY_MONITOR_ENABLED=true`, schedule mode also registers the `btc_volatility_monitor` background task. It keeps a short real-time BTC price window and enters an active opportunity state when the absolute move reaches `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT`. It triggers one `analysis_mode=hourly` BTC analysis only after price continues in the same direction and satisfies `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` plus `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES`. The analysis is routed through the existing report notification path. It only generates analysis and entry plans; it does not place orders automatically.
+When `BTC_VOLATILITY_MONITOR_ENABLED=true`, schedule mode also registers the `btc_volatility_monitor` background task. It keeps a short real-time BTC price window: when the absolute move first reaches `BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT` (0.3% by default), it immediately sends a startup warning with the current price, full-move confirmation level, long/short confirmation price, and invalidation price, but does not recommend immediate entry. When the move reaches `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT`, it sends a market alert and enters an active opportunity state. It triggers one `analysis_mode=hourly` BTC analysis only after price continues in the same direction and satisfies `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` plus `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES`. The analysis is routed through the existing report notification path. It only generates analysis and entry plans; it does not place orders automatically.
 
 Opportunity-triggered hourly analysis receives `trigger_reason=entry_signal`, suggested trade direction, entry confirmation price, invalidation price, watched seconds, short-window direction, change percentage, current price, baseline price, threshold, and confirmation sample counts. Reports should treat this as intraday trigger/risk context and state that the current 1h candle may still be unfinished; a short-window shock must not be promoted directly into a daily trend reversal. If price reverses by `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT` during the watch state, or no confirmation appears within `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES`, the opportunity expires without triggering analysis.
 
@@ -1531,6 +1531,7 @@ BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true
 BTC_VOLATILITY_MONITOR_WS_STALE_SECONDS=20
 BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=15
 BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=1
+BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT=0.3
 BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
 BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
 BTC_VOLATILITY_MONITOR_SYMBOL=BTC

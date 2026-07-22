@@ -1678,7 +1678,7 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 ## BTC 交易机会触发分析
 
-`BTC_VOLATILITY_MONITOR_ENABLED=true` 后，schedule 模式会额外注册 `btc_volatility_monitor` 后台任务。它按实时 BTC 价格维护一个短窗口，窗口内绝对涨跌幅达到 `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT` 时先进入“机会观察”状态；只有价格继续沿同方向满足 `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` 和 `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES` 后，才会触发一次 `analysis_mode=hourly` 的 BTC 分析并走现有 report 通知路由。该能力只生成分析和进场计划，不会自动下单；真实交易仍需通过手动交易接口确认。
+`BTC_VOLATILITY_MONITOR_ENABLED=true` 后，schedule 模式会额外注册 `btc_volatility_monitor` 后台任务。它按实时 BTC 价格维护一个短窗口：绝对涨跌幅先达到 `BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT`（默认 0.3%）时，立即发送“启动预警”，显示当前价格、完整波动确认线、多/空确认价和失效价，但不建议立即下单；涨跌幅达到 `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT` 时，再发送一次行情警报并进入“机会观察”状态。只有价格继续沿同方向满足 `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` 和 `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES` 后，才会触发一次 `analysis_mode=hourly` 的 BTC 分析并走现有 report 通知路由。该能力只生成分析和进场计划，不会自动下单；真实交易仍需通过手动交易接口确认。
 
 交易机会触发的小时线分析会向分析上下文传入 `trigger_reason=entry_signal`、建议交易方向、入场确认价、失效价、观察秒数、短窗口方向、涨跌幅、当前价、基准价、阈值和确认采样信息。报告需要把这些信息解释为日内触发/风控上下文，并明确当前 1 小时 K 线可能尚未收线；短窗口冲击不能直接升级为日线趋势反转结论。若价格在观察期内反向触及 `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT`，或超过 `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES` 仍未确认，机会会失效且不会触发分析。
 
@@ -1694,6 +1694,7 @@ BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true
 BTC_VOLATILITY_MONITOR_WS_STALE_SECONDS=20
 BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=15
 BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=1
+BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT=0.3
 BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
 BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
 BTC_VOLATILITY_MONITOR_SYMBOL=BTC

@@ -1851,13 +1851,19 @@ class NotificationService(
     ) -> str:
         """Render BTC push content with only directional advice and technicals."""
         labels = get_report_labels(report_language)
-        signal_text, signal_emoji, _ = self._get_signal_level(result)
+        _, signal_emoji, _ = self._get_signal_level(result)
         stock_name = self._get_display_name(result, report_language)
         plans = extract_directional_strategy_plans(result)
         analysis_mode = normalize_analysis_mode(getattr(result, "analysis_mode", "daily"))
         timeframe_label = self._get_analysis_timeframe_label(result, report_language)
         is_hourly = analysis_mode == "hourly"
         strategy_heading = "日内建议" if is_hourly else "多空建议"
+        intraday = plans.get("intraday_plan")
+        intraday_waiting = is_hourly and self._btc_plan_is_waiting(intraday)
+        advice = localize_operation_advice(result.operation_advice, report_language)
+        if intraday_waiting:
+            strategy_heading = "行情状态"
+            advice = "行情已触发，等待明确价格确认" if report_language == "zh" else "Market move detected; wait for the stated price confirmation"
 
         lines = [
             f"## {signal_emoji} {stock_name} ({result.code}) {timeframe_label}分析",
@@ -1870,11 +1876,10 @@ class NotificationService(
             "",
             f"### {strategy_heading}",
             "",
-            f"**{signal_text}**: {localize_operation_advice(result.operation_advice, report_language)}",
+            f"**{advice}**",
             "",
         ]
 
-        intraday = plans.get("intraday_plan")
         if is_hourly:
             self._append_btc_plan(lines, "小时线日内计划（05 分更新）", intraday)
         else:
@@ -1913,9 +1918,8 @@ class NotificationService(
 
         lines.extend([f"#### {title}", ""])
         direction = cls._btc_plan_direction_label(plan.get("direction"), title)
-        enabled = plan.get("enabled")
         no_trade_reason = cls._clean_btc_plan_text(plan.get("no_trade_reason"))
-        is_waiting = enabled is False or direction == "观望" or bool(no_trade_reason)
+        is_waiting = cls._btc_plan_is_waiting(plan)
         lines.append(f"**状态：{'等待条件' if is_waiting else '可执行计划'}**")
         lines.append("")
         lines.append("**核心点位**")
@@ -1944,6 +1948,14 @@ class NotificationService(
             lines.extend(["", "**执行条件**"])
             lines.extend(f"- {label}：{value}" for label, value in cleaned_details)
         lines.append("")
+
+    @classmethod
+    def _btc_plan_is_waiting(cls, plan: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(plan, dict):
+            return False
+        direction = cls._btc_plan_direction_label(plan.get("direction"), "")
+        no_trade_reason = cls._clean_btc_plan_text(plan.get("no_trade_reason"))
+        return plan.get("enabled") is False or direction == "观望" or bool(no_trade_reason)
 
     @staticmethod
     def _btc_plan_direction_label(value: Any, title: str) -> str:

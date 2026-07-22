@@ -744,6 +744,7 @@ class Config:
     btc_volatility_monitor_ws_stale_seconds: int = 30
     btc_volatility_monitor_interval_seconds: int = 60
     btc_volatility_monitor_window_minutes: int = 5
+    btc_volatility_monitor_early_warning_pct: float = 0.3
     btc_volatility_monitor_threshold_pct: float = 1.0
     btc_volatility_monitor_cooldown_minutes: int = 30
     btc_volatility_monitor_symbol: str = "BTC"
@@ -1621,6 +1622,12 @@ class Config:
                 5,
                 field_name='BTC_VOLATILITY_MONITOR_WINDOW_MINUTES',
                 minimum=1,
+            ),
+            btc_volatility_monitor_early_warning_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT'),
+                0.3,
+                field_name='BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT',
+                minimum=0.1,
             ),
             btc_volatility_monitor_threshold_pct=parse_env_float(
                 os.getenv('BTC_VOLATILITY_MONITOR_THRESHOLD_PCT'),

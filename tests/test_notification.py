@@ -711,6 +711,39 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("### 多空建议", out)
 
     @mock.patch("src.notification.get_config")
+    def test_generate_btc_hourly_waiting_plan_leads_with_market_status(
+        self,
+        mock_get_config: mock.MagicMock,
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=45,
+            trend_prediction="震荡",
+            operation_advice="观望",
+            analysis_mode="hourly",
+            dashboard={
+                "battle_plan": {
+                    "intraday_plan": {
+                        "enabled": False,
+                        "direction": "wait",
+                        "trigger_condition": "收复 64226 做多，跌破 64070 做空",
+                        "no_trade_reason": "当前价格处于两个触发价之间",
+                    },
+                },
+            },
+        )
+
+        out = service.generate_single_stock_report(result)
+
+        self.assertIn("### 行情状态", out)
+        self.assertIn("**行情已触发，等待明确价格确认**", out)
+        self.assertIn("收复 64226 做多，跌破 64070 做空", out)
+        self.assertNotIn("### 日内建议", out)
+
+    @mock.patch("src.notification.get_config")
     def test_generate_btc_daily_report_uses_daily_schedule_template(
         self,
         mock_get_config: mock.MagicMock,

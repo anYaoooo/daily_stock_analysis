@@ -48,6 +48,7 @@ class BTCVolatilityMonitor:
         self._last_trigger_at: Optional[float] = None
         self._confirmation_direction: Optional[str] = None
         self._confirmation_count = 0
+        self._early_warning_direction: Optional[str] = None
         self._active_opportunity: Optional[ActiveOpportunity] = None
         self._last_quote_error_log_at: Optional[float] = None
 
@@ -56,6 +57,7 @@ class BTCVolatilityMonitor:
         stats: Dict[str, Any] = {
             "checked": 0,
             "triggered": 0,
+            "event_detected": 0,
             "suppressed": 0,
             "reason": "",
         }
@@ -87,6 +89,13 @@ class BTCVolatilityMonitor:
         threshold_pct = max(
             0.1,
             float(getattr(config, "btc_volatility_monitor_threshold_pct", 1.0) or 1.0),
+        )
+        early_warning_pct = min(
+            threshold_pct,
+            max(
+                0.1,
+                float(getattr(config, "btc_volatility_monitor_early_warning_pct", 0.3) or 0.3),
+            ),
         )
         confirmation_samples = max(
             1,
@@ -137,7 +146,9 @@ class BTCVolatilityMonitor:
 
         baseline = self._snapshots[0]
         change_pct = (snapshot.price - baseline.price) / baseline.price * 100
-        if abs(change_pct) < threshold_pct:
+        direction = "up" if change_pct > 0 else "down"
+        if abs(change_pct) < early_warning_pct:
+            self._early_warning_direction = None
             self._reset_confirmation()
             stats["reason"] = "below_threshold"
             stats.update(
@@ -150,7 +161,27 @@ class BTCVolatilityMonitor:
             )
             return stats
 
-        direction = "up" if change_pct > 0 else "down"
+        if abs(change_pct) < threshold_pct:
+            stats["reason"] = "early_warning_active"
+            if self._early_warning_direction != direction:
+                self._early_warning_direction = direction
+                stats["early_warning_detected"] = 1
+                stats["reason"] = "early_warning"
+                stats["trigger_reason"] = "early_warning"
+            stats.update(
+                self._early_warning_fields(
+                    snapshot=snapshot,
+                    baseline=baseline,
+                    change_pct=change_pct,
+                    threshold_pct=threshold_pct,
+                    early_warning_pct=early_warning_pct,
+                    entry_confirmation_pct=entry_confirmation_pct,
+                    invalidation_pct=invalidation_pct,
+                )
+            )
+            return stats
+
+        self._early_warning_direction = None
         self._active_opportunity = ActiveOpportunity(
             direction=direction,
             detected_at=now,
@@ -165,6 +196,11 @@ class BTCVolatilityMonitor:
         self._confirmation_count = 1
 
         stats["reason"] = "awaiting_confirmation"
+        # Reaching the threshold is itself user-visible market information. The
+        # scheduler sends this once immediately; a later confirmed entry still
+        # triggers the full hourly analysis below.
+        stats["event_detected"] = 1
+        stats["trigger_reason"] = "volatility_spike"
         stats.update(
             self._opportunity_fields(
                 snapshot=snapshot,
@@ -181,6 +217,52 @@ class BTCVolatilityMonitor:
         self._confirmation_direction = None
         self._confirmation_count = 0
         self._active_opportunity = None
+
+    @classmethod
+    def _early_warning_fields(
+        cls,
+        *,
+        snapshot: PriceSnapshot,
+        baseline: PriceSnapshot,
+        change_pct: float,
+        threshold_pct: float,
+        early_warning_pct: float,
+        entry_confirmation_pct: float,
+        invalidation_pct: float,
+    ) -> Dict[str, Any]:
+        """Expose the next confirmation levels before the full move completes."""
+        direction = "up" if change_pct > 0 else "down"
+        if direction == "up":
+            threshold_price = baseline.price * (1 + threshold_pct / 100)
+            entry_price = threshold_price * (1 + entry_confirmation_pct / 100)
+            invalidation_price = threshold_price * (1 - invalidation_pct / 100)
+            trade_direction = "long"
+        else:
+            threshold_price = baseline.price * (1 - threshold_pct / 100)
+            entry_price = threshold_price * (1 - entry_confirmation_pct / 100)
+            invalidation_price = threshold_price * (1 + invalidation_pct / 100)
+            trade_direction = "short"
+
+        fields = cls._market_fields(
+            snapshot=snapshot,
+            baseline=baseline,
+            change_pct=change_pct,
+            threshold_pct=threshold_pct,
+        )
+        fields.update(
+            {
+                "opportunity_state": "early_warning",
+                "early_warning_threshold_pct": round(early_warning_pct, 4),
+                "trade_direction": trade_direction,
+                "suggested_trade_action": f"watch_{trade_direction}_confirmation",
+                "threshold_price": round(threshold_price, 4),
+                "entry_confirmation_pct": round(entry_confirmation_pct, 4),
+                "entry_price": round(entry_price, 4),
+                "invalidation_pct": round(invalidation_pct, 4),
+                "invalidation_price": round(invalidation_price, 4),
+            }
+        )
+        return fields
 
     def _evaluate_active_opportunity(
         self,

@@ -64,6 +64,72 @@ _PUBLIC_BIND_HOSTS = frozenset({"0.0.0.0", "::", "[::]", "*"})
 _BTC_ANALYSIS_RUN_LOCK = threading.Lock()
 
 
+def _format_btc_volatility_alert(stats: Dict[str, Any]) -> str:
+    """Build a concise first-touch alert before the slower LLM analysis runs."""
+    direction = str(stats.get("direction") or "").strip().lower()
+    is_down = direction == "down"
+    is_early_warning = stats.get("trigger_reason") == "early_warning"
+    movement = "快速下跌" if is_down else "快速上涨"
+    next_action = "等待空单确认" if is_down else "等待多单确认"
+    entry_label = "空单确认价" if is_down else "多单确认价"
+    invalidation_label = "空头失效价" if is_down else "多头失效价"
+    price = stats.get("price", "--")
+    baseline = stats.get("baseline_price", "--")
+    change_pct = stats.get("change_pct", "--")
+    entry_price = stats.get("entry_price", "--")
+    invalidation_price = stats.get("invalidation_price", "--")
+    threshold_price = stats.get("threshold_price", "--")
+
+    if is_early_warning:
+        return "\n".join(
+            [
+                f"## BTC 启动预警：{movement}",
+                "",
+                f"- 当前价：{price} USDT（相对 {baseline}，{change_pct}%）",
+                f"- 状态：波动正在加速，暂不下单，先关注 {threshold_price} USDT 的 1% 确认线",
+                f"- {entry_label}：{entry_price} USDT",
+                f"- {invalidation_label}：{invalidation_price} USDT",
+            ]
+        )
+
+    return "\n".join(
+        [
+            f"## BTC 行情警报：{movement}",
+            "",
+            f"- 当前价：{price} USDT（相对 {baseline}，{change_pct}%）",
+            f"- 状态：{next_action}，不是泛泛观望",
+            f"- {entry_label}：{entry_price} USDT",
+            f"- {invalidation_label}：{invalidation_price} USDT",
+            "- 完整小时线交易计划将在连续确认后推送。",
+        ]
+    )
+
+
+def _send_btc_volatility_alert(args: argparse.Namespace, stats: Dict[str, Any]) -> None:
+    """Best-effort delivery: a notification failure must not stop monitoring."""
+    if getattr(args, "no_notify", False):
+        return
+    try:
+        from src.notification import NotificationService
+
+        direction = str(stats.get("direction") or "unknown").strip().lower()
+        opportunity_price = stats.get("opportunity_price") or stats.get("price") or "unknown"
+        result = NotificationService().send_with_results(
+            _format_btc_volatility_alert(stats),
+            route_type="alert",
+            severity="warning",
+            dedup_key=f"btc-volatility:{direction}:{opportunity_price}",
+            cooldown_key="btc-volatility-alert",
+        )
+        logger.info(
+            "[BTCVolatility] 首次波动警报发送: status=%s success=%s",
+            result.status,
+            result.success,
+        )
+    except Exception as exc:
+        logger.warning("[BTCVolatility] 首次波动警报发送失败，不影响后续确认: %s", exc)
+
+
 def _get_active_env_path() -> Path:
     env_file = os.getenv("ENV_FILE")
     if env_file:
@@ -1348,6 +1414,8 @@ def main() -> int:
                 def btc_volatility_monitor_task():
                     runtime_config = _reload_runtime_config()
                     stats = volatility_monitor.run_once(runtime_config)
+                    if stats.get("early_warning_detected") or stats.get("event_detected"):
+                        _send_btc_volatility_alert(args, stats)
                     if not stats.get("triggered"):
                         if stats.get("suppressed"):
                             logger.info(

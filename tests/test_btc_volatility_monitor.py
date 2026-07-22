@@ -13,6 +13,7 @@ def _config(**overrides):
         "btc_volatility_monitor_enabled": True,
         "btc_volatility_monitor_symbol": "BTC",
         "btc_volatility_monitor_window_minutes": 5,
+        "btc_volatility_monitor_early_warning_pct": 0.3,
         "btc_volatility_monitor_threshold_pct": 1.0,
         "btc_volatility_monitor_cooldown_minutes": 30,
         "btc_volatility_monitor_confirmation_samples": 2,
@@ -38,9 +39,12 @@ def test_btc_volatility_monitor_triggers_when_window_move_exceeds_threshold() ->
 
     assert warmup["reason"] == "warming_up"
     assert awaiting_confirmation["reason"] == "awaiting_confirmation"
+    assert awaiting_confirmation["event_detected"] == 1
+    assert awaiting_confirmation["trigger_reason"] == "volatility_spike"
     assert awaiting_confirmation["confirmation_count"] == 1
     assert awaiting_confirmation["confirmation_required"] == 2
     assert triggered["triggered"] == 1
+    assert triggered["event_detected"] == 0
     assert triggered["reason"] == "entry_signal"
     assert triggered["trigger_reason"] == "entry_signal"
     assert triggered["direction"] == "up"
@@ -72,6 +76,28 @@ def test_btc_volatility_monitor_suppresses_retrigger_during_cooldown() -> None:
     assert second["triggered"] == 0
     assert second["suppressed"] == 1
     assert second["reason"] == "cooldown"
+
+
+def test_btc_volatility_monitor_sends_one_early_warning_before_full_threshold() -> None:
+    prices = iter([100.0, 99.6, 99.5])
+    times = iter([1000.0, 1060.0, 1120.0])
+    monitor = BTCVolatilityMonitor(
+        quote_fetcher=lambda _symbol: {"price": next(prices)},
+        now_provider=lambda: next(times),
+    )
+
+    monitor.run_once(_config())
+    early_warning = monitor.run_once(_config())
+    still_active = monitor.run_once(_config())
+
+    assert early_warning["reason"] == "early_warning"
+    assert early_warning["early_warning_detected"] == 1
+    assert early_warning["trigger_reason"] == "early_warning"
+    assert early_warning["threshold_price"] == 99.0
+    assert early_warning["entry_price"] == 98.802
+    assert early_warning["invalidation_price"] == 99.495
+    assert still_active["reason"] == "early_warning_active"
+    assert not still_active.get("early_warning_detected")
 
 
 def test_btc_volatility_monitor_prunes_old_baseline() -> None:

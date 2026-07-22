@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] BTC 波动监控新增 0.3% 默认启动预警，在完整阈值前推送确认线、确认价和失效价；连续确认后仍发送完整小时线交易计划，小时线等待计划首屏改为行情状态而非泛化观望。
 - [修复] BTC 分析在落库前复用 `btc-plan-v5` 执行校验；不满足风险收益、成本覆盖、量能或契约要求的多空方案会降为观望并说明原因，避免报告给出不可交易且不可回测的建议。
 - [修复] BTC 技术分析将当前未闭合日线/小时线从 EMA、VWAP、量比、ATR、突破和事件识别中剔除，并以独立 `live_partial_bar` 元数据保留实时价格，避免盘初成交量被误判为极度缩量。
 - [改进] `POST /api/v1/analysis/analyze` 统一接受并规范 `BTC`、`BTCUSDT`、`BTC-USD`、`BTC/USD`、`BTCUSD`，在任务队列前拒绝全部非 BTC 输入，Web 首页提交同步使用同一契约。

@@ -464,6 +464,72 @@ class MainScheduleModeTestCase(unittest.TestCase):
                 },
             )
 
+    def test_schedule_mode_sends_an_immediate_alert_when_btc_starts_accelerating(self) -> None:
+        args = self._make_args(schedule=True)
+        config = self._make_config(
+            schedule_enabled=False,
+            btc_volatility_monitor_enabled=True,
+        )
+        monitor = MagicMock()
+        monitor.run_once.return_value = {
+            "triggered": 0,
+            "early_warning_detected": 1,
+            "reason": "early_warning",
+            "trigger_reason": "early_warning",
+            "direction": "down",
+            "price": 64800,
+            "baseline_price": 65000,
+            "change_pct": -0.3077,
+            "threshold_price": 64350,
+            "entry_price": 64221.3,
+            "invalidation_price": 64671.75,
+        }
+        scheduled_call = {}
+
+        def fake_run_with_schedule(
+            task,
+            schedule_time,
+            run_immediately,
+            background_tasks=None,
+            schedule_time_provider=None,
+            schedule_mode="daily",
+        ):
+            scheduled_call["background_tasks"] = background_tasks or []
+
+        with patch("main.parse_arguments", return_value=args), \
+             patch("main.get_config", return_value=config), \
+             patch.object(main, "_reload_runtime_config", return_value=config), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
+             patch("main.setup_logging"), \
+             patch("main.run_full_analysis") as run_full_analysis, \
+             patch("main._send_btc_volatility_alert") as send_alert, \
+             patch("src.services.btc_volatility_monitor.BTCVolatilityMonitor", return_value=monitor), \
+             patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
+            self.assertEqual(main.main(), 0)
+            scheduled_call["background_tasks"][1]["task"]()
+
+        send_alert.assert_called_once_with(args, monitor.run_once.return_value)
+        run_full_analysis.assert_not_called()
+
+    def test_btc_volatility_alert_states_confirmation_and_invalidation_prices(self) -> None:
+        content = main._format_btc_volatility_alert(
+            {
+                "direction": "down",
+                "trigger_reason": "early_warning",
+                "price": 64800,
+                "baseline_price": 65000,
+                "change_pct": -0.3077,
+                "threshold_price": 64350,
+                "entry_price": 64221.3,
+                "invalidation_price": 64671.75,
+            }
+        )
+
+        self.assertIn("BTC 启动预警：快速下跌", content)
+        self.assertIn("1% 确认线", content)
+        self.assertIn("空单确认价：64221.3 USDT", content)
+        self.assertIn("空头失效价：64671.75 USDT", content)
+
     def test_schedule_mode_uses_websocket_quote_fetcher_when_enabled(self) -> None:
         args = self._make_args(schedule=True)
         config = self._make_config(
