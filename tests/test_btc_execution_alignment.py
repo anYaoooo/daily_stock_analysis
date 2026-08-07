@@ -181,6 +181,50 @@ def test_validation_failure_preserves_original_advice() -> None:
     assert aligned.action == "reduce"
 
 
+def test_late_volatility_trigger_disables_immediate_intraday_entry() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=70,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="买入",
+        decision_type="buy",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "long",
+                    "entry_price": 102.3,
+                    "execution_ladder": {
+                        "current_action": "trial",
+                        "trial_entry": {"enabled": True, "entry_price": 102.3},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        trigger_context={
+            "entry_executable_now": 0,
+            "impulse_stage": "late_extension",
+            "price": 102.3,
+            "no_chase_price": 101.7,
+        },
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["enabled"] is False
+    assert plan["direction"] == "wait"
+    assert plan["trigger_execution_state"] == "late_extension"
+    assert "不具备可执行试仓条件" in plan["no_trade_reason"]
+    assert plan["execution_ladder"]["current_action"] == "wait"
+    assert plan["execution_ladder"]["trial_entry"]["enabled"] is False
+
+
 def test_analyze_aligns_execution_plans_for_crypto_context() -> None:
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
     config = SimpleNamespace(
@@ -212,4 +256,8 @@ def test_analyze_aligns_execution_plans_for_crypto_context() -> None:
         result = analyzer.analyze({"code": "BTCUSDT", "stock_name": "Bitcoin", "market": "crypto"})
 
     assert result is parsed_result
-    mock_align.assert_called_once_with(parsed_result, runtime_config=config)
+    mock_align.assert_called_once_with(
+        parsed_result,
+        runtime_config=config,
+        trigger_context=None,
+    )

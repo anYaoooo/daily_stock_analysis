@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: docs
+title: BTC 智能分析系统文档与静态资源
+scope:
+    - docs/
+source_files: []
+depends_on: []
+related_to:
+    - path: api_server/v1_router
+    - path: bot_system

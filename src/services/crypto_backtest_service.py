@@ -19,6 +19,7 @@ from src.core.crypto_backtest_engine import (
     CryptoPlan,
     CryptoPlanBacktestConfig,
 )
+from src.services.crypto_market_data_service import CryptoMarketDataService
 from src.repositories.crypto_backtest_repo import CryptoBacktestRepository
 from src.schemas.crypto_instrument import resolve_crypto_instrument
 from src.storage import (
@@ -76,6 +77,7 @@ class CryptoBacktestService:
             fetch_max_pages=int(getattr(config, "crypto_market_fetch_max_pages", 200)),
             fetch_retry_count=int(getattr(config, "crypto_market_fetch_retry_count", 2)),
         )
+        self.market_data = CryptoMarketDataService(db_manager=self.db, fetcher=self.fetcher)
 
     def run_backtest(
         self,
@@ -814,16 +816,12 @@ class CryptoBacktestService:
         key = (normalized_code, instrument_type, venue, period, int(days))
         if key not in cache:
             fetched_at = datetime.now(timezone.utc)
-            if instrument_type == "perpetual":
-                df = self.fetcher.get_perpetual_kline_data(
-                    normalized_code,
-                    period=period,
-                    days=int(days),
-                    venue=venue,
-                    margin_mode=str(instrument.get("margin_mode") or "isolated"),
-                )
-            else:
-                df = self.fetcher.get_kline_data(normalized_code, period=period, days=int(days))
+            df = self.market_data.get_bars(
+                normalized_code,
+                period=period,
+                days=int(days),
+                instrument=instrument,
+            )
             bars = self._bars_from_dataframe(df, period=period)
             bars = [
                 bar

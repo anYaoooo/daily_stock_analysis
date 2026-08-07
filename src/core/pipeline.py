@@ -83,7 +83,7 @@ from src.core.trading_calendar import (
     get_market_now,
     is_market_open,
 )
-from data_provider.crypto_fetcher import CryptoFetcher, is_crypto_code
+from data_provider.crypto_fetcher import is_crypto_code
 from data_provider.crypto_derivatives_fetcher import CryptoDerivativesFetcher
 from data_provider.crypto_macro_fetcher import CryptoMacroContextFetcher
 from data_provider.us_index_mapping import is_us_stock_code
@@ -480,7 +480,13 @@ class StockAnalysisPipeline:
                     hourly_df = None
                     if is_crypto_code(code):
                         try:
-                            hourly_df = CryptoFetcher().get_kline_data(code, period="hourly", days=7)
+                            from src.services.crypto_market_data_service import CryptoMarketDataService
+
+                            hourly_df = CryptoMarketDataService(db_manager=self.db).get_bars(
+                                code,
+                                period="hourly",
+                                days=7,
+                            )
                         except Exception as exc:
                             logger.warning("%s(%s) BTC 小时线数据获取失败，仅使用日线分析: %s", stock_name, code, exc)
                     crypto_technical_context = build_crypto_multi_timeframe_context(df, hourly_df, code)
@@ -755,7 +761,11 @@ class StockAnalysisPipeline:
                     previous_operation_advice=action_source_advice,
                 )
                 if is_crypto_code(code):
-                    align_btc_execution_plans(result, runtime_config=self.config)
+                    align_btc_execution_plans(
+                        result,
+                        runtime_config=self.config,
+                        trigger_context=enhanced_context.get("trigger_context"),
+                    )
 
             # Step 8: 保存分析历史记录
             if result and result.success:
@@ -1367,7 +1377,11 @@ class StockAnalysisPipeline:
                     previous_operation_advice=action_source_advice,
                 )
                 if is_crypto_code(code):
-                    align_btc_execution_plans(result, runtime_config=self.config)
+                    align_btc_execution_plans(
+                        result,
+                        runtime_config=self.config,
+                        trigger_context=initial_context.get("trigger_context"),
+                    )
 
             resolved_stock_name = result.name if result and result.name else stock_name
 

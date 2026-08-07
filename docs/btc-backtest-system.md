@@ -22,6 +22,7 @@
 | `src/core/crypto_backtest_engine.py` | 核心算法：入场触发、止盈止损、交易成本、仓位、收益和风险指标计算 |
 | `src/repositories/crypto_backtest_repo.py` | 数据访问：候选记录、结果保存、分页查询、汇总 upsert |
 | `src/storage.py` | ORM 表：`crypto_backtest_results`、`crypto_backtest_summaries` |
+| `src/services/crypto_market_data_service.py` | 本地优先的闭合 K 线访问：SQLite 缓存完整覆盖时直接读取；范围缺失时通过现有 `CryptoFetcher` 同步并保存快照元数据。 |
 | `api/v1/endpoints/backtest.py` | API：运行 BTC 回测、查询结果、查询表现 |
 | `api/v1/schemas/backtest.py` | API 返回结构：结果项、汇总指标、资金曲线和交易明细 |
 

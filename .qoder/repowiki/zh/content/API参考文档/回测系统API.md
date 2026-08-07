@@ -9,6 +9,7 @@
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 - [src/services/task_service.py](file://src/services/task_service.py)
+- [src/services/crypto_backtest_service.py](file://src/services/crypto_backtest_service.py)
 - [strategies/bull_trend.yaml](file://strategies/bull_trend.yaml)
 - [strategies/box_oscillation.yaml](file://strategies/box_oscillation.yaml)
 - [strategies/bottom_volume.yaml](file://strategies/bottom_volume.yaml)
@@ -20,7 +21,16 @@
 - [strategies/wave_theory.yaml](file://strategies/wave_theory.yaml)
 - [tests/test_backtest_service.py](file://tests/test_backtest_service.py)
 - [tests/test_backtest_engine.py](file://tests/test_backtest_engine.py)
+- [tests/test_crypto_backtest_task_api.py](file://tests/test_crypto_backtest_task_api.py)
 </cite>
+
+## 更新摘要
+**所做更改**
+- 新增异步回测API章节，详细说明 `/crypto/run-selected-async` 和 `/crypto/tasks/{task_id}` 端点
+- 更新任务队列架构，增加后台任务处理机制
+- 增强参数验证功能，添加 `_validate_selected_plan_types` 函数
+- 更新性能考量部分，说明批量回测的异步处理方案
+- 新增异步任务状态跟踪和进度监控指南
 
 ## 目录
 1. [简介](#简介)
@@ -36,11 +46,13 @@
 
 ## 简介
 本文件面向回测系统的API使用者与集成方，系统化说明回测任务的提交、执行状态查询与结果获取的完整流程。文档覆盖以下要点：
-- 回测任务提交接口与参数规范（含策略定义格式）
+- 同步与异步回测任务提交接口与参数规范（含策略定义格式）
 - 异步任务处理、进度跟踪与错误恢复机制
 - 回测引擎与指标计算方法
 - 结果数据结构与数据分析指南
 - 常见配置示例与最佳实践
+
+**更新** 新增了针对大批量回测的异步处理机制，通过后台任务队列解决HTTP请求超时问题。
 
 ## 项目结构
 回测相关代码主要分布在以下模块：
@@ -61,12 +73,15 @@ subgraph "服务层"
 TQ["task_queue.py<br/>任务队列"]
 TS["task_service.py<br/>任务编排"]
 BS["backtest_service.py<br/>回测服务"]
+CBS["crypto_backtest_service.py<br/>BTC回测服务"]
 end
 subgraph "引擎层"
 BE["backtest_engine.py<br/>回测引擎"]
+CBE["crypto_backtest_engine.py<br/>BTC回测引擎"]
 end
 subgraph "存储层"
 BR["backtest_repo.py<br/>任务与结果存储"]
+CBR["crypto_backtest_repo.py<br/>BTC结果存储"]
 end
 subgraph "策略库"
 Y1["bull_trend.yaml"]
@@ -81,11 +96,16 @@ Y9["box_oscillation.yaml"]
 end
 A --> S
 A --> BS
+A --> CBS
 BS --> TQ
 BS --> TS
 BS --> BE
 BS --> BR
+CBS --> TQ
+CBS --> CBE
+CBS --> CBR
 BE --> BR
+CBE --> CBR
 TQ --> TS
 TS --> BR
 Y1 -.-> BE
@@ -103,48 +123,33 @@ Y9 -.-> BE
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
 - [api/v1/schemas/backtest.py](file://api/v1/schemas/backtest.py)
 - [src/services/backtest_service.py](file://src/services/backtest_service.py)
+- [src/services/crypto_backtest_service.py](file://src/services/crypto_backtest_service.py)
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 - [src/services/task_service.py](file://src/services/task_service.py)
 - [src/core/backtest_engine.py](file://src/core/backtest_engine.py)
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
-- [strategies/bull_trend.yaml](file://strategies/bull_trend.yaml)
-- [strategies/volume_breakout.yaml](file://strategies/volume_breakout.yaml)
-- [strategies/bottom_volume.yaml](file://strategies/bottom_volume.yaml)
-- [strategies/emotion_cycle.yaml](file://strategies/emotion_cycle.yaml)
-- [strategies/growth_quality.yaml](file://strategies/growth_quality.yaml)
-- [strategies/one_yang_three_yin.yaml](file://strategies/one_yang_three_yin.yaml)
-- [strategies/shrink_pullback.yaml](file://strategies/shrink_pullback.yaml)
-- [strategies/wave_theory.yaml](file://strategies/wave_theory.yaml)
-- [strategies/box_oscillation.yaml](file://strategies/box_oscillation.yaml)
 
 **章节来源**
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
 - [api/v1/schemas/backtest.py](file://api/v1/schemas/backtest.py)
 - [src/services/backtest_service.py](file://src/services/backtest_service.py)
+- [src/services/crypto_backtest_service.py](file://src/services/crypto_backtest_service.py)
 - [src/core/backtest_engine.py](file://src/core/backtest_engine.py)
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 - [src/services/task_service.py](file://src/services/task_service.py)
-- [strategies/bull_trend.yaml](file://strategies/bull_trend.yaml)
-- [strategies/volume_breakout.yaml](file://strategies/volume_breakout.yaml)
-- [strategies/bottom_volume.yaml](file://strategies/bottom_volume.yaml)
-- [strategies/emotion_cycle.yaml](file://strategies/emotion_cycle.yaml)
-- [strategies/growth_quality.yaml](file://strategies/growth_quality.yaml)
-- [strategies/one_yang_three_yin.yaml](file://strategies/one_yang_three_yin.yaml)
-- [strategies/shrink_pullback.yaml](file://strategies/shrink_pullback.yaml)
-- [strategies/wave_theory.yaml](file://strategies/wave_theory.yaml)
-- [strategies/box_oscillation.yaml](file://strategies/box_oscillation.yaml)
 
 ## 核心组件
 - 路由与模型（API层）
   - 负责接收HTTP请求、校验入参、返回统一响应结构
-  - 关键职责：任务提交、状态查询、结果拉取、分页与过滤
+  - 关键职责：同步/异步任务提交、状态查询、结果拉取、分页与过滤
 - 回测服务（Service层）
   - 编排任务生命周期：创建、入队、执行、完成、失败重试
   - 协调引擎与存储，封装业务规则
 - 任务队列与服务（Task层）
   - 提供异步执行能力，支持优先级、限流、重试
   - 维护任务状态机与进度上报
+  - 支持后台任务执行，避免HTTP请求阻塞
 - 回测引擎（Engine层）
   - 加载策略与数据，执行交易模拟，计算指标
   - 输出标准化结果集
@@ -152,17 +157,20 @@ Y9 -.-> BE
   - 持久化任务元数据、执行日志、结果快照
   - 提供查询与导出能力
 
+**更新** 新增了后台任务队列机制，专门处理大批量回测任务，通过异步方式避免HTTP请求超时。
+
 **章节来源**
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
 - [api/v1/schemas/backtest.py](file://api/v1/schemas/backtest.py)
 - [src/services/backtest_service.py](file://src/services/backtest_service.py)
+- [src/services/crypto_backtest_service.py](file://src/services/crypto_backtest_service.py)
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 - [src/services/task_service.py](file://src/services/task_service.py)
 - [src/core/backtest_engine.py](file://src/core/backtest_engine.py)
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
 
 ## 架构总览
-下图展示从客户端发起回测请求到结果获取的端到端流程，包括异步任务与进度跟踪。
+下图展示从客户端发起回测请求到结果获取的端到端流程，包括同步和异步两种模式。
 
 ```mermaid
 sequenceDiagram
@@ -173,25 +181,29 @@ participant Queue as "任务队列(task_queue.py)"
 participant TaskSvc as "任务服务(task_service.py)"
 participant Engine as "回测引擎(backtest_engine.py)"
 participant Repo as "存储(backtest_repo.py)"
-Client->>API : "POST /backtest/tasks"
-API->>Service : "校验并创建任务"
-Service->>Repo : "持久化任务元数据"
-Service->>Queue : "入队执行"
-Queue-->>Client : "返回任务ID"
-Client->>TaskSvc : "GET /backtest/tasks/{id}/status"
-TaskSvc-->>Client : "任务状态与进度"
-Queue->>TaskSvc : "触发执行"
-TaskSvc->>Engine : "加载策略与数据并执行"
-Engine->>Repo : "写入中间结果/日志"
-Engine-->>TaskSvc : "执行完成或异常"
-TaskSvc->>Repo : "更新最终状态与结果"
-Client->>TaskSvc : "GET /backtest/tasks/{id}/result"
-TaskSvc-->>Client : "返回结果数据"
+Note over Client,Repo : 同步模式
+Client->>API : "POST /crypto/run-selected"
+API->>Service : "同步执行回测"
+Service->>Engine : "执行回测"
+Engine->>Repo : "保存结果"
+Service-->>Client : "返回执行结果"
+Note over Client,Repo : 异步模式
+Client->>API : "POST /crypto/run-selected-async"
+API->>Queue : "提交后台任务"
+Queue-->>Client : "返回task_id"
+Client->>API : "GET /crypto/tasks/{task_id}"
+API->>Queue : "查询任务状态"
+Queue-->>Client : "返回状态与进度"
+Queue->>Service : "触发后台执行"
+Service->>Engine : "执行回测"
+Engine->>Repo : "保存结果"
+Queue-->>Client : "推送完成通知"
 ```
 
 **图表来源** 
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
 - [src/services/backtest_service.py](file://src/services/backtest_service.py)
+- [src/services/crypto_backtest_service.py](file://src/services/crypto_backtest_service.py)
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 - [src/services/task_service.py](file://src/services/task_service.py)
 - [src/core/backtest_engine.py](file://src/core/backtest_engine.py)
@@ -201,12 +213,14 @@ TaskSvc-->>Client : "返回结果数据"
 
 ### 回测API路由与模型
 - 路由职责
-  - 提交回测任务：接收策略、标的、时间范围、资金等参数，返回任务ID
-  - 查询任务状态：返回运行中、排队、成功、失败等状态及进度
-  - 获取结果：返回标准化结果结构（收益曲线、持仓、成交明细、指标摘要）
+  - 同步回测任务：接收策略、标的、时间范围、资金等参数，直接返回执行结果
+  - 异步回测任务：提交后台任务并立即返回task_id，避免长时间等待
+  - 任务状态查询：返回运行中、排队、成功、失败等状态及进度
+  - 结果获取：返回标准化结果结构（收益曲线、持仓、成交明细、指标摘要）
 - 模型校验
   - 使用Pydantic模型对请求体进行强类型校验与默认值填充
   - 对策略字段、时间范围、标的列表等进行约束检查
+  - 新增计划类型验证，确保只接受支持的策略类型
 
 ```mermaid
 classDiagram
@@ -218,28 +232,84 @@ class BacktestRequest {
 +decimal initial_capital
 +object parameters
 }
-class BacktestStatusResponse {
+class CryptoBacktestSelectedRunRequest {
++int[] analysis_history_ids
++string[] plan_types
++bool force
+}
+class CryptoBacktestTaskAccepted {
 +string task_id
-+enum status
-+int progress_percent
++string status
 +string message
 }
-class BacktestResultResponse {
-+object summary
-+array trades
-+array equity_curve
-+map metrics
+class CryptoBacktestTaskStatus {
++string task_id
++string status
++int progress_percent
++string message
++CryptoBacktestRunResponse result
++string error
 }
-BacktestRequest <.. BacktestStatusResponse : "用于生成任务"
-BacktestStatusResponse <.. BacktestResultResponse : "成功后可拉取"
+BacktestRequest <.. CryptoBacktestTaskStatus : "用于生成任务"
+CryptoBacktestTaskAccepted <.. CryptoBacktestTaskStatus : "状态查询"
 ```
 
 **图表来源** 
 - [api/v1/schemas/backtest.py](file://api/v1/schemas/backtest.py)
 
+**更新** 新增了异步任务相关的请求和响应模型，支持任务ID管理和状态跟踪。
+
 **章节来源**
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
 - [api/v1/schemas/backtest.py](file://api/v1/schemas/backtest.py)
+
+### 异步回测API（新增功能）
+- 异步任务提交
+  - 端点：`POST /crypto/run-selected-async`
+  - 功能：提交大批量回测任务到后台队列，立即返回task_id
+  - 优势：避免HTTP请求超时，支持大规模数据处理
+- 任务状态查询
+  - 端点：`GET /crypto/tasks/{task_id}`
+  - 功能：查询任务执行状态、进度和最终结果
+  - 状态：pending（待执行）、processing（执行中）、completed（已完成）、failed（失败）
+- 参数验证增强
+  - 新增 `_validate_selected_plan_types` 函数
+  - 验证计划类型：daily_long、daily_short、intraday
+  - 拒绝不支持的计划类型，返回400错误
+
+```mermaid
+flowchart TD
+Start(["异步任务提交"]) --> Validate["验证计划类型"]
+Validate --> Valid{"参数有效?"}
+Valid --> |否| ReturnErr["返回400错误"]
+Valid --> |是| SubmitTask["提交后台任务"]
+SubmitTask --> CreateTask["创建任务记录"]
+CreateTask --> Enqueue["加入执行队列"]
+Enqueue --> ReturnTaskId["返回task_id"]
+ReturnTaskId --> Poll["客户端轮询状态"]
+Poll --> CheckStatus["查询任务状态"]
+CheckStatus --> Status{"任务状态"}
+Status --> |pending| Wait["等待执行"]
+Status --> |processing| Progress["显示进度"]
+Status --> |completed| GetResult["获取结果"]
+Status --> |failed| ShowError["显示错误"]
+Wait --> Poll
+Progress --> Poll
+GetResult --> End(["结束"])
+ShowError --> End
+ReturnErr --> End
+```
+
+**图表来源** 
+- [api/v1/endpoints/backtest.py:188-266](file://api/v1/endpoints/backtest.py#L188-L266)
+- [src/services/task_queue.py:464-505](file://src/services/task_queue.py#L464-L505)
+
+**更新** 这是本次更新的核心功能，解决了大批量回测的性能问题。
+
+**章节来源**
+- [api/v1/endpoints/backtest.py:172-266](file://api/v1/endpoints/backtest.py#L172-L266)
+- [src/services/task_queue.py:464-505](file://src/services/task_queue.py#L464-L505)
+- [tests/test_crypto_backtest_task_api.py:18-118](file://tests/test_crypto_backtest_task_api.py#L18-L118)
 
 ### 回测服务（任务编排）
 - 任务生命周期
@@ -250,6 +320,9 @@ BacktestStatusResponse <.. BacktestResultResponse : "成功后可拉取"
 - 错误恢复
   - 支持重试次数上限与退避策略
   - 失败时保留中间状态以便断点续跑
+- 异步任务支持
+  - 通过 `submit_background_task` 方法提交后台任务
+  - 支持自定义执行函数，灵活处理不同业务场景
 
 ```mermaid
 flowchart TD
@@ -257,13 +330,16 @@ Start(["开始"]) --> Validate["校验请求参数"]
 Validate --> Valid{"参数有效?"}
 Valid --> |否| ReturnErr["返回参数错误"]
 Valid --> |是| CreateTask["创建任务并落库"]
-CreateTask --> Enqueue["入队执行"]
+CreateTask --> Mode{"同步还是异步?"}
+Mode --> |同步| ExecSync["同步执行"]
+Mode --> |异步| Enqueue["入队执行"]
+ExecSync --> SaveResult["保存结果与指标"]
 Enqueue --> Wait["等待执行"]
 Wait --> Exec{"执行成功?"}
 Exec --> |否| RetryCheck{"是否达到重试上限?"}
 RetryCheck --> |是| MarkFail["标记失败并返回错误"]
 RetryCheck --> |否| ReEnqueue["重新入队"]
-Exec --> |是| SaveResult["保存结果与指标"]
+Exec --> |是| SaveResult
 SaveResult --> Done(["结束"])
 ReturnErr --> End(["结束"])
 MarkFail --> End
@@ -274,6 +350,8 @@ MarkFail --> End
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
 
+**更新** 增强了异步任务处理能力，支持后台执行和状态跟踪。
+
 **章节来源**
 - [src/services/backtest_service.py](file://src/services/backtest_service.py)
 - [src/services/task_queue.py](file://src/services/task_queue.py)
@@ -283,16 +361,18 @@ MarkFail --> End
 - 队列特性
   - 支持并发消费者、任务优先级、超时控制
   - 心跳与进度上报，便于前端轮询或SSE推送
+  - 后台任务执行，避免阻塞HTTP请求
 - 任务服务
   - 管理任务状态机：pending、running、completed、failed
   - 聚合执行日志与阶段性指标
+  - 支持任务清理和资源回收
 
 ```mermaid
 stateDiagram-v2
 [*] --> Pending
-Pending --> Running : "开始执行"
-Running --> Completed : "执行成功"
-Running --> Failed : "执行失败"
+Pending --> Processing : "开始执行"
+Processing --> Completed : "执行成功"
+Processing --> Failed : "执行失败"
 Failed --> Pending : "重试(未达上限)"
 Completed --> [*]
 Failed --> [*]
@@ -301,6 +381,8 @@ Failed --> [*]
 **图表来源** 
 - [src/services/task_service.py](file://src/services/task_service.py)
 - [src/services/task_queue.py](file://src/services/task_queue.py)
+
+**更新** 新增了后台任务执行机制，支持长时间运行的回测任务。
 
 **章节来源**
 - [src/services/task_service.py](file://src/services/task_service.py)
@@ -411,6 +493,7 @@ STRATEGY ||--o{ BACKTEST_TASK : "被引用"
 - 耦合度
   - API层仅依赖服务层，不直接访问引擎与存储，保持高内聚低耦合
   - 服务层依赖队列、任务服务、引擎与仓库，职责清晰
+  - 异步任务通过任务队列解耦，提高系统可扩展性
 - 外部依赖
   - 数据源由引擎内部抽象，便于替换不同行情源
   - 存储实现可通过仓库接口扩展（内存、SQLite、PostgreSQL等）
@@ -418,6 +501,7 @@ STRATEGY ||--o{ BACKTEST_TASK : "被引用"
 ```mermaid
 graph LR
 API["API路由"] --> SVC["回测服务"]
+API --> QUEUE["任务队列"]
 SVC --> Q["任务队列"]
 SVC --> TS["任务服务"]
 SVC --> ENG["回测引擎"]
@@ -434,6 +518,8 @@ Q --> TS
 - [src/core/backtest_engine.py](file://src/core/backtest_engine.py)
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
 
+**更新** 新增了任务队列作为独立组件，支持异步任务处理。
+
 **章节来源**
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
 - [src/services/backtest_service.py](file://src/services/backtest_service.py)
@@ -446,6 +532,7 @@ Q --> TS
 - 异步执行
   - 使用任务队列解耦请求与执行，避免阻塞API线程
   - 合理设置消费者数量与单任务超时
+  - 支持后台任务执行，适合大批量数据处理
 - 数据读取优化
   - 批量加载历史数据，减少IO次数
   - 缓存常用指标与因子，降低重复计算
@@ -455,8 +542,12 @@ Q --> TS
 - 资源隔离
   - 按策略或用户维度限制并发与内存占用
   - 失败任务快速释放资源，防止泄漏
+- 批量处理优化
+  - 异步API避免HTTP请求超时问题
+  - 后台队列支持任务优先级和限流
+  - 进度跟踪和状态查询提升用户体验
 
-[本节为通用指导，不直接分析具体文件]
+**更新** 新增了异步处理和批量优化的性能考虑，特别针对大批量回测场景。
 
 ## 故障排查指南
 - 常见问题
@@ -464,26 +555,34 @@ Q --> TS
   - 任务长时间Pending：检查队列容量与消费者状态
   - 执行失败：查看任务日志与错误堆栈，确认数据可用性与策略参数合理性
   - 结果不完整：确认引擎是否中途异常退出，必要时启用断点续跑
+  - 异步任务无响应：检查task_id是否正确，确认任务是否存在于队列中
 - 定位手段
   - 通过任务ID查询状态与进度
   - 拉取执行日志与中间结果快照
   - 复现实验时使用最小数据集与简化策略
+  - 使用SSE事件流实时监控任务状态
+
+**更新** 新增了异步任务相关的故障排查指南。
 
 **章节来源**
 - [tests/test_backtest_service.py](file://tests/test_backtest_service.py)
 - [tests/test_backtest_engine.py](file://tests/test_backtest_engine.py)
+- [tests/test_crypto_backtest_task_api.py](file://tests/test_crypto_backtest_task_api.py)
 
 ## 结论
-本回测系统API以分层架构与异步任务为核心，提供稳定可靠的回测能力。通过清晰的策略定义、完善的指标计算与结果输出，以及健壮的错误恢复与进度跟踪机制，能够满足多策略、多标的的回测需求。建议在生产环境中结合队列监控、日志采集与结果归档，确保系统的高可用与可观测性。
-
-[本节为总结性内容，不直接分析具体文件]
+本回测系统API以分层架构与异步任务为核心，提供稳定可靠的回测能力。通过清晰的策略定义、完善的指标计算与结果输出，以及健壮的错误恢复与进度跟踪机制，能够满足多策略、多标的的回测需求。**新增的异步回测机制**特别适用于大批量数据处理场景，通过后台任务队列避免了HTTP请求超时问题，显著提升了系统的性能和用户体验。建议在生产环境中结合队列监控、日志采集与结果归档，确保系统的高可用与可观测性。
 
 ## 附录
 - 回测任务提交示例
-  - 使用策略ID与必要参数提交任务，获取任务ID后轮询状态直至完成
+  - 同步模式：使用策略ID与必要参数提交任务，直接返回执行结果
+  - 异步模式：提交任务后轮询task_id获取状态，直到任务完成
 - 结果数据分析指南
   - 关注净值曲线、最大回撤、夏普比率、胜率与盈亏比
   - 结合成交明细分析滑点与手续费影响
   - 对不同策略进行横向对比与稳健性检验
+- 异步任务最佳实践
+  - 合理设置轮询间隔，避免过度请求
+  - 实现任务取消和超时处理机制
+  - 提供友好的用户界面展示任务进度
 
-[本节为补充说明，不直接分析具体文件]
+**更新** 新增了异步模式的示例和最佳实践指导。

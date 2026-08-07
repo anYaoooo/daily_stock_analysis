@@ -118,9 +118,16 @@ class StockService:
             
             manager = DataFetcherManager()
             if is_crypto_code(stock_code):
-                crypto_fetcher = CryptoFetcher()
-                df = crypto_fetcher.get_kline_data(stock_code, period=period, days=days)
-                source = crypto_fetcher.name
+                if period in {"daily", "hourly"}:
+                    from src.services.crypto_market_data_service import CryptoMarketDataService
+
+                    market_data = CryptoMarketDataService()
+                    df = market_data.get_bars(stock_code, period=period, days=days)
+                    source = str(df.attrs.get("source") or "CryptoMarketDataService")
+                else:
+                    crypto_fetcher = CryptoFetcher()
+                    df = crypto_fetcher.get_kline_data(stock_code, period=period, days=days)
+                    source = crypto_fetcher.name
             else:
                 if period != "daily":
                     raise ValueError(

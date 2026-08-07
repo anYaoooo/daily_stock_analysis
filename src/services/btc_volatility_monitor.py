@@ -47,6 +47,8 @@ class ActiveOpportunity:
     tier_window_seconds: Optional[int] = None
     velocity_trigger: bool = False
     fast_path: bool = False  # violent move: eligible for single-sample confirmation
+    peak_price: Optional[float] = None
+    trough_price: Optional[float] = None
 
 
 def _parse_window_tiers(raw: Any) -> List[WindowTier]:
@@ -202,6 +204,14 @@ class BTCVolatilityMonitor:
             1.0,
             float(getattr(config, "btc_volatility_monitor_fast_confirmation_mult", 1.5) or 1.5),
         )
+        max_entry_overshoot_pct = max(
+            0.0,
+            float(getattr(config, "btc_volatility_monitor_max_entry_overshoot_pct", 0.3) or 0.0),
+        )
+        exhaustion_retrace_pct = max(
+            0.05,
+            float(getattr(config, "btc_volatility_monitor_exhaustion_retrace_pct", 0.25) or 0.25),
+        )
         tiers = _parse_window_tiers(getattr(config, "btc_volatility_monitor_window_tiers", ""))
         if tiers:
             window_seconds = max(tier.window_seconds for tier in tiers)
@@ -240,6 +250,8 @@ class BTCVolatilityMonitor:
             cooldown_seconds=cooldown_seconds,
             allow_reversal_bypass=allow_reversal_bypass,
             fast_confirmation_enabled=fast_confirmation_enabled,
+            max_entry_overshoot_pct=max_entry_overshoot_pct,
+            exhaustion_retrace_pct=exhaustion_retrace_pct,
         )
         if active_stats is not None:
             stats.update(active_stats)
@@ -752,6 +764,8 @@ class BTCVolatilityMonitor:
         cooldown_seconds: int,
         allow_reversal_bypass: bool,
         fast_confirmation_enabled: bool = False,
+        max_entry_overshoot_pct: float = 0.3,
+        exhaustion_retrace_pct: float = 0.25,
     ) -> Optional[Dict[str, Any]]:
         opportunity = self._active_opportunity
         if opportunity is None:
@@ -777,6 +791,8 @@ class BTCVolatilityMonitor:
             self._reset_confirmation()
             return fields
 
+        self._record_opportunity_extreme(snapshot, opportunity)
+
         if self._is_opportunity_invalidated(snapshot, opportunity, invalidation_pct):
             fields = self._opportunity_fields(
                 snapshot=snapshot,
@@ -790,14 +806,69 @@ class BTCVolatilityMonitor:
             self._reset_confirmation()
             return fields
 
-        if self._entry_signal_confirmed(snapshot, opportunity, entry_confirmation_pct):
-            if self._confirmation_direction == opportunity.direction:
-                self._confirmation_count += 1
-            else:
-                self._confirmation_direction = opportunity.direction
-                self._confirmation_count = 1
+        if self._is_opportunity_exhausted(
+            snapshot,
+            opportunity,
+            entry_confirmation_pct=entry_confirmation_pct,
+            exhaustion_retrace_pct=exhaustion_retrace_pct,
+        ):
+            fields = self._opportunity_fields(
+                snapshot=snapshot,
+                opportunity=opportunity,
+                confirmation_count=self._confirmation_count,
+                confirmation_required=confirmation_required,
+                entry_confirmation_pct=entry_confirmation_pct,
+                invalidation_pct=invalidation_pct,
+            )
+            fields.update(
+                self._execution_fields(
+                    snapshot=snapshot,
+                    opportunity=opportunity,
+                    entry_confirmation_pct=entry_confirmation_pct,
+                    max_entry_overshoot_pct=max_entry_overshoot_pct,
+                    exhaustion_retrace_pct=exhaustion_retrace_pct,
+                    entry_confirmed=False,
+                )
+            )
+            fields.update(
+                {
+                    "reason": "impulse_exhausted",
+                    "trigger_reason": "impulse_exhausted",
+                    "event_detected": 1,
+                    "suggested_trade_action": "wait_after_impulse_exhaustion",
+                }
+            )
+            self._reset_confirmation()
+            return fields
+
+        entry_confirmed = self._entry_signal_confirmed(snapshot, opportunity, entry_confirmation_pct)
+        if not entry_confirmed:
+            fields = self._opportunity_fields(
+                snapshot=snapshot,
+                opportunity=opportunity,
+                confirmation_count=self._confirmation_count,
+                confirmation_required=confirmation_required,
+                entry_confirmation_pct=entry_confirmation_pct,
+                invalidation_pct=invalidation_pct,
+            )
+            fields.update(
+                self._execution_fields(
+                    snapshot=snapshot,
+                    opportunity=opportunity,
+                    entry_confirmation_pct=entry_confirmation_pct,
+                    max_entry_overshoot_pct=max_entry_overshoot_pct,
+                    exhaustion_retrace_pct=exhaustion_retrace_pct,
+                    entry_confirmed=False,
+                )
+            )
+            fields["reason"] = "watching_opportunity"
+            return fields
+
+        if self._confirmation_direction == opportunity.direction:
+            self._confirmation_count += 1
         else:
-            self._confirmation_count = max(1, self._confirmation_count)
+            self._confirmation_direction = opportunity.direction
+            self._confirmation_count = 1
 
         fields = self._opportunity_fields(
             snapshot=snapshot,
@@ -806,6 +877,16 @@ class BTCVolatilityMonitor:
             confirmation_required=confirmation_required,
             entry_confirmation_pct=entry_confirmation_pct,
             invalidation_pct=invalidation_pct,
+        )
+        fields.update(
+            self._execution_fields(
+                snapshot=snapshot,
+                opportunity=opportunity,
+                entry_confirmation_pct=entry_confirmation_pct,
+                max_entry_overshoot_pct=max_entry_overshoot_pct,
+                exhaustion_retrace_pct=exhaustion_retrace_pct,
+                entry_confirmed=True,
+            )
         )
         if self._confirmation_count < confirmation_required:
             fields["reason"] = "watching_opportunity"
@@ -833,6 +914,96 @@ class BTCVolatilityMonitor:
         fields["trigger_reason"] = "entry_signal"
         self._reset_confirmation()
         return fields
+
+    @staticmethod
+    def _record_opportunity_extreme(
+        snapshot: PriceSnapshot,
+        opportunity: ActiveOpportunity,
+    ) -> None:
+        opportunity.peak_price = max(
+            value for value in (opportunity.peak_price, opportunity.opportunity_price, snapshot.price)
+            if value is not None
+        )
+        opportunity.trough_price = min(
+            value for value in (opportunity.trough_price, opportunity.opportunity_price, snapshot.price)
+            if value is not None
+        )
+
+    @staticmethod
+    def _is_opportunity_exhausted(
+        snapshot: PriceSnapshot,
+        opportunity: ActiveOpportunity,
+        *,
+        entry_confirmation_pct: float,
+        exhaustion_retrace_pct: float,
+    ) -> bool:
+        """Reject a failed vertical impulse before it becomes a chase entry."""
+        entry_price = (
+            opportunity.opportunity_price * (1 + entry_confirmation_pct / 100)
+            if opportunity.direction == "up"
+            else opportunity.opportunity_price * (1 - entry_confirmation_pct / 100)
+        )
+        if opportunity.direction == "up":
+            peak = opportunity.peak_price or opportunity.opportunity_price
+            retrace_pct = (peak - snapshot.price) / peak * 100 if peak > 0 else 0.0
+            return peak >= entry_price and retrace_pct >= exhaustion_retrace_pct
+        trough = opportunity.trough_price or opportunity.opportunity_price
+        retrace_pct = (snapshot.price - trough) / trough * 100 if trough > 0 else 0.0
+        return trough <= entry_price and retrace_pct >= exhaustion_retrace_pct
+
+    @staticmethod
+    def _execution_fields(
+        *,
+        snapshot: PriceSnapshot,
+        opportunity: ActiveOpportunity,
+        entry_confirmation_pct: float,
+        max_entry_overshoot_pct: float,
+        exhaustion_retrace_pct: float,
+        entry_confirmed: bool,
+    ) -> Dict[str, Any]:
+        """Describe whether a confirmed impulse is still executable at this price.
+
+        The monitor intentionally does not manufacture a lower/higher "ideal"
+        entry after a vertical move. A report may describe a conditional retest,
+        but only a price close to the live confirmation level is executable now.
+        """
+        if opportunity.direction == "up":
+            entry_price = opportunity.opportunity_price * (1 + entry_confirmation_pct / 100)
+            overshoot_pct = max(0.0, (snapshot.price - entry_price) / entry_price * 100)
+            no_chase_price = entry_price * (1 + max_entry_overshoot_pct / 100)
+            extreme_price = opportunity.peak_price or opportunity.opportunity_price
+            retrace_pct = (extreme_price - snapshot.price) / extreme_price * 100 if extreme_price > 0 else 0.0
+        else:
+            entry_price = opportunity.opportunity_price * (1 - entry_confirmation_pct / 100)
+            overshoot_pct = max(0.0, (entry_price - snapshot.price) / entry_price * 100)
+            no_chase_price = entry_price * (1 - max_entry_overshoot_pct / 100)
+            extreme_price = opportunity.trough_price or opportunity.opportunity_price
+            retrace_pct = (snapshot.price - extreme_price) / extreme_price * 100 if extreme_price > 0 else 0.0
+
+        # A candidate can have crossed the confirmation price earlier and then
+        # faded before it became tradeable. Exhaustion must take precedence
+        # over the current price no longer satisfying the confirmation test.
+        exhausted = retrace_pct >= exhaustion_retrace_pct
+        late_extension = entry_confirmed and overshoot_pct > max_entry_overshoot_pct
+        if exhausted:
+            impulse_stage = "exhaustion_candidate"
+        elif late_extension:
+            impulse_stage = "late_extension"
+        elif entry_confirmed:
+            impulse_stage = "early_continuation"
+        else:
+            impulse_stage = "first_impulse_candidate"
+
+        return {
+            "impulse_stage": impulse_stage,
+            "entry_executable_now": int(entry_confirmed and not late_extension and not exhausted),
+            "entry_overshoot_pct": round(overshoot_pct, 4),
+            "max_entry_overshoot_pct": round(max_entry_overshoot_pct, 4),
+            "no_chase_price": round(no_chase_price, 4),
+            "impulse_extreme_price": round(extreme_price, 4),
+            "impulse_retrace_pct": round(retrace_pct, 4),
+            "exhaustion_retrace_pct": round(exhaustion_retrace_pct, 4),
+        }
 
     @staticmethod
     def _entry_signal_confirmed(
@@ -962,6 +1133,8 @@ class BTCVolatilityMonitor:
                 "invalidation_pct": round(invalidation_pct, 4),
                 "invalidation_price": round(invalidation_price, 4),
                 "watched_seconds": max(0, int(snapshot.timestamp - opportunity.detected_at)),
+                "impulse_stage": "first_impulse_candidate",
+                "entry_executable_now": 0,
             }
         )
         if opportunity.tier_window_seconds is not None:

@@ -1680,15 +1680,17 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 `BTC_VOLATILITY_MONITOR_ENABLED=true` 后，schedule 模式会额外注册 `btc_volatility_monitor` 后台任务。它按实时 BTC 价格维护一个短窗口：绝对涨跌幅先达到 `BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT`（默认 0.3%）时，立即发送“启动预警”，显示当前价格、完整波动确认线、多/空确认价和失效价，但不建议立即下单；涨跌幅达到 `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT` 时，再发送一次行情警报并进入“机会观察”状态。只有价格继续沿同方向满足 `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` 和 `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES` 后，才会触发一次 `analysis_mode=hourly` 的 BTC 分析并走现有 report 通知路由。该能力只生成分析和进场计划，不会自动下单；真实交易仍需通过手动交易接口确认。
 
-交易机会触发的小时线分析会向分析上下文传入 `trigger_reason=entry_signal`、建议交易方向、入场确认价、失效价、观察秒数、短窗口方向、涨跌幅、当前价、基准价、阈值和确认采样信息。报告需要把这些信息解释为日内触发/风控上下文，并明确当前 1 小时 K 线可能尚未收线；短窗口冲击不能直接升级为日线趋势反转结论。若价格在观察期内反向触及 `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT`，或超过 `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES` 仍未确认，机会会失效且不会触发分析。
+交易机会触发的小时线分析会向分析上下文传入 `trigger_reason=entry_signal`、建议交易方向、入场确认价、失效价、观察秒数、短窗口方向、涨跌幅、当前价、基准价、阈值、确认采样、脉冲阶段和当前可执行状态。报告需要把这些信息解释为日内触发/风控上下文，并明确当前 1 小时 K 线可能尚未收线；短窗口冲击不能直接升级为日线趋势反转结论。若价格在观察期内反向触及 `BTC_VOLATILITY_MONITOR_INVALIDATION_PCT`，或超过 `BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES` 仍未确认，机会会失效且不会触发分析。
 
-启用 `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true` 后，监控会优先读取 OKX 公共 ticker WebSocket 缓存；缓存缺失、过期或 WebSocket 依赖不可用时，依次回退到 OKX REST、Binance REST 和 Bybit REST。全部数据源暂不可用时，本轮检查会记录为 `quote_error`，不会持续向调度器抛出完整异常。默认连续 2 次同向确认用于降低单次 Last Price 脏数据、瞬时插针或交易所异常报价导致的误触发；如果追求更快响应，可把确认次数设为 1，但误触发风险会升高。普通小时线基线分析仍保留，但默认通过 `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4` 降为每 4 小时一次，真正的短线机会由事件监控捕捉。
+启用 `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true` 后，监控会优先读取 OKX 公共 ticker WebSocket 缓存；缓存缺失、过期或 WebSocket 依赖不可用时，依次回退到 OKX REST、Binance REST 和 Bybit REST。全部数据源暂不可用时，本轮检查会记录为 `quote_error`，不会持续向调度器抛出完整异常。默认连续 2 次同向确认用于降低单次 Last Price 脏数据、瞬时插针或交易所异常报价导致的误触发；即使启用快速确认，价格也必须真实越过入场确认价，快速确认只减少越过确认价后的连续确认次数。普通小时线基线分析仍保留，但默认通过 `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4` 降为每 4 小时一次，真正的短线机会由事件监控捕捉。
 
 默认参数偏保守：每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 后开始观察，继续同向推进 0.2% 才形成入场信号，反向 0.5% 或观察 20 分钟未确认则失效，触发后冷却 30 分钟。若开启 WebSocket，可把检查间隔下调到 15 秒、观察窗口下调到 1 分钟以更快捕捉日内机会；调度器后台任务最小轮询精度为 5 秒，因此低于 5 秒的间隔会被自动夹到 5 秒。
 
 检测窗口可进一步分层。配置 `BTC_VOLATILITY_MONITOR_WINDOW_TIERS`（如 `1:0.4,3:0.7,5:1.0,15:1.5`，格式为“窗口分钟:阈值%”）后，监控同时维护多级窗口，最短命中窗口优先进入机会观察，慢速爬坡行情不再被单一 5 分钟窗口漏掉；留空则保持旧版单窗口行为完全一致。多级窗口模式下还会检测插针：窗口内极端价冲高回落幅度超过 `BTC_VOLATILITY_MONITOR_SPIKE_REVERT_PCT`（默认 0.4%）时只推送“流动性掠夺”告警、不触发分析。`BTC_VOLATILITY_MONITOR_COOLDOWN_ALLOW_REVERSAL=true` 允许反向窗口突破信号打断触发后冷却（速度触发等噪声级信号不参与旁路），瀑布反转行情不会因冷却漏报。
 
-以下高级检测项默认全部关闭，开启前建议先用回放工具在历史 K 线上定标。`BTC_VOLATILITY_MONITOR_ADAPTIVE_THRESHOLD_ENABLED=true` 按近期实际波动率缩放阈值：`threshold = clamp(K × σ × √窗口, MIN, MAX)`，样本不足时回退固定阈值；`BTC_VOLATILITY_MONITOR_VELOCITY_ENABLED=true` 在相邻采样速率达到历史中位速率 × `VELOCITY_MULT` 且绝对幅度 ≥ `VELOCITY_MIN_PCT` 时升级为事件（绝对地板用于防止低波动期纯相对倍数把噪声当信号；多级窗口模式下地板自动抬升为 max(`VELOCITY_MIN_PCT`, 0.5×最快窗口阈值)，且速度触发不享受快速确认、不允许反向打断冷却，避免高频采样下噪声方向反复触发多空指导）；`BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_ENABLED=true` 对暴力行情（初始涨跌幅 ≥ `FAST_CONFIRMATION_MULT` × 阈值）把确认采样数降为 1，时效优先。定标工具：`python scripts/replay_volatility_monitor.py --csv <1m K线 CSV>` 或 `--fetch --exchange okx --symbol BTC/USDT --days 3`，输出检出率、平均检出延迟和误报率，`--compare` 可同时对比单窗口与多级窗口配置。
+以下高级检测项默认全部关闭，开启前建议先用回放工具在历史 K 线上定标。`BTC_VOLATILITY_MONITOR_ADAPTIVE_THRESHOLD_ENABLED=true` 按近期实际波动率缩放阈值：`threshold = clamp(K × σ × √窗口, MIN, MAX)`，样本不足时回退固定阈值；`BTC_VOLATILITY_MONITOR_VELOCITY_ENABLED=true` 在相邻采样速率达到历史中位速率 × `VELOCITY_MULT` 且绝对幅度 ≥ `VELOCITY_MIN_PCT` 时升级为事件（绝对地板用于防止低波动期纯相对倍数把噪声当信号；多级窗口模式下地板自动抬升为 max(`VELOCITY_MIN_PCT`, 0.5×最快窗口阈值)，且速度触发不享受快速确认、不允许反向打断冷却，避免高频采样下噪声方向反复触发多空指导）；`BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_ENABLED=true` 对暴力行情（初始涨跌幅 ≥ `FAST_CONFIRMATION_MULT` × 阈值）把确认采样数降为 1，时效优先，但不会跳过入场确认价。
+
+为避免一两根垂直大阳/大阴后才给出追价建议，监控会把触发状态标为 `first_impulse_candidate`、`early_continuation`、`late_extension` 或 `exhaustion_candidate`。价格越过确认价超过 `BTC_VOLATILITY_MONITOR_MAX_ENTRY_OVERSHOOT_PCT`（默认 0.3%）时，仍可生成小时线分析，但 `intraday_plan` 会强制降为等待，不会制造一个未触及的理想回踩价冒充当前入场机会。若脉冲已越过确认价、随后在入场前回撤/反抽达到 `BTC_VOLATILITY_MONITOR_EXHAUSTION_RETRACE_PCT`（默认 0.25%），机会会被取消并发送衰竭警报。定标工具：`python scripts/replay_volatility_monitor.py --csv <1m K线 CSV>` 或 `--fetch --exchange okx --symbol BTC/USDT --days 3`，输出检出率、平均检出延迟和误报率，`--compare` 可同时对比单窗口与多级窗口配置。
 
 ```env
 BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4
@@ -1719,6 +1721,8 @@ BTC_VOLATILITY_MONITOR_VELOCITY_MULT=3.0
 BTC_VOLATILITY_MONITOR_VELOCITY_MIN_PCT=0.1
 BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_ENABLED=false
 BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_MULT=1.5
+BTC_VOLATILITY_MONITOR_MAX_ENTRY_OVERSHOOT_PCT=0.3
+BTC_VOLATILITY_MONITOR_EXHAUSTION_RETRACE_PCT=0.25
 ```
 
 回退方式是删除或设置 `BTC_VOLATILITY_MONITOR_ENABLED=false`；低频小时线基线分析和 `AGENT_EVENT_MONITOR_*` 告警中心不受影响。机会触发分析与定时小时线分析共用进程内互斥锁，若已有 BTC 分析正在运行，本次触发会记录日志并跳过，避免重复生成报告。

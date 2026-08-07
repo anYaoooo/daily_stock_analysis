@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: github_ci
+title: GitHub 仓库协作与 CI/CD 配置
+scope:
+    - .github/
+source_files: []
+depends_on: []
+related_to:
+    - path: scripts

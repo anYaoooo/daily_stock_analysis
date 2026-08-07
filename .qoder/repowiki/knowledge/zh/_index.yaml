@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: main
 nodes_managed: true
-exported_at: "2026-07-31T16:13:52Z"
+exported_at: "2026-08-07T06:38:59Z"
 modules:
     "":
-        dir_name: BTC 智能分析系统（根项目）
-        title: BTC 智能分析系统（根项目）
+        dir_name: BTC 智能分析系统根入口与进程编排
+        title: BTC 智能分析系统根入口与进程编排
         scope:
             - README.md
             - SKILL.md
@@ -47,11 +47,10 @@ modules:
         source_files: []
         children: []
         depends_on: []
-        related_to:
-            - path: core_engine
+        related_to: []
     api_server:
-        dir_name: API 服务进程与 FastAPI 应用装配层
-        title: API 服务进程与 FastAPI 应用装配层
+        dir_name: API 服务启动与装配层
+        title: API 服务启动与装配层
         scope:
             - api/
             - server.py
@@ -61,7 +60,6 @@ modules:
             - api_server/v1_router
         depends_on: []
         related_to:
-            - path: bot_system
             - path: core_engine
             - path: docker_deploy
             - path: tests
@@ -86,7 +84,8 @@ modules:
         source_files: []
         children: []
         depends_on: []
-        related_to: []
+        related_to:
+            - path: docs
     bot_system:
         dir_name: 机器人命令分发与多平台 Webhook 系统
         title: 机器人命令分发与多平台 Webhook 系统
@@ -97,7 +96,8 @@ modules:
             - bot_system/core_runtime
         depends_on: []
         related_to:
-            - path: api_server
+            - path: core_engine
+            - path: docs
             - path: tests
     bot_system/core_runtime:
         dir_name: 机器人命令分发与 Webhook 处理核心
@@ -112,8 +112,8 @@ modules:
         depends_on: []
         related_to: []
     core_engine:
-        dir_name: BTC_A股智能分析核心引擎
-        title: BTC/A股智能分析核心引擎
+        dir_name: BTC_股票智能分析核心引擎
+        title: BTC/股票智能分析核心引擎
         scope:
             - src/
         source_files: []
@@ -121,8 +121,8 @@ modules:
             - core_engine/application_entry
         depends_on: []
         related_to:
-            - path: agents_skills
             - path: api_server
+            - path: bot_system
             - path: data_providers
             - path: strategies
             - path: templates
@@ -150,6 +150,8 @@ modules:
         depends_on: []
         related_to:
             - path: core_engine
+            - path: scripts
+            - path: tests
     docker_deploy:
         dir_name: Docker 容器化部署配置
         title: Docker 容器化部署配置
@@ -160,16 +162,17 @@ modules:
         depends_on: []
         related_to:
             - path: api_server
-            - path: scripts
     docs:
-        dir_name: 项目文档与资源中心
-        title: 项目文档与资源中心
+        dir_name: BTC 智能分析系统文档与静态资源
+        title: BTC 智能分析系统文档与静态资源
         scope:
             - docs/
         source_files: []
         children: []
         depends_on: []
-        related_to: []
+        related_to:
+            - path: api_server/v1_router
+            - path: bot_system
     github_ci:
         dir_name: GitHub 仓库协作与 CI_CD 配置
         title: GitHub 仓库协作与 CI/CD 配置
@@ -178,17 +181,19 @@ modules:
         source_files: []
         children: []
         depends_on: []
-        related_to: []
+        related_to:
+            - path: scripts
     scripts:
-        dir_name: 项目构建、测试与数据工具脚本集
-        title: 项目构建、测试与数据工具脚本集
+        dir_name: 项目运维与构建脚本集
+        title: 项目运维与构建脚本集
         scope:
             - scripts/
         source_files: []
         children: []
         depends_on: []
         related_to:
-            - path: docker_deploy
+            - path: data_providers
+            - path: github_ci
     strategies:
         dir_name: 自然语言交易策略库（Strategy Skills）
         title: 自然语言交易策略库（Strategy Skills）
@@ -210,8 +215,8 @@ modules:
         related_to:
             - path: core_engine
     tests:
-        dir_name: 单元测试与冒烟测试套件
-        title: 单元测试与冒烟测试套件
+        dir_name: 全量测试套件与测试基础设施
+        title: 全量测试套件与测试基础设施
         scope:
             - tests/
         source_files: []
@@ -220,3 +225,4 @@ modules:
         related_to:
             - path: api_server
             - path: bot_system
+            - path: data_providers

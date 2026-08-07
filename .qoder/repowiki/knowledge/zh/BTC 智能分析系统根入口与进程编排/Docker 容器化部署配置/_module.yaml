@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: docker_deploy
+title: Docker 容器化部署配置
+scope:
+    - docker/
+source_files: []
+depends_on: []
+related_to:
+    - path: api_server

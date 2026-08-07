@@ -765,6 +765,8 @@ class Config:
     btc_volatility_monitor_velocity_min_pct: float = 0.1  # absolute floor so quiet-market noise never qualifies
     btc_volatility_monitor_fast_confirmation_enabled: bool = False  # violent moves confirm with a single sample
     btc_volatility_monitor_fast_confirmation_mult: float = 1.5  # initial_change >= mult x threshold marks a fast path
+    btc_volatility_monitor_max_entry_overshoot_pct: float = 0.3  # reject a report that would chase too far beyond confirmation
+    btc_volatility_monitor_exhaustion_retrace_pct: float = 0.25  # cancel a vertical impulse that fades before entry
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -1745,6 +1747,18 @@ class Config:
                 1.5,
                 field_name='BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_MULT',
                 minimum=1.0,
+            ),
+            btc_volatility_monitor_max_entry_overshoot_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_MAX_ENTRY_OVERSHOOT_PCT'),
+                0.3,
+                field_name='BTC_VOLATILITY_MONITOR_MAX_ENTRY_OVERSHOOT_PCT',
+                minimum=0.0,
+            ),
+            btc_volatility_monitor_exhaustion_retrace_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_EXHAUSTION_RETRACE_PCT'),
+                0.25,
+                field_name='BTC_VOLATILITY_MONITOR_EXHAUSTION_RETRACE_PCT',
+                minimum=0.05,
             ),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),

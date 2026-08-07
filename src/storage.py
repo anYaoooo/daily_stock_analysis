@@ -162,6 +162,72 @@ class StockDaily(Base):
         }
 
 
+class CryptoOhlcvBar(Base):
+    """Closed cryptocurrency OHLCV bars used by analysis and backtests."""
+
+    __tablename__ = 'crypto_ohlcv_bars'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(16), nullable=False, index=True)
+    venue = Column(String(32), nullable=False)
+    instrument_type = Column(String(16), nullable=False)
+    price_type = Column(String(32), nullable=False)
+    period = Column(String(16), nullable=False)
+    open_time = Column(DateTime, nullable=False)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float)
+    amount = Column(Float)
+    execution_open = Column(Float)
+    execution_high = Column(Float)
+    execution_low = Column(Float)
+    execution_close = Column(Float)
+    mark_open = Column(Float)
+    mark_high = Column(Float)
+    mark_low = Column(Float)
+    mark_close = Column(Float)
+    funding_rates = Column(Text)
+    source = Column(String(64), nullable=False)
+    fetched_at = Column(DateTime, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'code', 'venue', 'instrument_type', 'price_type', 'period', 'open_time',
+            name='uix_crypto_ohlcv_identity',
+        ),
+        Index(
+            'ix_crypto_ohlcv_lookup',
+            'code', 'venue', 'instrument_type', 'price_type', 'period', 'open_time',
+        ),
+    )
+
+
+class CryptoMarketSyncState(Base):
+    """Latest verified local coverage for a crypto OHLCV series."""
+
+    __tablename__ = 'crypto_market_sync_state'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(16), nullable=False)
+    venue = Column(String(32), nullable=False)
+    instrument_type = Column(String(16), nullable=False)
+    price_type = Column(String(32), nullable=False)
+    period = Column(String(16), nullable=False)
+    latest_closed_at = Column(DateTime)
+    content_hash = Column(String(80))
+    source = Column(String(64))
+    synced_at = Column(DateTime, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            'code', 'venue', 'instrument_type', 'price_type', 'period',
+            name='uix_crypto_market_sync_identity',
+        ),
+    )
+
+
 class NewsIntel(Base):
     """
     新闻情报数据模型
@@ -2299,6 +2365,123 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             ).scalars().all()
             
             return list(results)
+
+    def upsert_crypto_ohlcv_bars(
+        self,
+        records: List[Dict[str, Any]],
+        *,
+        sync_state: Dict[str, Any],
+    ) -> int:
+        """Persist closed crypto bars and their coverage checkpoint atomically."""
+        if not records:
+            return 0
+
+        identity = {
+            key: sync_state[key]
+            for key in ('code', 'venue', 'instrument_type', 'price_type', 'period')
+        }
+
+        def _write(session: Session) -> int:
+            if self._is_sqlite_engine:
+                for offset in range(0, len(records), 25):
+                    stmt = sqlite_insert(CryptoOhlcvBar).values(records[offset:offset + 25])
+                    excluded = stmt.excluded
+                    session.execute(
+                        stmt.on_conflict_do_update(
+                            index_elements=['code', 'venue', 'instrument_type', 'price_type', 'period', 'open_time'],
+                            set_={
+                                'open': excluded.open,
+                                'high': excluded.high,
+                                'low': excluded.low,
+                                'close': excluded.close,
+                                'volume': excluded.volume,
+                                'amount': excluded.amount,
+                                'execution_open': excluded.execution_open,
+                                'execution_high': excluded.execution_high,
+                                'execution_low': excluded.execution_low,
+                                'execution_close': excluded.execution_close,
+                                'mark_open': excluded.mark_open,
+                                'mark_high': excluded.mark_high,
+                                'mark_low': excluded.mark_low,
+                                'mark_close': excluded.mark_close,
+                                'funding_rates': excluded.funding_rates,
+                                'source': excluded.source,
+                                'fetched_at': excluded.fetched_at,
+                            },
+                        )
+                    )
+            else:
+                for record in records:
+                    existing = session.execute(
+                        select(CryptoOhlcvBar).where(
+                            and_(
+                                CryptoOhlcvBar.code == record['code'],
+                                CryptoOhlcvBar.venue == record['venue'],
+                                CryptoOhlcvBar.instrument_type == record['instrument_type'],
+                                CryptoOhlcvBar.price_type == record['price_type'],
+                                CryptoOhlcvBar.period == record['period'],
+                                CryptoOhlcvBar.open_time == record['open_time'],
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        session.add(CryptoOhlcvBar(**record))
+                    else:
+                        for field, value in record.items():
+                            if field != 'id':
+                                setattr(existing, field, value)
+
+            state = session.execute(
+                select(CryptoMarketSyncState).where(
+                    and_(*[
+                        getattr(CryptoMarketSyncState, key) == value
+                        for key, value in identity.items()
+                    ])
+                )
+            ).scalar_one_or_none()
+            state_values = {
+                **identity,
+                'latest_closed_at': sync_state.get('latest_closed_at'),
+                'content_hash': sync_state.get('content_hash'),
+                'source': sync_state.get('source'),
+                'synced_at': sync_state['synced_at'],
+            }
+            if state is None:
+                session.add(CryptoMarketSyncState(**state_values))
+            else:
+                for field, value in state_values.items():
+                    setattr(state, field, value)
+            return len(records)
+
+        return self._run_write_transaction('upsert_crypto_ohlcv_bars', _write)
+
+    def get_crypto_ohlcv_bars(
+        self,
+        *,
+        code: str,
+        venue: str,
+        instrument_type: str,
+        price_type: str,
+        period: str,
+        start_at: datetime,
+        end_at: datetime,
+    ) -> List[CryptoOhlcvBar]:
+        """Read one canonical local crypto series in chronological order."""
+        with self.get_session() as session:
+            rows = session.execute(
+                select(CryptoOhlcvBar).where(
+                    and_(
+                        CryptoOhlcvBar.code == code,
+                        CryptoOhlcvBar.venue == venue,
+                        CryptoOhlcvBar.instrument_type == instrument_type,
+                        CryptoOhlcvBar.price_type == price_type,
+                        CryptoOhlcvBar.period == period,
+                        CryptoOhlcvBar.open_time >= start_at,
+                        CryptoOhlcvBar.open_time <= end_at,
+                    )
+                ).order_by(CryptoOhlcvBar.open_time)
+            ).scalars().all()
+            return list(rows)
     
     def save_daily_data(
         self, 

@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: api_server/v1_router
+title: API v1 路由聚合与错误响应
+scope:
+    - api/v1/router.py
+    - api/v1/errors.py
+    - api/v1/__init__.py
+source_files: []
+depends_on: []
+related_to:
+    - path: docs

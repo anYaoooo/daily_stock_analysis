@@ -1752,6 +1752,7 @@ def align_btc_execution_plans(
     result: AnalysisResult,
     *,
     runtime_config: Any,
+    trigger_context: Optional[Dict[str, Any]] = None,
 ) -> AnalysisResult:
     """Annotate BTC plans with execution-validation results.
 
@@ -1762,12 +1763,18 @@ def align_btc_execution_plans(
     downgrading everything to "watch".
     """
 
-    if str(getattr(runtime_config, "crypto_backtest_engine_version", "")).strip().lower() != "btc-plan-v5":
-        return result
-
     dashboard = result.dashboard if isinstance(result.dashboard, dict) else {}
     battle_plan = dashboard.get("battle_plan") if isinstance(dashboard, dict) else None
     if not isinstance(battle_plan, dict):
+        return result
+
+    _apply_btc_trigger_execution_guard(
+        battle_plan,
+        trigger_context=trigger_context,
+        language=normalize_report_language(result.report_language),
+    )
+
+    if str(getattr(runtime_config, "crypto_backtest_engine_version", "")).strip().lower() != "btc-plan-v5":
         return result
 
     config = CryptoPlanBacktestConfig(
@@ -1855,6 +1862,55 @@ def align_btc_execution_plans(
         )
 
     return result
+
+
+def _apply_btc_trigger_execution_guard(
+    battle_plan: Dict[str, Any],
+    *,
+    trigger_context: Optional[Dict[str, Any]],
+    language: str,
+) -> None:
+    """Prevent a late volatility trigger from becoming an immediate chase plan."""
+    if not isinstance(trigger_context, dict):
+        return
+    if trigger_context.get("entry_executable_now") not in {0, False, "0", "false", "False"}:
+        return
+
+    stage = str(trigger_context.get("impulse_stage") or "").strip().lower()
+    if stage not in {"late_extension", "exhaustion_candidate"}:
+        return
+
+    intraday_plan = battle_plan.get("intraday_plan")
+    if not isinstance(intraday_plan, dict):
+        return
+
+    current_price = trigger_context.get("price", "N/A")
+    no_chase_price = trigger_context.get("no_chase_price", "N/A")
+    if stage == "late_extension":
+        reason_zh = (
+            f"短窗口脉冲已过度延伸（当前价 {current_price}，追价上限/下限 {no_chase_price}），"
+            "当前不具备可执行试仓条件；仅保留新的回踩或结构确认后再评估。"
+        )
+        reason_en = (
+            f"The short-window impulse is overextended (current {current_price}, no-chase level {no_chase_price}); "
+            "do not open a new intraday position until a new retest or structure confirmation."
+        )
+    else:
+        reason_zh = "短窗口脉冲已衰竭，当前不具备可执行试仓条件；等待新的关键位确认。"
+        reason_en = "The short-window impulse has exhausted; wait for a new key-level confirmation before any intraday entry."
+
+    reason = reason_zh if language == "zh" else reason_en
+    intraday_plan["enabled"] = False
+    intraday_plan["direction"] = "wait"
+    intraday_plan["no_trade_reason"] = reason
+    intraday_plan["reason"] = reason
+    intraday_plan["trigger_execution_state"] = stage
+    ladder = intraday_plan.get("execution_ladder")
+    if isinstance(ladder, dict):
+        ladder["current_action"] = "wait"
+        trial_entry = ladder.get("trial_entry")
+        if isinstance(trial_entry, dict):
+            trial_entry["enabled"] = False
 
 
 class GeminiAnalyzer:
@@ -3309,7 +3365,11 @@ class GeminiAnalyzer:
                 result.analysis_timeframe = analysis_timeframe
                 normalize_chip_structure_availability(result, context.get("chip"))
                 if is_crypto_context:
-                    align_btc_execution_plans(result, runtime_config=config)
+                    align_btc_execution_plans(
+                        result,
+                        runtime_config=config,
+                        trigger_context=context.get("trigger_context"),
+                    )
 
                 # 内容完整性校验（可选）
                 if not config.report_integrity_enabled:
@@ -3797,9 +3857,14 @@ class GeminiAnalyzer:
 | 窗口秒数 | {trigger_context.get('window_seconds', 'N/A')} |
 | 触发阈值 | {trigger_context.get('threshold_pct', 'N/A')}% |
 | 确认采样 | {trigger_context.get('confirmation_count', 'N/A')}/{trigger_context.get('confirmation_required', 'N/A')} |
+| 脉冲阶段 | {trigger_context.get('impulse_stage', 'N/A')} |
+| 当前可执行 | {trigger_context.get('entry_executable_now', 'N/A')} |
+| 确认价越过幅度 | {trigger_context.get('entry_overshoot_pct', 'N/A')}% |
+| 追价上限/下限 | {trigger_context.get('no_chase_price', 'N/A')} |
+| 脉冲极值 / 回撤 | {trigger_context.get('impulse_extreme_price', 'N/A')} / {trigger_context.get('impulse_retrace_pct', 'N/A')}% |
 | 行情时间 | {trigger_context.get('provider_timestamp', 'N/A')} |
 
-> 本轮小时线分析由日内价格机会监控触发，不是普通整点小时线复盘。若 `触发原因=entry_signal`，必须把“入场确认价、失效价、观察秒数、建议交易方向”写入 `dashboard.battle_plan.intraday_plan.trigger_condition`、`invalidation` 或 `reason`，形成可执行的多/空入场信号；若小时线结构不支持该方向，必须明确降级为等待，并解释为什么当前短窗口信号不足以交易。当前 1 小时 K 线可能尚未收线，短窗口冲击只能作为日内触发/风控上下文，不能直接升级为日线趋势反转结论。
+> 本轮小时线分析由日内价格机会监控触发，不是普通整点小时线复盘。若 `触发原因=entry_signal` 且 `当前可执行=1`、`脉冲阶段=early_continuation`，必须把“入场确认价、失效价、观察秒数、建议交易方向”写入 `dashboard.battle_plan.intraday_plan.trigger_condition`、`invalidation` 或 `reason`，形成可执行的多/空入场信号。若 `当前可执行=0`，或脉冲阶段为 `late_extension`/`exhaustion_candidate`，`intraday_plan` 必须 `enabled=false`、`direction="wait"`，禁止把虚构的理想回踩价包装成当前建议；只可说明未来重新满足的确认条件和失效条件。当前 1 小时 K 线可能尚未收线，短窗口冲击只能作为日内触发/风控上下文，不能直接升级为日线趋势反转结论。
 """
             prompt += f"""
 ### BTC 小时线日内交易机会（独立判断）

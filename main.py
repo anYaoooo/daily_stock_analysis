@@ -109,6 +109,19 @@ def _format_btc_volatility_alert(stats: Dict[str, Any]) -> str:
             ]
         )
 
+    if stats.get("trigger_reason") == "impulse_exhausted":
+        direction_is_up = str(stats.get("opportunity_direction") or stats.get("direction") or "").lower() == "up"
+        movement = "冲高回落" if direction_is_up else "急跌反抽"
+        return "\n".join(
+            [
+                f"## BTC 脉冲衰竭警报：{movement}",
+                "",
+                f"- 当前价：{price} USDT（相对 {baseline}，{change_pct}%）",
+                f"- 脉冲极值：{stats.get('impulse_extreme_price', '--')} USDT，回撤/反抽 {stats.get('impulse_retrace_pct', '--')}%",
+                "- 状态：首段脉冲未形成可执行延续，禁止追价，等待新的关键位确认。",
+            ]
+        )
+
     return "\n".join(
         [
             f"## BTC 行情警报：{movement}",
@@ -1470,6 +1483,14 @@ def main() -> int:
                         "cooldown_bypassed": stats.get("cooldown_bypassed"),
                         "velocity_trigger": stats.get("velocity_trigger"),
                         "fast_path": stats.get("fast_path"),
+                        "impulse_stage": stats.get("impulse_stage"),
+                        "entry_executable_now": stats.get("entry_executable_now"),
+                        "entry_overshoot_pct": stats.get("entry_overshoot_pct"),
+                        "max_entry_overshoot_pct": stats.get("max_entry_overshoot_pct"),
+                        "no_chase_price": stats.get("no_chase_price"),
+                        "impulse_extreme_price": stats.get("impulse_extreme_price"),
+                        "impulse_retrace_pct": stats.get("impulse_retrace_pct"),
+                        "exhaustion_retrace_pct": stats.get("exhaustion_retrace_pct"),
                         "poll_interval_seconds": getattr(runtime_config, 'btc_volatility_monitor_interval_seconds', 60),
                     }
                     trigger_context = {

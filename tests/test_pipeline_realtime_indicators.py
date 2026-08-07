@@ -398,6 +398,8 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         self.assertIn("BTC 波动触发上下文", prompt)
         self.assertIn("volatility_spike", prompt)
         self.assertIn("短窗口冲击", prompt)
+        self.assertIn("当前可执行", prompt)
+        self.assertIn("禁止把虚构的理想回踩价包装成当前建议", prompt)
         self.assertIn("当前 1 小时 K 线可能尚未收线", prompt)
         self.assertIn("2/2", prompt)
 

@@ -444,3 +444,46 @@ def test_fast_confirmation_reduces_required_samples_for_violent_moves() -> None:
     assert fast_off[2]["reason"] == "watching_opportunity"
     assert fast_off[2]["confirmation_required"] == 3
     assert fast_off[3]["triggered"] == 1
+
+
+def test_fast_confirmation_still_requires_price_to_cross_entry_confirmation() -> None:
+    prices = [100.0, 101.6, 101.7, 102.0]
+    results = _run_prices(
+        _config(
+            btc_volatility_monitor_fast_confirmation_enabled=True,
+            btc_volatility_monitor_confirmation_samples=3,
+        ),
+        prices,
+    )
+
+    assert results[1]["fast_path"] == 1
+    assert results[2]["triggered"] == 0
+    assert results[2]["reason"] == "watching_opportunity"
+    assert results[2]["entry_executable_now"] == 0
+    assert results[3]["triggered"] == 1
+    assert results[3]["entry_executable_now"] == 1
+    assert results[3]["impulse_stage"] == "early_continuation"
+
+
+def test_late_extension_triggers_analysis_but_marks_entry_not_executable() -> None:
+    results = _run_prices(_config(), [100.0, 101.2, 102.3])
+
+    triggered = results[-1]
+    assert triggered["triggered"] == 1
+    assert triggered["entry_executable_now"] == 0
+    assert triggered["impulse_stage"] == "late_extension"
+    assert triggered["entry_overshoot_pct"] > triggered["max_entry_overshoot_pct"]
+
+
+def test_impulse_exhaustion_cancels_candidate_before_analysis() -> None:
+    results = _run_prices(
+        _config(btc_volatility_monitor_confirmation_samples=3),
+        [100.0, 101.2, 101.7, 101.3],
+    )
+
+    exhausted = results[-1]
+    assert exhausted["triggered"] == 0
+    assert exhausted["event_detected"] == 1
+    assert exhausted["reason"] == "impulse_exhausted"
+    assert exhausted["impulse_stage"] == "exhaustion_candidate"
+    assert exhausted["entry_executable_now"] == 0
