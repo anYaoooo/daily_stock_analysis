@@ -92,6 +92,23 @@ def _format_btc_volatility_alert(stats: Dict[str, Any]) -> str:
             ]
         )
 
+    if stats.get("trigger_reason") == "liquidity_sweep":
+        swept_up = str(stats.get("sweep_side") or "").strip().lower() == "up"
+        sweep_movement = "向上插针后回落" if swept_up else "向下插针后收回"
+        runup_label = "冲高" if swept_up else "下探"
+        revert_label = "回落" if swept_up else "收回"
+        watch_note = "关注扫流动性后的偏空风险，不追多" if swept_up else "关注扫流动性后的反弹机会，不追空"
+        return "\n".join(
+            [
+                f"## BTC 插针警报：{sweep_movement}",
+                "",
+                f"- 当前价：{price} USDT（相对 {baseline}，{change_pct}%）",
+                f"- 极端价：{stats.get('swept_extreme_price', '--')} USDT"
+                f"（{runup_label} {stats.get('sweep_runup_pct', '--')}%，已{revert_label} {stats.get('revert_pct', '--')}%）",
+                f"- 状态：疑似流动性掠夺/假突破，{watch_note}，等待结构确认",
+            ]
+        )
+
     return "\n".join(
         [
             f"## BTC 行情警报：{movement}",
@@ -1449,6 +1466,10 @@ def main() -> int:
                         "provider_timestamp": stats.get("provider_timestamp"),
                         "confirmation_count": stats.get("confirmation_count"),
                         "confirmation_required": stats.get("confirmation_required"),
+                        "tier_window_seconds": stats.get("tier_window_seconds"),
+                        "cooldown_bypassed": stats.get("cooldown_bypassed"),
+                        "velocity_trigger": stats.get("velocity_trigger"),
+                        "fast_path": stats.get("fast_path"),
                         "poll_interval_seconds": getattr(runtime_config, 'btc_volatility_monitor_interval_seconds', 60),
                     }
                     trigger_context = {

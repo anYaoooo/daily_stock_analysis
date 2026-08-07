@@ -113,6 +113,16 @@ def _today_has_realtime_overlay(today: Any) -> bool:
     return bool(today.get("estimated_fields") or today.get("estimatedFields"))
 
 
+def _is_crypto_analysis_context(context: Dict[str, Any]) -> bool:
+    """Return whether an analysis context represents a crypto instrument."""
+    code = str(context.get("code") or context.get("stock_code") or "")
+    return (
+        str(context.get("market") or "").strip().lower() == "crypto"
+        or get_market_for_stock(normalize_stock_code(code)) == "crypto"
+        or isinstance(context.get("crypto_technical"), dict)
+    )
+
+
 def _today_looks_complete_daily_bar(
     context: Dict[str, Any],
     phase_context: Dict[str, Any],
@@ -1743,7 +1753,14 @@ def align_btc_execution_plans(
     *,
     runtime_config: Any,
 ) -> AnalysisResult:
-    """Downgrade BTC advice when its generated plans fail the active execution contract."""
+    """Annotate BTC plans with execution-validation results.
+
+    Plans that fail the active execution contract keep their original
+    direction and advice; validation outcome is surfaced via
+    ``validation_status`` / ``validation_errors`` / ``validation_note``
+    so users can judge for themselves instead of the analyzer silently
+    downgrading everything to "watch".
+    """
 
     if str(getattr(runtime_config, "crypto_backtest_engine_version", "")).strip().lower() != "btc-plan-v5":
         return result
@@ -1773,22 +1790,32 @@ def align_btc_execution_plans(
         ("short_plan", "daily_short", "daily", "short"),
         ("intraday_plan", "intraday", "intraday", "wait"),
     )
-    valid_directions: set[str] = set()
-    validation_failures: list[str] = []
-    has_plan = False
+    language = normalize_report_language(result.report_language)
 
     for key, plan_type, horizon, default_direction in plans:
         payload = battle_plan.get(key)
         if not isinstance(payload, dict):
             continue
-        has_plan = True
         direction = str(payload.get("direction") or default_direction).strip().lower()
         if key == "intraday_plan" and payload.get("enabled") is False:
             direction = "wait"
         if direction not in {"long", "short"}:
-            payload["direction"] = "wait"
-            if key == "intraday_plan":
-                payload["enabled"] = False
+            if direction in {"wait", "none", ""}:
+                payload["validation_status"] = "skipped"
+                payload["validation_errors"] = []
+                payload["validation_note"] = (
+                    "等待状态，无需执行校验"
+                    if language == "zh"
+                    else "wait state, execution validation skipped"
+                )
+            else:
+                payload["validation_status"] = "failed"
+                payload["validation_errors"] = ["unsupported_direction"]
+                payload["validation_note"] = (
+                    "未通过执行校验（unsupported_direction）：方向需为 long/short/wait。"
+                    if language == "zh"
+                    else "Execution validation failed (unsupported_direction): direction must be long/short/wait."
+                )
             continue
 
         plan = CryptoPlan(
@@ -1808,47 +1835,26 @@ def align_btc_execution_plans(
         errors = CryptoBacktestEngine.validate_execution_plan(plan=plan, config=config)
         errors.extend(_validate_btc_execution_ladder(payload))
         if not errors:
-            payload["direction"] = direction
-            valid_directions.add(direction)
+            payload["validation_status"] = "passed"
+            payload["validation_errors"] = []
+            payload["validation_note"] = (
+                "已通过执行校验" if language == "zh" else "passed execution validation"
+            )
             continue
 
         error_text = ", ".join(errors)
-        validation_failures.append(f"{key}: {error_text}")
-        payload["direction"] = "wait"
-        if key == "intraday_plan":
-            payload["enabled"] = False
-        payload["no_trade_reason"] = (
-            f"未通过执行校验（{error_text}），等待重新给出满足风控与确认条件的计划。"
-            if normalize_report_language(result.report_language) == "zh"
-            else f"Execution validation failed ({error_text}); wait for a plan that meets risk and confirmation rules."
+        payload["validation_status"] = "failed"
+        payload["validation_errors"] = errors
+        payload["validation_note"] = (
+            f"未通过执行校验（{error_text}），计划仅供参考，请核对点位与风控参数后再执行。"
+            if language == "zh"
+            else (
+                f"Execution validation failed ({error_text}); plan is informational only — "
+                "verify levels and risk parameters before executing."
+            )
         )
 
-    expected_direction = {"buy": "long", "sell": "short"}.get(str(result.decision_type or "").lower())
-    should_downgrade = has_plan and (
-        not valid_directions or (expected_direction is not None and expected_direction not in valid_directions)
-    )
-    if not should_downgrade:
-        return result
-
-    language = normalize_report_language(result.report_language)
-    reason = "; ".join(validation_failures) or (
-        "当前没有通过执行校验的多空计划" if language == "zh" else "no long or short plan passed execution validation"
-    )
-    result.operation_advice = "观望，等待可执行交易条件" if language == "zh" else "Watch and wait for an executable setup"
-    result.decision_type = "hold"
-    result.action = "watch"
-    if language == "zh":
-        result.risk_warning = f"{result.risk_warning}；{reason}".strip("；")
-    else:
-        result.risk_warning = f"{result.risk_warning}; {reason}".strip("; ")
-    core = dashboard.get("core_conclusion")
-    if not isinstance(core, dict):
-        core = {}
-        dashboard["core_conclusion"] = core
-    core["signal_type"] = "🟡观望" if language == "zh" else "🟡 Watch"
-    core["one_sentence"] = result.operation_advice
-    result.dashboard = dashboard
-    return populate_decision_action_fields(result, explicit_action="watch")
+    return result
 
 
 class GeminiAnalyzer:
@@ -2161,20 +2167,20 @@ class GeminiAnalyzer:
                         "margin_mode": "{crypto_execution_margin_mode}"
                     },
                     "entry": {
-                        "setup_type": "breakout",
+                        "setup_type": "breakout 或 pullback（按当前结构二选一：突破跟随选 breakout，等回踩承接选 pullback）",
                         "logic": "all",
                         "conditions": [
-                            {"type": "close_above", "value": 多单确认价数值},
-                            {"type": "volume_ratio_gte", "value": 最低量比数值},
-                            {"type": "close_above_vwap"}
+                            {"type": "breakout 用 close_above；pullback 用 low_lte（回踩价位）并搭配 close_above 收盘确认", "value": 多单确认价数值（应贴近 entry_price，偏离不超过0.5%）},
+                            {"type": "volume_ratio_gte（breakout 必须带量能确认；pullback 可选）", "value": 最低量比数值},
+                            {"type": "close_above_vwap（可选，强势结构时追加）"}
                         ],
-                        "confirmation_bars": 2,
+                        "confirmation_bars": 1,
                         "fill": "next_bar_open",
                         "max_wait_bars": 3
                     },
                     "exit": {"max_holding_bars": 5}
                 },
-                "trigger_condition": "多单触发条件",
+                "trigger_condition": "多单触发条件（日线计划按日线K线计：等待窗口最多3个交易日，预期持仓最长5个交易日，请按触发难易在 2-5 / 3-7 区间内取值）",
                 "invalidation": "多单失效条件",
                 "invalid_condition": "多单失效条件（结构化字段，和 invalidation 保持一致或更精确）",
                 "risk_reward": "风险收益比：例如 1:2.0；无法计算时写明原因",
@@ -2225,20 +2231,20 @@ class GeminiAnalyzer:
                         "margin_mode": "{crypto_execution_margin_mode}"
                     },
                     "entry": {
-                        "setup_type": "breakout",
+                        "setup_type": "breakout 或 pullback（按当前结构二选一：跌破跟随选 breakout，等反抽拒绝选 pullback）",
                         "logic": "all",
                         "conditions": [
-                            {"type": "close_below", "value": 空单确认价数值},
-                            {"type": "volume_ratio_gte", "value": 最低量比数值},
-                            {"type": "close_below_vwap"}
+                            {"type": "breakout 用 close_below；pullback 用 high_gte（反抽价位）并搭配 close_below 收盘确认", "value": 空单确认价数值（应贴近 entry_price，偏离不超过0.5%）},
+                            {"type": "volume_ratio_gte（breakout 必须带量能确认；pullback 可选）", "value": 最低量比数值},
+                            {"type": "close_below_vwap（可选，弱势结构时追加）"}
                         ],
-                        "confirmation_bars": 2,
+                        "confirmation_bars": 1,
                         "fill": "next_bar_open",
                         "max_wait_bars": 3
                     },
                     "exit": {"max_holding_bars": 5}
                 },
-                "trigger_condition": "空单触发条件",
+                "trigger_condition": "空单触发条件（日线计划按日线K线计：等待窗口最多3个交易日，预期持仓最长5个交易日，请按触发难易在 2-5 / 3-7 区间内取值）",
                 "invalidation": "空单失效条件",
                 "invalid_condition": "空单失效条件（结构化字段，和 invalidation 保持一致或更精确）",
                 "risk_reward": "风险收益比：例如 1:2.0；无法计算时写明原因",
@@ -2290,12 +2296,12 @@ class GeminiAnalyzer:
                         "margin_mode": "{crypto_execution_margin_mode}"
                     },
                     "entry": {
-                        "setup_type": "breakout",
+                        "setup_type": "breakout 或 pullback（按小时线结构二选一）",
                         "logic": "all",
                         "conditions": [
-                            {"type": "close_above/close_below", "value": 日内确认价数值},
-                            {"type": "volume_ratio_gte", "value": 最低量比数值},
-                            {"type": "close_above_vwap/close_below_vwap"}
+                            {"type": "breakout 用 close_above/close_below；pullback 用 low_lte/high_gte 触碰并搭配收盘确认", "value": 日内确认价数值（应贴近 entry_price，偏离不超过0.5%）},
+                            {"type": "volume_ratio_gte（breakout 必须带量能确认；pullback 可选）", "value": 最低量比数值},
+                            {"type": "close_above_vwap/close_below_vwap（可选，按强弱结构追加）"}
                         ],
                         "confirmation_bars": 1,
                         "fill": "next_bar_open",
@@ -2303,7 +2309,7 @@ class GeminiAnalyzer:
                     },
                     "exit": {"max_holding_bars": 12}
                 },
-                "trigger_condition": "小时线触发条件",
+                "trigger_condition": "小时线触发条件（日内计划按小时线K线计：等待窗口最长8小时，预期持仓最长12小时）",
                 "invalidation": "小时线失效条件",
                 "invalid_condition": "小时线失效条件（结构化字段，和 invalidation 保持一致或更精确）",
                 "daily_constraint": "日线方向/关键支撑阻力/失效条件如何约束本次日内交易",
@@ -3175,6 +3181,7 @@ class GeminiAnalyzer:
                 logger.debug("[analyzer] progress callback skipped: %s", exc)
 
         code = context.get('code', 'Unknown')
+        is_crypto_context = _is_crypto_analysis_context(context)
         config = self._get_runtime_config()
         report_language = normalize_report_language(getattr(config, "report_language", "zh"))
         analysis_mode = normalize_analysis_mode(context.get("analysis_mode"))
@@ -3386,12 +3393,7 @@ class GeminiAnalyzer:
         code = context.get('code', 'Unknown')
         report_language = normalize_report_language(report_language)
         _, _, use_legacy_default_prompt = self._get_skill_prompt_sections()
-        normalized_code = normalize_stock_code(str(code))
-        is_crypto_context = (
-            str(context.get("market") or "").strip().lower() == "crypto"
-            or get_market_for_stock(normalized_code) == "crypto"
-            or isinstance(context.get("crypto_technical"), dict)
-        )
+        is_crypto_context = _is_crypto_analysis_context(context)
         if is_crypto_context:
             use_legacy_default_prompt = False
         

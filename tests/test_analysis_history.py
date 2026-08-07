@@ -1463,6 +1463,57 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertIn("收盘站上 99200", markdown)
         self.assertIn("小时线收盘跌破 97200", markdown)
 
+    def test_history_markdown_renders_btc_plan_overview_with_validation(self) -> None:
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=58,
+            trend_prediction="震荡",
+            operation_advice="观望",
+            analysis_summary="双向计划均给出，空单未过执行校验。",
+            dashboard={
+                "battle_plan": {
+                    "long_plan": {
+                        "direction": "long",
+                        "entry_price": 100000,
+                        "stop_loss": 98000,
+                        "take_profit": 105000,
+                        "trigger_condition": "突破确认",
+                        "validation_status": "passed",
+                        "validation_errors": [],
+                        "validation_note": "已通过执行校验",
+                    },
+                    "short_plan": {
+                        "direction": "short",
+                        "entry_price": 96000,
+                        "stop_loss": 97500,
+                        "take_profit": 92000,
+                        "trigger_condition": "跌破确认",
+                        "validation_status": "failed",
+                        "validation_errors": ["risk_reward_below_minimum"],
+                        "validation_note": "未通过执行校验（risk_reward_below_minimum），计划仅供参考。",
+                    },
+                    "intraday_plan": {"direction": "wait", "validation_status": "skipped"},
+                },
+            },
+        )
+        saved = self.db.save_analysis_history(
+            result=result,
+            query_id="query_btc_plan_overview_001",
+            report_type="full",
+            news_content="news",
+            context_snapshot=None,
+            save_snapshot=False,
+        )
+        self.assertGreater(saved, 0)
+
+        markdown = HistoryService(self.db).get_markdown_report(str(saved))
+
+        self.assertIn("BTC 双向计划概览", markdown)
+        self.assertIn("✅校验通过", markdown)
+        self.assertIn("⚠️未通过校验", markdown)
+        self.assertIn("未通过执行校验（risk_reward_below_minimum），计划仅供参考。", markdown)
+
     def test_history_markdown_returns_persisted_market_review_report(self) -> None:
         """Market review history should return the saved Markdown without rebuilding a stock report."""
         result = AnalysisResult(

@@ -53,6 +53,10 @@ from bot.models import BotMessage
 from src.utils.sanitize import sanitize_diagnostic_text
 from src.utils.data_processing import normalize_model_used
 from src.utils.sniper_points import extract_directional_strategy_plans, parse_sniper_value
+from src.utils.battle_plan_report import (
+    render_directional_plan_overview,
+    render_intraday_plan_detail,
+)
 from src.utils.timeframe import analysis_timeframe_label, normalize_analysis_mode
 from src.notification_sender import (
     AstrbotSender,
@@ -1293,23 +1297,10 @@ class NotificationService(
                             f"| 🎊 {labels['take_profit_label']} | {self._clean_sniper_value(sniper.get('take_profit', 'N/A'))} |",
                             "",
                         ])
-                    # 仓位策略
-                    intraday = battle.get('intraday_plan', {})
-                    if intraday:
-                        report_lines.extend([
-                            "**⏱️ 小时线日内计划（服从日线）**",
-                            "",
-                            "| 项目 | 计划 |",
-                            "|------|------|",
-                            f"| 方向 | {intraday.get('direction', 'N/A')} |",
-                            f"| 入场 | {self._clean_sniper_value(intraday.get('entry_price', 'N/A'))} |",
-                            f"| 止损 | {self._clean_sniper_value(intraday.get('stop_loss', 'N/A'))} |",
-                            f"| 目标 | {self._clean_sniper_value(intraday.get('take_profit', 'N/A'))} |",
-                            f"| 触发 | {intraday.get('trigger_condition', 'N/A')} |",
-                            f"| 日线约束 | {intraday.get('daily_constraint', 'N/A')} |",
-                            f"| 依据 | {intraday.get('reason', 'N/A')} |",
-                            "",
-                        ])
+                    # BTC 双向计划概览（含执行校验状态，非 BTC 报告自动为空）
+                    report_lines.extend(render_directional_plan_overview(battle))
+                    # 小时线日内计划详情
+                    report_lines.extend(render_intraday_plan_detail(battle.get('intraday_plan', {})))
                     # 仓位策略
                     position = battle.get('position_strategy', {})
                     if position:
@@ -1799,16 +1790,22 @@ class NotificationService(
 
         intraday = battle.get('intraday_plan', {}) if battle else {}
         if intraday:
+            intraday_validation = {
+                "passed": "✅ 校验通过",
+                "failed": "⚠️ 未通过执行校验",
+                "skipped": "⏸️ 等待状态，无需校验",
+            }.get(str(intraday.get('validation_status') or '').strip().lower(), '-')
             lines.extend([
-                "### ⏱️ 小时线日内计划（服从日线）",
+                "### ⏱️ 小时线日内计划",
                 "",
-                "| 方向 | 入场 | 止损 | 目标 |",
-                "|------|------|------|------|",
+                "| 方向 | 入场 | 止损 | 目标 | 执行校验 |",
+                "|------|------|------|------|----------|",
                 (
                     f"| {intraday.get('direction', '-')} | "
                     f"{intraday.get('entry_price', '-')} | "
                     f"{intraday.get('stop_loss', '-')} | "
-                    f"{intraday.get('take_profit', '-')} |"
+                    f"{intraday.get('take_profit', '-')} | "
+                    f"{intraday_validation} |"
                 ),
                 "",
             ])
@@ -1922,6 +1919,18 @@ class NotificationService(
         is_waiting = cls._btc_plan_is_waiting(plan)
         lines.append(f"**状态：{'等待条件' if is_waiting else '可执行计划'}**")
         lines.append("")
+        validation_status = str(plan.get("validation_status") or "").strip().lower()
+        validation_label = {
+            "passed": "✅ 校验通过",
+            "failed": "⚠️ 未通过执行校验",
+            "skipped": "⏸️ 等待状态，无需校验",
+        }.get(validation_status)
+        if validation_label:
+            lines.append(f"- 执行校验：**{validation_label}**")
+            if validation_status == "failed":
+                validation_note = cls._clean_btc_plan_text(plan.get("validation_note"))
+                if validation_note:
+                    lines.append(f"- 校验说明：{validation_note}")
         lines.append("**核心点位**")
         lines.append(f"- 方向：**{direction}**")
         for label, key in (("入场", "entry_price"), ("止损", "stop_loss"), ("止盈", "take_profit")):

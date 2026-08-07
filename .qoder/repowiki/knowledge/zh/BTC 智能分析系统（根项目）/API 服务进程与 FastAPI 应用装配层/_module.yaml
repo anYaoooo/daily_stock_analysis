@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: api_server
+title: API 服务进程与 FastAPI 应用装配层
+scope:
+    - api/
+    - server.py
+source_files: []
+depends_on: []
+related_to:
+    - path: bot_system
+    - path: core_engine
+    - path: docker_deploy
+    - path: tests

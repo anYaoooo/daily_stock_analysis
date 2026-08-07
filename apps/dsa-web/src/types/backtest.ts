@@ -37,6 +37,19 @@ export interface CryptoBacktestSelectedRunRequest {
   force?: boolean;
 }
 
+export interface CryptoBacktestTaskAccepted {
+  taskId: string;
+  status: 'pending' | 'processing';
+  message?: string;
+}
+
+export interface CryptoBacktestTaskStatus extends Omit<CryptoBacktestTaskAccepted, 'status'> {
+  progress: number;
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancel_requested' | 'cancelled';
+  result?: BacktestRunResponse;
+  error?: string;
+}
+
 export interface BacktestRunResponse {
   processed: number;
   saved: number;

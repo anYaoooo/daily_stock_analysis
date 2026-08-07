@@ -16,6 +16,8 @@ import type {
   CryptoBacktestPlanTypeFilter,
   CryptoBacktestResultStatusFilter,
   CryptoBacktestSelectedRunRequest,
+  CryptoBacktestTaskAccepted,
+  CryptoBacktestTaskStatus,
 } from '../types/backtest';
 
 // ============ API ============
@@ -55,6 +57,29 @@ export const backtestApi = {
       requestData,
     );
     return toCamelCase<BacktestRunResponse>(response.data);
+  },
+
+  /** Submit selected BTC backtests and return before the batch completes. */
+  runSelectedAsync: async (params: CryptoBacktestSelectedRunRequest): Promise<CryptoBacktestTaskAccepted> => {
+    const requestData: Record<string, unknown> = {
+      analysis_history_ids: params.analysisHistoryIds,
+    };
+    if (params.planTypes?.length) requestData.plan_types = params.planTypes;
+    if (params.force) requestData.force = params.force;
+
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/backtest/crypto/run-selected-async',
+      requestData,
+    );
+    return toCamelCase<CryptoBacktestTaskAccepted>(response.data);
+  },
+
+  /** Get the status and terminal result for an accepted BTC backtest task. */
+  getTask: async (taskId: string): Promise<CryptoBacktestTaskStatus> => {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/backtest/crypto/tasks/${taskId}`,
+    );
+    return toCamelCase<CryptoBacktestTaskStatus>(response.data);
   },
 
   /**

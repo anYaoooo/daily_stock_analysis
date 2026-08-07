@@ -664,6 +664,51 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("基本面不应出现在", out)
         self.assertNotIn("不应展示持仓建议", out)
         self.assertNotIn("综合结论不应出现在", out)
+        # 无 validation_status 字段时不渲染执行校验行
+        self.assertNotIn("执行校验", out)
+
+    @mock.patch("src.notification.get_config")
+    def test_generate_btc_single_stock_report_shows_validation_status(
+        self,
+        mock_get_config: mock.MagicMock,
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="BTC",
+            name="Bitcoin",
+            sentiment_score=58,
+            trend_prediction="震荡",
+            operation_advice="观望",
+            analysis_summary="双向计划均给出",
+            dashboard={
+                "battle_plan": {
+                    "long_plan": {
+                        "direction": "long",
+                        "entry_price": "64165",
+                        "stop_loss": "63180",
+                        "take_profit": "66955",
+                        "validation_status": "passed",
+                        "validation_note": "已通过执行校验",
+                    },
+                    "short_plan": {
+                        "direction": "short",
+                        "entry_price": "64480",
+                        "stop_loss": "65180",
+                        "take_profit": "62555",
+                        "validation_status": "failed",
+                        "validation_errors": ["risk_reward_below_minimum"],
+                        "validation_note": "未通过执行校验（risk_reward_below_minimum），计划仅供参考。",
+                    },
+                },
+            },
+        )
+
+        out = service.generate_single_stock_report(result)
+
+        self.assertIn("- 执行校验：**✅ 校验通过**", out)
+        self.assertIn("- 执行校验：**⚠️ 未通过执行校验**", out)
+        self.assertIn("未通过执行校验（risk_reward_below_minimum），计划仅供参考。", out)
 
     @mock.patch("src.notification.get_config")
     def test_generate_btc_hourly_report_uses_hourly_schedule_template(

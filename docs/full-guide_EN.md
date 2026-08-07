@@ -1523,6 +1523,10 @@ Opportunity-triggered hourly analysis receives `trigger_reason=entry_signal`, su
 
 When `BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true`, the monitor prefers the OKX public ticker WebSocket cache. If the cache is missing or stale, it falls back through OKX REST, Binance REST, and Bybit REST. If all providers are temporarily unavailable, the check reports `quote_error` instead of repeatedly throwing full scheduler exceptions. The default two-sample confirmation reduces false positives from dirty Last Price ticks, one-off wicks, or abnormal exchange quotes. Setting confirmation samples to `1` improves response speed but increases false-trigger risk. Regular hourly baseline analysis remains available, but defaults to every 4 hours through `BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4`; faster intraday opportunities are handled by the event monitor.
 
+Detection windows can be tiered. Setting `BTC_VOLATILITY_MONITOR_WINDOW_TIERS` (for example `1:0.4,3:0.7,5:1.0,15:1.5`, formatted as `window_minutes:threshold_pct`) makes the monitor track several windows at once, and the shortest breached window opens the opportunity watch first, so slow grind moves are no longer missed by a single 5-minute window. Leaving it empty keeps the legacy single-window behavior unchanged. In tiered mode the monitor also detects liquidity sweeps: when the extreme price in the window reverts by more than `BTC_VOLATILITY_MONITOR_SPIKE_REVERT_PCT` (0.4% by default), it sends a sweep alert only and never triggers analysis. `BTC_VOLATILITY_MONITOR_COOLDOWN_ALLOW_REVERSAL=true` lets an opposite-direction window-breach signal bypass the post-trigger cooldown (noise-level velocity triggers never bypass), so reversal cascades are not swallowed by the cooldown.
+
+The advanced detectors below are all off by default; calibrate them on historical candles with the replay tool before enabling. `BTC_VOLATILITY_MONITOR_ADAPTIVE_THRESHOLD_ENABLED=true` scales thresholds with recent realized volatility: `threshold = clamp(K × σ × √window, MIN, MAX)`, falling back to the static threshold until enough samples accumulate. `BTC_VOLATILITY_MONITOR_VELOCITY_ENABLED=true` escalates a poll-to-poll move into an event when its rate reaches the median recent rate × `VELOCITY_MULT` and its absolute size is at least `VELOCITY_MIN_PCT` (the absolute floor keeps a pure relative multiplier from flagging noise in quiet regimes; in tiered mode the floor is raised to max(`VELOCITY_MIN_PCT`, 0.5 × fastest tier threshold), and velocity events get neither fast confirmation nor a cooldown reversal bypass, so noisy high-frequency sampling cannot flip long/short guidance back and forth). `BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_ENABLED=true` drops the required confirmation samples to 1 for violent moves (initial change ≥ `FAST_CONFIRMATION_MULT` × threshold), trading confirmation depth for speed. Calibration tool: `python scripts/replay_volatility_monitor.py --csv <1m candles CSV>` or `--fetch --exchange okx --symbol BTC/USDT --days 3`; it reports hit rate, average detection latency, and false-positive rate, and `--compare` evaluates the single-window and tiered configs side by side.
+
 ```env
 BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4
 BTC_HOURLY_ANALYSIS_AT_MINUTE=5
@@ -1531,14 +1535,27 @@ BTC_VOLATILITY_MONITOR_USE_WEBSOCKET=true
 BTC_VOLATILITY_MONITOR_WS_STALE_SECONDS=20
 BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS=15
 BTC_VOLATILITY_MONITOR_WINDOW_MINUTES=1
+BTC_VOLATILITY_MONITOR_WINDOW_TIERS=1:0.4,3:0.7,5:1.0,15:1.5
+BTC_VOLATILITY_MONITOR_SPIKE_REVERT_PCT=0.4
 BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT=0.3
 BTC_VOLATILITY_MONITOR_THRESHOLD_PCT=1.0
 BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES=30
+BTC_VOLATILITY_MONITOR_COOLDOWN_ALLOW_REVERSAL=true
 BTC_VOLATILITY_MONITOR_SYMBOL=BTC
 BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES=2
 BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT=0.2
 BTC_VOLATILITY_MONITOR_INVALIDATION_PCT=0.5
 BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES=20
+BTC_VOLATILITY_MONITOR_ADAPTIVE_THRESHOLD_ENABLED=false
+BTC_VOLATILITY_MONITOR_ADAPTIVE_K=2.5
+BTC_VOLATILITY_MONITOR_ADAPTIVE_MIN_PCT=0.4
+BTC_VOLATILITY_MONITOR_ADAPTIVE_MAX_PCT=2.0
+BTC_VOLATILITY_MONITOR_ADAPTIVE_LOOKBACK_MINUTES=240
+BTC_VOLATILITY_MONITOR_VELOCITY_ENABLED=false
+BTC_VOLATILITY_MONITOR_VELOCITY_MULT=3.0
+BTC_VOLATILITY_MONITOR_VELOCITY_MIN_PCT=0.1
+BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_ENABLED=false
+BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_MULT=1.5
 ```
 
 Rollback is to remove the variables or set `BTC_VOLATILITY_MONITOR_ENABLED=false`. The lower-frequency hourly baseline analysis and `AGENT_EVENT_MONITOR_*` alert center are unaffected. Opportunity-triggered analysis shares the in-process BTC analysis lock with scheduled hourly analysis; if another BTC analysis is already running, the trigger is logged and skipped to avoid duplicate reports.

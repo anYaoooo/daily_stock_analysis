@@ -32,6 +32,22 @@ class CryptoBacktestSelectedRunRequest(BaseModel):
     force: bool = Field(False, description="强制重新计算已存在的计划回测")
 
 
+class CryptoBacktestTaskAccepted(BaseModel):
+    """Accepted BTC backtest task."""
+
+    task_id: str = Field(..., description="回测任务 ID，用于查询执行状态")
+    status: str = Field(..., description="任务状态：pending/processing")
+    message: Optional[str] = Field(None, description="任务提示")
+
+
+class CryptoBacktestTaskStatus(CryptoBacktestTaskAccepted):
+    """BTC backtest task state and terminal result."""
+
+    progress: int = Field(0, ge=0, le=100, description="任务进度百分比")
+    result: Optional["CryptoBacktestRunResponse"] = Field(None, description="完成后的回测统计")
+    error: Optional[str] = Field(None, description="失败原因")
+
+
 class BacktestRunResponse(BaseModel):
     processed: int = Field(..., description="候选记录数")
     saved: int = Field(..., description="写入回测结果数")

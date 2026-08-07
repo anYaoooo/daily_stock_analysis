@@ -388,6 +388,18 @@ curl -X POST http://127.0.0.1:8000/api/v1/backtest/crypto/run-selected \
 
 非 `force` 模式下，已存在的计划级结果会被跳过，避免产生难以解释的重复记录。`force=true` 只替换本次涉及的计划类型，不会删除同一报告其他计划的结果。
 
+Web 的单条和批量回测使用异步接口，先提交再查询状态，避免长时间的数据拉取和计算占用浏览器请求：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/backtest/crypto/run-selected-async \
+  -H "Content-Type: application/json" \
+  -d '{"analysis_history_ids":[123,124],"plan_types":["daily_long"],"force":false}'
+
+curl "http://127.0.0.1:8000/api/v1/backtest/crypto/tasks/<task_id>"
+```
+
+提交接口返回 HTTP `202` 和 `task_id`；状态接口在完成后返回与同步接口相同的回测统计。任务状态复用服务进程内队列，服务重启会终止未完成任务且原 `task_id` 不再可查询。同步 `run-selected` 接口保留给现有脚本和兼容调用。
+
 ### 6.4 查询回测结果
 
 ```bash

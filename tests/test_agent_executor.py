@@ -1049,6 +1049,75 @@ class TestAgentExecutor(unittest.TestCase):
         self.assertIn("多头排列必须条件", prompt)
         self.assertIn("多头排列：MA5 > MA10 > MA20", prompt)
 
+    def test_prompt_injects_btc_battle_plan_contract_for_crypto_run(self):
+        """BTC agent runs must carry the two-way policy and battle-plan structure."""
+        registry = _make_registry_with_echo()
+        adapter = _make_mock_adapter()
+        adapter.call_with_tools.return_value = LLMResponse(
+            content=json.dumps(SAMPLE_DASHBOARD, ensure_ascii=False),
+            tool_calls=[],
+            usage={"total_tokens": 50},
+            provider="openai",
+        )
+
+        executor = AgentExecutor(
+            registry,
+            adapter,
+            default_skill_policy="## 默认技能基线（必须严格遵守）",
+            max_steps=2,
+        )
+        result = executor.run("Analyze BTC", context={"stock_code": "BTC"})
+
+        self.assertTrue(result.success)
+        prompt = adapter.call_with_tools.call_args.args[0][0]["content"]
+        self.assertIn("BTC 默认技能基线", prompt)
+        self.assertIn("BTC 作战计划输出结构", prompt)
+        self.assertIn("long_plan", prompt)
+        self.assertIn("execution_contract", prompt)
+
+    def test_prompt_btc_contract_present_but_policy_gated_on_explicit_skill_run(self):
+        """Explicit skill BTC runs keep the structure contract but skip the baseline policy."""
+        registry = _make_registry_with_echo()
+        adapter = _make_mock_adapter()
+        adapter.call_with_tools.return_value = LLMResponse(
+            content=json.dumps(SAMPLE_DASHBOARD, ensure_ascii=False),
+            tool_calls=[],
+            usage={"total_tokens": 50},
+            provider="openai",
+        )
+
+        executor = AgentExecutor(
+            registry,
+            adapter,
+            skill_instructions="### 技能 1: 自定义策略",
+            default_skill_policy="",
+            max_steps=2,
+        )
+        result = executor.run("Analyze BTCUSDT", context={"stock_code": "BTCUSDT"})
+
+        self.assertTrue(result.success)
+        prompt = adapter.call_with_tools.call_args.args[0][0]["content"]
+        self.assertIn("BTC 作战计划输出结构", prompt)
+        self.assertNotIn("BTC 默认技能基线", prompt)
+
+    def test_prompt_skips_btc_battle_plan_contract_for_stock_run(self):
+        registry = _make_registry_with_echo()
+        adapter = _make_mock_adapter()
+        adapter.call_with_tools.return_value = LLMResponse(
+            content=json.dumps(SAMPLE_DASHBOARD, ensure_ascii=False),
+            tool_calls=[],
+            usage={"total_tokens": 50},
+            provider="openai",
+        )
+
+        executor = AgentExecutor(registry, adapter, max_steps=2)
+        result = executor.run("Analyze 600519", context={"stock_code": "600519"})
+
+        self.assertTrue(result.success)
+        prompt = adapter.call_with_tools.call_args.args[0][0]["content"]
+        self.assertNotIn("BTC 作战计划输出结构", prompt)
+        self.assertNotIn("BTC 默认技能基线", prompt)
+
     def test_simple_text_response(self):
         """Agent returns text immediately (no tool calls) with JSON dashboard."""
         registry = _make_registry_with_echo()

@@ -1,0 +1,222 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: main
+nodes_managed: true
+exported_at: "2026-07-31T16:13:52Z"
+modules:
+    "":
+        dir_name: BTC 智能分析系统（根项目）
+        title: BTC 智能分析系统（根项目）
+        scope:
+            - README.md
+            - SKILL.md
+            - main.py
+            - server.py
+            - webui.py
+            - pyproject.toml
+            - requirements.txt
+            - setup.cfg
+            - .dockerignore
+            - .gitattributes
+            - .gitignore
+            - AGENTS.md
+            - CLAUDE.md
+            - LICENSE
+        source_files: []
+        children:
+            - agents_skills
+            - api_server
+            - bot_system
+            - core_engine
+            - data_providers
+            - docker_deploy
+            - docs
+            - github_ci
+            - scripts
+            - strategies
+            - templates
+            - tests
+        depends_on: []
+        related_to: []
+    agents_skills:
+        dir_name: AI Agent Skills 定义目录
+        title: AI Agent Skills 定义目录
+        scope:
+            - .agents/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine
+    api_server:
+        dir_name: API 服务进程与 FastAPI 应用装配层
+        title: API 服务进程与 FastAPI 应用装配层
+        scope:
+            - api/
+            - server.py
+        source_files: []
+        children:
+            - api_server/app_core
+            - api_server/v1_router
+        depends_on: []
+        related_to:
+            - path: bot_system
+            - path: core_engine
+            - path: docker_deploy
+            - path: tests
+    api_server/app_core:
+        dir_name: FastAPI 应用工厂与依赖注入
+        title: FastAPI 应用工厂与依赖注入
+        scope:
+            - api/app.py
+            - api/deps.py
+            - api/__init__.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    api_server/v1_router:
+        dir_name: API v1 路由聚合与错误响应
+        title: API v1 路由聚合与错误响应
+        scope:
+            - api/v1/router.py
+            - api/v1/errors.py
+            - api/v1/__init__.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    bot_system:
+        dir_name: 机器人命令分发与多平台 Webhook 系统
+        title: 机器人命令分发与多平台 Webhook 系统
+        scope:
+            - bot/
+        source_files: []
+        children:
+            - bot_system/core_runtime
+        depends_on: []
+        related_to:
+            - path: api_server
+            - path: tests
+    bot_system/core_runtime:
+        dir_name: 机器人命令分发与 Webhook 处理核心
+        title: 机器人命令分发与 Webhook 处理核心
+        scope:
+            - bot/dispatcher.py
+            - bot/handler.py
+            - bot/models.py
+            - bot/__init__.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    core_engine:
+        dir_name: BTC_A股智能分析核心引擎
+        title: BTC/A股智能分析核心引擎
+        scope:
+            - src/
+        source_files: []
+        children:
+            - core_engine/application_entry
+        depends_on: []
+        related_to:
+            - path: agents_skills
+            - path: api_server
+            - path: data_providers
+            - path: strategies
+            - path: templates
+    core_engine/application_entry:
+        dir_name: 应用入口与基础设施（配置、认证、存储、调度、日志、枚举）
+        title: 应用入口与基础设施（配置、认证、存储、调度、日志、枚举）
+        scope:
+            - src/config.py
+            - src/auth.py
+            - src/storage.py
+            - src/scheduler.py
+            - src/logging_config.py
+            - src/enums.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    data_providers:
+        dir_name: 多源数据获取策略层（Data Providers）
+        title: 多源数据获取策略层（Data Providers）
+        scope:
+            - data_provider/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine
+    docker_deploy:
+        dir_name: Docker 容器化部署配置
+        title: Docker 容器化部署配置
+        scope:
+            - docker/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: api_server
+            - path: scripts
+    docs:
+        dir_name: 项目文档与资源中心
+        title: 项目文档与资源中心
+        scope:
+            - docs/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    github_ci:
+        dir_name: GitHub 仓库协作与 CI_CD 配置
+        title: GitHub 仓库协作与 CI/CD 配置
+        scope:
+            - .github/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    scripts:
+        dir_name: 项目构建、测试与数据工具脚本集
+        title: 项目构建、测试与数据工具脚本集
+        scope:
+            - scripts/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: docker_deploy
+    strategies:
+        dir_name: 自然语言交易策略库（Strategy Skills）
+        title: 自然语言交易策略库（Strategy Skills）
+        scope:
+            - strategies/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine
+    templates:
+        dir_name: 股票分析报告模板（Jinja2）
+        title: 股票分析报告模板（Jinja2）
+        scope:
+            - templates/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine
+    tests:
+        dir_name: 单元测试与冒烟测试套件
+        title: 单元测试与冒烟测试套件
+        scope:
+            - tests/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: api_server
+            - path: bot_system

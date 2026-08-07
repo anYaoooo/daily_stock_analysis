@@ -22,6 +22,8 @@ from api.v1.schemas.backtest import (
     CryptoBacktestResultItem,
     CryptoBacktestRunResponse,
     CryptoBacktestSelectedRunRequest,
+    CryptoBacktestTaskAccepted,
+    CryptoBacktestTaskStatus,
     BacktestResultItem,
     BacktestResultsResponse,
     PerformanceMetrics,
@@ -29,6 +31,7 @@ from api.v1.schemas.backtest import (
 from api.v1.schemas.common import ErrorResponse
 from src.services.backtest_service import BacktestService
 from src.services.crypto_backtest_service import CryptoBacktestService
+from src.services.task_queue import TaskStatus, get_task_queue
 from src.storage import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -148,18 +151,7 @@ def run_selected_crypto_backtests(
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> CryptoBacktestRunResponse:
     try:
-        allowed_plan_types = {"daily_long", "daily_short", "intraday"}
-        plan_types = request.plan_types or None
-        if plan_types:
-            invalid = sorted({item for item in plan_types if item not in allowed_plan_types})
-            if invalid:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "invalid_params",
-                        "message": f"Unsupported plan_types: {', '.join(invalid)}",
-                    },
-                )
+        plan_types = _validate_selected_plan_types(request.plan_types)
         service = CryptoBacktestService(db_manager)
         stats = service.run_selected_backtests(
             analysis_history_ids=request.analysis_history_ids,
@@ -175,6 +167,103 @@ def run_selected_crypto_backtests(
             status_code=500,
             detail={"error": "internal_error", "message": f"指定 BTC 回测执行失败: {str(exc)}"},
         )
+
+
+def _validate_selected_plan_types(plan_types: Optional[list[str]]) -> Optional[list[str]]:
+    if not plan_types:
+        return None
+    allowed_plan_types = {"daily_long", "daily_short", "intraday"}
+    invalid = sorted({item for item in plan_types if item not in allowed_plan_types})
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_params",
+                "message": f"Unsupported plan_types: {', '.join(invalid)}",
+            },
+        )
+    return plan_types
+
+
+@router.post(
+    "/crypto/run-selected-async",
+    status_code=202,
+    response_model=CryptoBacktestTaskAccepted,
+    responses={
+        202: {"description": "BTC 回测任务已受理"},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="异步触发指定 BTC 历史记录回测",
+    description="提交回测任务并立即返回 task_id，避免批量回测占用 HTTP 请求直到完成。",
+)
+def start_selected_crypto_backtests(
+    request: CryptoBacktestSelectedRunRequest,
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> CryptoBacktestTaskAccepted:
+    try:
+        plan_types = _validate_selected_plan_types(request.plan_types)
+        analysis_history_ids = list(request.analysis_history_ids)
+        force = request.force
+
+        def run_task() -> dict:
+            service = CryptoBacktestService(db_manager)
+            return service.run_selected_backtests(
+                analysis_history_ids=analysis_history_ids,
+                plan_types=plan_types,
+                force=force,
+            )
+
+        task = get_task_queue().submit_background_task(
+            run_task,
+            stock_code="btc_backtest",
+            stock_name="BTC 回测",
+            report_type="backtest",
+            message=f"已加入回测队列（{len(analysis_history_ids)} 条记录）",
+        )
+        return CryptoBacktestTaskAccepted(
+            task_id=task.task_id,
+            status=task.status.value,
+            message=task.message,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("提交指定 BTC 回测任务失败: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": "提交 BTC 回测任务失败"},
+        )
+
+
+@router.get(
+    "/crypto/tasks/{task_id}",
+    response_model=CryptoBacktestTaskStatus,
+    responses={
+        200: {"description": "BTC 回测任务状态"},
+        404: {"description": "任务不存在或已过期", "model": ErrorResponse},
+    },
+    summary="查询 BTC 回测任务状态",
+)
+def get_selected_crypto_backtest_task(task_id: str) -> CryptoBacktestTaskStatus:
+    task = get_task_queue().get_task(task_id)
+    if task is None or task.report_type != "backtest":
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "message": "BTC 回测任务不存在或已过期"},
+        )
+
+    result = None
+    if task.status == TaskStatus.COMPLETED and isinstance(task.result, dict):
+        result = CryptoBacktestRunResponse(**task.result)
+    return CryptoBacktestTaskStatus(
+        task_id=task.task_id,
+        status=task.status.value,
+        message=task.message,
+        progress=task.progress,
+        result=result,
+        error=task.error,
+    )
 
 
 @router.get(

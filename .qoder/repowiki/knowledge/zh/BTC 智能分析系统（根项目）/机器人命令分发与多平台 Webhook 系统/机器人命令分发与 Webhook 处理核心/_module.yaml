@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: bot_system/core_runtime
+title: 机器人命令分发与 Webhook 处理核心
+scope:
+    - bot/dispatcher.py
+    - bot/handler.py
+    - bot/models.py
+    - bot/__init__.py
+source_files: []
+depends_on: []
+related_to: []

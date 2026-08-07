@@ -30,6 +30,8 @@ STRATEGY_PLAN_KEYS = (
     "confidence",
     "no_trade_reason",
     "reason",
+    "validation_status",
+    "validation_note",
 )
 INTRADAY_PLAN_KEYS = (
     "timeframe",
@@ -52,6 +54,8 @@ INTRADAY_PLAN_KEYS = (
     "confidence",
     "no_trade_reason",
     "reason",
+    "validation_status",
+    "validation_note",
 )
 
 

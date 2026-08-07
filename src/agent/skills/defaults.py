@@ -75,9 +75,26 @@ BTC 属于 7x24 双向交易标的，默认策略不得只选择多头。当前�
 - 当突破确认距离过远或风险收益不足时，优先给出可回测的回踩试仓方案；确认加仓必须是试仓后的动作，不能把追高/追空包装成更高概率信号。
 - 最终主方案可以写入 `sniper_points` 兼容字段，但 `sniper_points` 不能替代双向计划。
 
-### 3. 风控优先
+### 3. 点位贴近现价（可触发性约束）
+- 入场价/试仓价必须落在当前价 ±1.0×ATR（日线 atr14）以内；若符合逻辑的点位距现价过远，不得给出遥远挂单，应改为等待条件并写明触发价位。
+- 执行契约的确认价（close_above/close_below 的 value）必须贴近入场价，偏离不得超过 0.5%。
+- 止损距离建议不超过 1.5×ATR；止损过宽时应缩小仓位而不是放宽止损。
+- 上下文未提供 ATR 时，用近 14 根日线平均波幅估算，并在依据中说明。
+
+### 4. 风控优先
 - 禁止在指标冲突时激进追多或盲目开空。
 - 任何方向都必须先定义失效条件，再给入场建议。
+"""
+
+CRYPTO_BATTLE_PLAN_SCHEMA_ZH = """## BTC 作战计划输出结构（必须严格遵守）
+
+分析 BTC 时，`dashboard.battle_plan` 除 `sniper_points` 外必须同时输出以下结构，不得省略任一方向：
+
+- `long_plan` 与 `short_plan`（日线级主策略，必须同时输出；即使倾向一边，另一边也要给“仅在何条件触发”的备用计划）：包含 `plan_type`、`direction`（long/short/wait）、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`risk_reward`、`position_hint`、`confidence`、`reason`、`execution_ladder`、`execution_contract`；暂不满足时写清等待条件和 `no_trade_reason`。
+- `intraday_plan`（仅承载小时线日内机会，不得混写日线主策略）：额外包含 `enabled` 与 `daily_constraint`；无日内机会时 `enabled=false`、`direction="wait"` 并写清等待条件。
+- `execution_contract` 结构要求：`entry.setup_type` 取 breakout 或 pullback（突破跟随选 breakout，等回踩承接/反抽拒绝选 pullback）；`entry.conditions` 为 `{"type": ..., "value": ...}` 列表，breakout 用 close_above/close_below 且必须带 volume_ratio_gte，pullback 用 low_lte/high_gte 触碰并搭配收盘确认；确认价 value 必须贴近 entry_price，偏离不超过 0.5%；`confirmation_bars` 一般为 1；`fill` 用 next_bar_open。
+- 等待与持仓窗口：日线计划按日线K线计，`max_wait_bars` 在 2-5、`exit.max_holding_bars` 在 3-7 内按触发难易取值；日内计划按小时线计，`max_wait_bars` 不超过 8、`exit.max_holding_bars` 不超过 12。
+- `execution_ladder`：关键位轻仓试仓、结构确认后加仓，以及同一失效价触发后的撤销/退出；试仓必须基于回踩承接、扫流动性收回或区间边缘拒绝等明确结构。
 """
 
 TECHNICAL_SKILL_RULES_EN = """## Default Skill Baseline
@@ -109,6 +126,22 @@ def get_crypto_two_way_trading_skill_policy(*, explicit_skill_selection: bool) -
     if explicit_skill_selection:
         return ""
     return CRYPTO_TWO_WAY_SKILL_POLICY_ZH
+
+
+def get_crypto_battle_plan_prompt_section(*, explicit_skill_selection: bool) -> str:
+    """Return the BTC prompt section for agent-mode runs.
+
+    The battle-plan structure contract is always included because downstream
+    execution validation depends on those fields; the two-way strategy baseline
+    follows the same explicit-skill gate as the stock baseline.
+    """
+    sections = [
+        get_crypto_two_way_trading_skill_policy(
+            explicit_skill_selection=explicit_skill_selection,
+        ),
+        CRYPTO_BATTLE_PLAN_SCHEMA_ZH,
+    ]
+    return "\n\n".join(section for section in sections if section)
 
 
 def get_default_technical_skill_policy(*, explicit_skill_selection: bool) -> str:

@@ -480,12 +480,20 @@ const BacktestPage: React.FC = () => {
     if (singleId) setRunningRecordId(singleId);
     else setIsRunningBatch(true);
     try {
-      const result = await backtestApi.runSelected({
+      const task = await backtestApi.runSelectedAsync({
         analysisHistoryIds: ids,
         planTypes,
         force: forceRerun,
       });
-      setRunResult(result);
+      let status = await backtestApi.getTask(task.taskId);
+      while (status.status === 'pending' || status.status === 'processing') {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 1000));
+        status = await backtestApi.getTask(task.taskId);
+      }
+      if (status.status !== 'completed' || !status.result) {
+        throw new Error(status.error || '回测任务未完成');
+      }
+      setRunResult(status.result);
       await refreshCurrentPage();
     } catch (err) {
       setError(getParsedApiError(err));

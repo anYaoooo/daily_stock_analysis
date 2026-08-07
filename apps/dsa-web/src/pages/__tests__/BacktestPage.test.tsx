@@ -7,13 +7,15 @@ const {
   mockGetHistory,
   mockGetLossReview,
   mockGetOverallPerformance,
-  mockRunSelected,
+  mockRunSelectedAsync,
+  mockGetTask,
   mockDeleteRecords,
 } = vi.hoisted(() => ({
   mockGetHistory: vi.fn(),
   mockGetLossReview: vi.fn(),
   mockGetOverallPerformance: vi.fn(),
-  mockRunSelected: vi.fn(),
+  mockRunSelectedAsync: vi.fn(),
+  mockGetTask: vi.fn(),
   mockDeleteRecords: vi.fn(),
 }));
 
@@ -22,7 +24,8 @@ vi.mock('../../api/backtest', () => ({
     getHistory: mockGetHistory,
     getLossReview: mockGetLossReview,
     getOverallPerformance: mockGetOverallPerformance,
-    runSelected: mockRunSelected,
+    runSelectedAsync: mockRunSelectedAsync,
+    getTask: mockGetTask,
   },
 }));
 
@@ -179,13 +182,24 @@ beforeEach(() => {
   });
   mockGetOverallPerformance.mockResolvedValue(basePerformance);
   mockGetLossReview.mockResolvedValue(baseLossReview);
-  mockRunSelected.mockResolvedValue({
+  mockRunSelectedAsync.mockResolvedValue({
+    taskId: 'backtest-task-1',
+    status: 'pending',
+    message: '已加入回测队列',
+  });
+  mockGetTask.mockResolvedValue({
+    taskId: 'backtest-task-1',
+    status: 'completed',
+    progress: 100,
+    message: '任务执行完成',
+    result: {
     processed: 1,
     saved: 1,
     completed: 1,
     insufficient: 0,
     skipped: 0,
     errors: 0,
+    },
   });
   mockDeleteRecords.mockResolvedValue({ deleted: 1 });
   vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -312,7 +326,7 @@ describe('BacktestPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '回测计划' }));
 
     await waitFor(() => {
-      expect(mockRunSelected).toHaveBeenCalledWith({
+      expect(mockRunSelectedAsync).toHaveBeenCalledWith({
         analysisHistoryIds: [7],
         planTypes: ['daily_long'],
         force: false,
@@ -361,7 +375,7 @@ describe('BacktestPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /批量回测/ }));
 
     await waitFor(() => {
-      expect(mockRunSelected).toHaveBeenCalledWith({
+      expect(mockRunSelectedAsync).toHaveBeenCalledWith({
         analysisHistoryIds: [7],
         planTypes: undefined,
         force: false,

@@ -1,0 +1,21 @@
+schema_version: 1
+module_path: ""
+title: BTC 智能分析系统（根项目）
+scope:
+    - README.md
+    - SKILL.md
+    - main.py
+    - server.py
+    - webui.py
+    - pyproject.toml
+    - requirements.txt
+    - setup.cfg
+    - .dockerignore
+    - .gitattributes
+    - .gitignore
+    - AGENTS.md
+    - CLAUDE.md
+    - LICENSE
+source_files: []
+depends_on: []
+related_to: []

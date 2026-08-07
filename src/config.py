@@ -744,14 +744,27 @@ class Config:
     btc_volatility_monitor_ws_stale_seconds: int = 30
     btc_volatility_monitor_interval_seconds: int = 60
     btc_volatility_monitor_window_minutes: int = 5
+    btc_volatility_monitor_window_tiers: str = ""  # "1:0.4,3:0.7,5:1.0" => multi-window mode; empty keeps legacy single window
+    btc_volatility_monitor_spike_revert_pct: float = 0.4  # revert from window extreme that marks a liquidity sweep (tier mode)
     btc_volatility_monitor_early_warning_pct: float = 0.3
     btc_volatility_monitor_threshold_pct: float = 1.0
     btc_volatility_monitor_cooldown_minutes: int = 30
+    btc_volatility_monitor_cooldown_allow_reversal: bool = False  # let an opposite-direction signal bypass cooldown
     btc_volatility_monitor_symbol: str = "BTC"
     btc_volatility_monitor_confirmation_samples: int = 2
     btc_volatility_monitor_entry_confirmation_pct: float = 0.2
     btc_volatility_monitor_invalidation_pct: float = 0.5
     btc_volatility_monitor_max_watch_minutes: int = 20
+    btc_volatility_monitor_adaptive_threshold_enabled: bool = False  # scale thresholds with recent realized volatility
+    btc_volatility_monitor_adaptive_k: float = 2.5  # threshold = clamp(k * sigma * sqrt(window/dt), min, max)
+    btc_volatility_monitor_adaptive_min_pct: float = 0.4
+    btc_volatility_monitor_adaptive_max_pct: float = 2.0
+    btc_volatility_monitor_adaptive_lookback_minutes: int = 240  # rolling window for sigma / velocity baseline
+    btc_volatility_monitor_velocity_enabled: bool = False  # escalate when poll-to-poll move rate >= mult x median
+    btc_volatility_monitor_velocity_mult: float = 3.0
+    btc_volatility_monitor_velocity_min_pct: float = 0.1  # absolute floor so quiet-market noise never qualifies
+    btc_volatility_monitor_fast_confirmation_enabled: bool = False  # violent moves confirm with a single sample
+    btc_volatility_monitor_fast_confirmation_mult: float = 1.5  # initial_change >= mult x threshold marks a fast path
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -1623,6 +1636,15 @@ class Config:
                 field_name='BTC_VOLATILITY_MONITOR_WINDOW_MINUTES',
                 minimum=1,
             ),
+            btc_volatility_monitor_window_tiers=(
+                os.getenv('BTC_VOLATILITY_MONITOR_WINDOW_TIERS') or ''
+            ).strip(),
+            btc_volatility_monitor_spike_revert_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_SPIKE_REVERT_PCT'),
+                0.4,
+                field_name='BTC_VOLATILITY_MONITOR_SPIKE_REVERT_PCT',
+                minimum=0.1,
+            ),
             btc_volatility_monitor_early_warning_pct=parse_env_float(
                 os.getenv('BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT'),
                 0.3,
@@ -1640,6 +1662,10 @@ class Config:
                 30,
                 field_name='BTC_VOLATILITY_MONITOR_COOLDOWN_MINUTES',
                 minimum=0,
+            ),
+            btc_volatility_monitor_cooldown_allow_reversal=parse_env_bool(
+                os.getenv('BTC_VOLATILITY_MONITOR_COOLDOWN_ALLOW_REVERSAL'),
+                default=False,
             ),
             btc_volatility_monitor_symbol=(os.getenv('BTC_VOLATILITY_MONITOR_SYMBOL') or 'BTC').strip() or 'BTC',
             btc_volatility_monitor_confirmation_samples=parse_env_int(
@@ -1665,6 +1691,60 @@ class Config:
                 20,
                 field_name='BTC_VOLATILITY_MONITOR_MAX_WATCH_MINUTES',
                 minimum=1,
+            ),
+            btc_volatility_monitor_adaptive_threshold_enabled=parse_env_bool(
+                os.getenv('BTC_VOLATILITY_MONITOR_ADAPTIVE_THRESHOLD_ENABLED'),
+                default=False,
+            ),
+            btc_volatility_monitor_adaptive_k=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_ADAPTIVE_K'),
+                2.5,
+                field_name='BTC_VOLATILITY_MONITOR_ADAPTIVE_K',
+                minimum=0.1,
+            ),
+            btc_volatility_monitor_adaptive_min_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_ADAPTIVE_MIN_PCT'),
+                0.4,
+                field_name='BTC_VOLATILITY_MONITOR_ADAPTIVE_MIN_PCT',
+                minimum=0.1,
+            ),
+            btc_volatility_monitor_adaptive_max_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_ADAPTIVE_MAX_PCT'),
+                2.0,
+                field_name='BTC_VOLATILITY_MONITOR_ADAPTIVE_MAX_PCT',
+                minimum=0.1,
+            ),
+            btc_volatility_monitor_adaptive_lookback_minutes=parse_env_int(
+                os.getenv('BTC_VOLATILITY_MONITOR_ADAPTIVE_LOOKBACK_MINUTES'),
+                240,
+                field_name='BTC_VOLATILITY_MONITOR_ADAPTIVE_LOOKBACK_MINUTES',
+                minimum=10,
+            ),
+            btc_volatility_monitor_velocity_enabled=parse_env_bool(
+                os.getenv('BTC_VOLATILITY_MONITOR_VELOCITY_ENABLED'),
+                default=False,
+            ),
+            btc_volatility_monitor_velocity_mult=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_VELOCITY_MULT'),
+                3.0,
+                field_name='BTC_VOLATILITY_MONITOR_VELOCITY_MULT',
+                minimum=1.0,
+            ),
+            btc_volatility_monitor_velocity_min_pct=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_VELOCITY_MIN_PCT'),
+                0.1,
+                field_name='BTC_VOLATILITY_MONITOR_VELOCITY_MIN_PCT',
+                minimum=0.01,
+            ),
+            btc_volatility_monitor_fast_confirmation_enabled=parse_env_bool(
+                os.getenv('BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_ENABLED'),
+                default=False,
+            ),
+            btc_volatility_monitor_fast_confirmation_mult=parse_env_float(
+                os.getenv('BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_MULT'),
+                1.5,
+                field_name='BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_MULT',
+                minimum=1.0,
             ),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from src.analyzer import AnalysisResult, align_btc_execution_plans
+from src.analyzer import AnalysisResult, GeminiAnalyzer, align_btc_execution_plans
 
 
 def _runtime_config() -> SimpleNamespace:
@@ -38,7 +39,7 @@ def _contract() -> dict:
     }
 
 
-def test_invalid_btc_trade_plan_is_downgraded_to_watch() -> None:
+def test_invalid_btc_trade_plan_is_annotated_not_downgraded() -> None:
     result = AnalysisResult(
         code="BTCUSDT",
         name="Bitcoin",
@@ -65,11 +66,15 @@ def test_invalid_btc_trade_plan_is_downgraded_to_watch() -> None:
     aligned = align_btc_execution_plans(result, runtime_config=_runtime_config())
 
     long_plan = aligned.dashboard["battle_plan"]["long_plan"]
-    assert long_plan["direction"] == "wait"
-    assert "risk_reward_below_minimum" in long_plan["no_trade_reason"]
-    assert aligned.operation_advice == "观望，等待可执行交易条件"
-    assert aligned.decision_type == "hold"
-    assert aligned.action == "watch"
+    assert long_plan["direction"] == "long"
+    assert long_plan["validation_status"] == "failed"
+    assert "risk_reward_below_minimum" in long_plan["validation_errors"]
+    assert "risk_reward_below_minimum" in long_plan["validation_note"]
+    short_plan = aligned.dashboard["battle_plan"]["short_plan"]
+    assert short_plan["direction"] == "wait"
+    assert short_plan["validation_status"] == "skipped"
+    assert aligned.operation_advice == "买入"
+    assert aligned.decision_type == "buy"
 
 
 def test_valid_btc_trade_plan_keeps_directional_advice() -> None:
@@ -96,12 +101,15 @@ def test_valid_btc_trade_plan_keeps_directional_advice() -> None:
 
     aligned = align_btc_execution_plans(result, runtime_config=_runtime_config())
 
-    assert aligned.dashboard["battle_plan"]["long_plan"]["direction"] == "long"
+    long_plan = aligned.dashboard["battle_plan"]["long_plan"]
+    assert long_plan["direction"] == "long"
+    assert long_plan["validation_status"] == "passed"
+    assert long_plan["validation_errors"] == []
     assert aligned.operation_advice == "买入"
     assert aligned.decision_type == "buy"
 
 
-def test_execution_ladder_must_match_trial_entry_and_stop_loss() -> None:
+def test_execution_ladder_mismatch_is_annotated_on_plan() -> None:
     result = AnalysisResult(
         code="BTCUSDT",
         name="Bitcoin",
@@ -133,6 +141,75 @@ def test_execution_ladder_must_match_trial_entry_and_stop_loss() -> None:
     aligned = align_btc_execution_plans(result, runtime_config=_runtime_config())
 
     plan = aligned.dashboard["battle_plan"]["long_plan"]
-    assert plan["direction"] == "wait"
-    assert "execution_ladder_trial_entry_price_mismatch" in plan["no_trade_reason"]
-    assert "execution_ladder_invalidation_price_mismatch" in plan["no_trade_reason"]
+    assert plan["direction"] == "long"
+    assert plan["validation_status"] == "failed"
+    assert "execution_ladder_trial_entry_price_mismatch" in plan["validation_errors"]
+    assert "execution_ladder_invalidation_price_mismatch" in plan["validation_errors"]
+
+
+def test_validation_failure_preserves_original_advice() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=30,
+        trend_prediction="看空",
+        report_language="zh",
+        operation_advice="减仓",
+        decision_type="sell",
+        action="reduce",
+        dashboard={
+            "battle_plan": {
+                "short_plan": {
+                    "direction": "short",
+                    "entry_price": 100,
+                    "stop_loss": 105,
+                    # Missing take_profit -> missing_exit_prices
+                    "execution_contract": _contract(),
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(result, runtime_config=_runtime_config())
+
+    plan = aligned.dashboard["battle_plan"]["short_plan"]
+    assert plan["direction"] == "short"
+    assert plan["validation_status"] == "failed"
+    assert "missing_exit_prices" in plan["validation_errors"]
+    assert aligned.operation_advice == "减仓"
+    assert aligned.decision_type == "sell"
+    assert aligned.action == "reduce"
+
+
+def test_analyze_aligns_execution_plans_for_crypto_context() -> None:
+    analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
+    config = SimpleNamespace(
+        gemini_request_delay=0,
+        report_language="zh",
+        litellm_model="gemini/gemini-2.0-flash",
+        llm_temperature=0.2,
+        report_integrity_enabled=False,
+        report_integrity_retry=0,
+    )
+    analyzer._config_override = config
+    parsed_result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=80,
+        trend_prediction="看多",
+        operation_advice="持有",
+        analysis_summary="分析结果",
+    )
+
+    with patch.object(analyzer, "is_available", return_value=True), \
+         patch.object(analyzer, "_get_analysis_system_prompt", return_value="system"), \
+         patch.object(analyzer, "_format_prompt", return_value="prompt"), \
+         patch.object(analyzer, "_call_litellm", return_value=("response", "model", {})), \
+         patch.object(analyzer, "_parse_response", return_value=parsed_result), \
+         patch.object(analyzer, "_build_market_snapshot", return_value={}), \
+         patch("src.analyzer.persist_llm_usage"), \
+         patch("src.analyzer.align_btc_execution_plans") as mock_align:
+        result = analyzer.analyze({"code": "BTCUSDT", "stock_name": "Bitcoin", "market": "crypto"})
+
+    assert result is parsed_result
+    mock_align.assert_called_once_with(parsed_result, runtime_config=config)

@@ -1,0 +1,13 @@
+schema_version: 1
+module_path: core_engine
+title: BTC/A股智能分析核心引擎
+scope:
+    - src/
+source_files: []
+depends_on: []
+related_to:
+    - path: agents_skills
+    - path: api_server
+    - path: data_providers
+    - path: strategies
+    - path: templates

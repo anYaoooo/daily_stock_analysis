@@ -35,6 +35,11 @@ from src.services.run_diagnostics import build_run_diagnostic_summary
 from src.market_phase_summary import extract_market_phase_summary
 from src.schemas.decision_action import build_action_fields
 from src.utils.sniper_points import find_sniper_points
+from src.utils.battle_plan_report import (
+    render_directional_plan_overview,
+    render_execution_ladders,
+    render_intraday_plan_detail,
+)
 from src.utils.data_processing import (
     extract_realtime_detail_fields,
     normalize_model_used,
@@ -1094,23 +1099,9 @@ class HistoryService:
                     f"| 🎊 {labels['take_profit_label']} | {self._clean_sniper_value(sniper.get('take_profit', 'N/A'))} |",
                     "",
                 ])
-            intraday = battle.get('intraday_plan', {})
-            if intraday:
-                report_lines.extend([
-                    "**⏱️ 小时线日内计划（服从日线）**",
-                    "",
-                    "| 项目 | 计划 |",
-                    "|------|------|",
-                    f"| 方向 | {intraday.get('direction', 'N/A')} |",
-                    f"| 入场 | {self._clean_sniper_value(intraday.get('entry_price', 'N/A'))} |",
-                    f"| 止损 | {self._clean_sniper_value(intraday.get('stop_loss', 'N/A'))} |",
-                    f"| 目标 | {self._clean_sniper_value(intraday.get('take_profit', 'N/A'))} |",
-                    f"| 触发 | {intraday.get('trigger_condition', 'N/A')} |",
-                    f"| 日线约束 | {intraday.get('daily_constraint', 'N/A')} |",
-                    f"| 依据 | {intraday.get('reason', 'N/A')} |",
-                    "",
-                ])
-            self._append_btc_execution_ladders(report_lines, battle)
+            report_lines.extend(render_directional_plan_overview(battle))
+            report_lines.extend(render_intraday_plan_detail(battle.get('intraday_plan', {})))
+            report_lines.extend(render_execution_ladders(battle))
             # 仓位策略
             position = battle.get('position_strategy', {})
             if position:
@@ -1189,47 +1180,6 @@ class HistoryService:
         if not text or text in ("-", "—", "N/A", "None"):
             return "N/A"
         return text
-
-    @classmethod
-    def _append_btc_execution_ladders(cls, report_lines: List[str], battle_plan: Dict[str, Any]) -> None:
-        """Render optional staged BTC execution plans without changing legacy reports."""
-        plan_items = (
-            ("日线多单", battle_plan.get("long_plan")),
-            ("日线空单", battle_plan.get("short_plan")),
-            ("小时线日内", battle_plan.get("intraday_plan")),
-        )
-        ladders = [
-            (label, plan.get("execution_ladder"))
-            for label, plan in plan_items
-            if isinstance(plan, dict) and isinstance(plan.get("execution_ladder"), dict)
-        ]
-        if not ladders:
-            return
-
-        report_lines.extend([
-            "**🪜 BTC 分步执行**",
-            "",
-            "| 计划 | 阶段 | 价格/区间 | 触发条件 | 仓位/动作 |",
-            "|------|------|-----------|----------|-----------|",
-        ])
-        for plan_label, ladder in ladders:
-            scenario = cls._clean_sniper_value(ladder.get("scenario"))
-            current_action = cls._clean_sniper_value(ladder.get("current_action"))
-            trial = ladder.get("trial_entry") if isinstance(ladder.get("trial_entry"), dict) else {}
-            confirm = ladder.get("confirmation_add") if isinstance(ladder.get("confirmation_add"), dict) else {}
-            invalidation = ladder.get("invalidation") if isinstance(ladder.get("invalidation"), dict) else {}
-
-            trial_price = trial.get("entry_price") or trial.get("entry_zone")
-            trial_action = trial.get("position_hint") or ("未启用" if trial.get("enabled") is False else "试仓")
-            confirm_action = confirm.get("position_hint") or ("未启用" if confirm.get("enabled") is False else "确认后加仓")
-            invalidation_action = invalidation.get("action") or "撤销/退出"
-
-            report_lines.extend([
-                f"| {plan_label}（{scenario}；当前={current_action}） | 试仓 | {cls._clean_sniper_value(trial_price)} | {cls._clean_sniper_value(trial.get('trigger_condition'))} | {cls._clean_sniper_value(trial_action)} |",
-                f"| {plan_label} | 确认加仓 | {cls._clean_sniper_value(confirm.get('entry_price'))} | {cls._clean_sniper_value(confirm.get('trigger_condition'))} | {cls._clean_sniper_value(confirm_action)} |",
-                f"| {plan_label} | 失效 | {cls._clean_sniper_value(invalidation.get('price'))} | {cls._clean_sniper_value(invalidation.get('condition'))} | {cls._clean_sniper_value(invalidation_action)} |",
-            ])
-        report_lines.append("")
 
     def _get_signal_level(self, result: AnalysisResult) -> Tuple[str, str, str]:
         """Get signal level based on sentiment score and decision type."""

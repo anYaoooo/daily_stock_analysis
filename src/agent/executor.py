@@ -32,8 +32,20 @@ from src.report_language import normalize_report_language
 from src.market_context import get_market_role, get_market_guidelines
 from src.market_phase_prompt import format_market_phase_prompt_section
 from src.services.daily_market_context import format_daily_market_context_prompt_section
+from data_provider.base import normalize_stock_code
+from src.core.trading_calendar import get_market_for_stock
 
 logger = logging.getLogger(__name__)
+
+
+def _agent_context_targets_crypto(context: Optional[Dict[str, Any]]) -> bool:
+    """Return True when the agent run targets a crypto instrument."""
+    payload = context or {}
+    code = str(payload.get("stock_code") or "")
+    return (
+        get_market_for_stock(normalize_stock_code(code)) == "crypto"
+        or isinstance(payload.get("crypto_technical"), dict)
+    )
 
 
 # ============================================================
@@ -516,6 +528,13 @@ class AgentExecutor:
         default_skill_policy_section = ""
         if self.default_skill_policy:
             default_skill_policy_section = f"\n{self.default_skill_policy}\n"
+        if _agent_context_targets_crypto(context):
+            from src.agent.skills.defaults import get_crypto_battle_plan_prompt_section
+
+            crypto_section = get_crypto_battle_plan_prompt_section(
+                explicit_skill_selection=not bool(self.default_skill_policy),
+            )
+            default_skill_policy_section = f"{default_skill_policy_section}\n{crypto_section}\n"
         report_language = normalize_report_language((context or {}).get("report_language", "zh"))
         stock_code = (context or {}).get("stock_code", "")
         market_role = get_market_role(stock_code, report_language)
