@@ -1246,6 +1246,8 @@ The Backtest page calls `GET /api/v1/backtest/crypto/loss-review` and reads only
 
 After a single-symbol BTC analysis completes, full report notifications use the BTC-specific template instead of the generic stock decision dashboard. Each plan renders direction, entry, stop, and target as separate numeric lines, followed by a dedicated execution-conditions section for zones, triggers, invalidation, risk/reward, sizing, confidence, and no-trade reasons. This avoids broken mobile tables and keeps critical prices out of prose.
 
+The daily and hourly BTC contexts now calculate a `btc-ewma-vol-v1` next-bar sigma, historical percentile, and volatility regime from closed returns. This model controls risk rather than direction: after the LLM returns a plan, a deterministic overlay caps position-size multipliers at 50% in `elevated` volatility and 25% in `extreme` volatility without changing direction, entry, stop, or the real-trading switch. Backtest sizing consumes the cap directly; when a plan already has a stricter limit, the system keeps the smaller value and never increases exposure during risk overlay or repeated alignment. The derivatives context also aggregates the latest 36 Binance Futures 5-minute candles into taker-buy share, CVD, and price/CVD divergence. These order-flow fields remain shadow validation factors: they can demand stronger execution confirmation and enter backtest groupings, but cannot independently reverse the daily or hourly view. Missing data is reported explicitly and does not stop the existing technical-analysis path.
+
 ### Evaluation Metrics
 
 | Metric | Description |

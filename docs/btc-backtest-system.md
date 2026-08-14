@@ -46,7 +46,7 @@
 - `direction`：多/空方向，日内计划会额外检查 enabled 状态。
 - `execution_contract`：版本为 `btc-execution-v1` 的机器执行契约，完整表达执行模板、价格触达、收盘、量比、VWAP、确认 bars、等待 bars、成交方式和最长持有 bars。
 
-计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。新报告额外提供 `execution_ladder`，按试仓（`trial_entry`）、确认加仓（`confirmation_add`）和失效退出（`invalidation`）分步展示。顶层 `entry_price`、`entry_zone`、`trigger_condition` 和 `execution_contract` 始终对应试仓层，因此回测不把确认加仓当成第二笔模拟成交，也不会从自然语言猜测加仓条件；`stop_loss` 与 `invalidation.price` 使用同一失效位。`execution_contract.entry.setup_type` 支持 `breakout` 和 `pullback`：突破计划要求量能确认，回踩计划可用固定价格触达加收盘收复/承压表达，不强制要求量比门槛。BTC 分析完成后会先复用 v5 的执行校验：不满足风险收益、成本覆盖、量能或执行契约要求的方案会直接降为 `direction=wait`，顶层操作建议同步改为观望并保留 `no_trade_reason`；普通分析与 Agent 分析在落库前执行同一校验。因此展示为可交易的多空建议必须已经满足与回测相同的静态准入条件。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。v4 引入的标记价格、资金费率、强平与 maker/taker 成本在 v5 中继续保留；v5 额外增加计划价和实际成交价两阶段质量门槛，旧 v2/v3/v4 结果保留审计但不与 v5 指标混合。
+计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。新报告额外提供 `execution_ladder`，按试仓（`trial_entry`）、确认加仓（`confirmation_add`）和失效退出（`invalidation`）分步展示。顶层 `entry_price`、`entry_zone`、`trigger_condition` 和 `execution_contract` 始终对应试仓层，因此回测不把确认加仓当成第二笔模拟成交，也不会从自然语言猜测加仓条件；`stop_loss` 与 `invalidation.price` 使用同一失效位。`execution_contract.entry.setup_type` 支持 `breakout` 和 `pullback`：突破计划要求量能确认，回踩计划可用固定价格触达加收盘收复/承压表达，不强制要求量比门槛。BTC 分析完成后会复用 v5 的静态执行校验：不满足风险收益、成本覆盖、量能或执行契约要求的方案会保留原计划，但标注为 `validation_status=failed`，仅供人工复核，不会被误写成已通过校验的策略。日内计划额外检查闭合日线与小时线的方向：两周期已同向、且均与计划方向相反时，计划会降为 `direction=wait` 并写明等待原因；小时线本身支持的逆日线短线机会仍允许保留。EWMA 风险覆盖生成的 `position_multiplier_cap` 会被回测仓位计算实际消费，同时作用于风险预算、最大名义仓位和成交数量；若计划已有更严格的仓位上限，系统只保留两者中的较小值，不会因重复对齐或普通波动状态放大仓位。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。v4 引入的标记价格、资金费率、强平与 maker/taker 成本在 v5 中继续保留；v5 额外增加计划价和实际成交价两阶段质量门槛，旧 v2/v3/v4 结果保留审计但不与 v5 指标混合。
 
 同一 BTC、同一周期、同一方向已有活动 DecisionSignal 时，新分析产生的同方向候选计划会归档，并记录冻结它的活动信号；只有原计划过期、失效或方向反转时才允许新计划接管。观望信号不会阻挡新的可交易计划。这个生命周期约束用于避免趋势行情中每次分析都抬高入场价，导致计划持续追价而永远无法触发。
 
@@ -59,11 +59,15 @@
 | `vwap.price_position` | 同上 | 判断价格位于 rolling VWAP 上方、下方或附近 |
 | `volume.confirmation` | 同上 | 标记高量、低量或正常确认 |
 | `volatility.atr14_pct` | 同上 | 记录当时 ATR14% 波动环境 |
+| `volatility_forecast.regime` | 同周期闭合收益率的 EWMA 方差预测 | 标记 compressed / normal / elevated / extreme 波动状态 |
+| `volatility_forecast.position_multiplier_cap` | EWMA 风险覆盖层 | 记录报告生成时的确定性仓位乘数上限 |
 | `intraday.alignment` | 多周期上下文 | 区分顺日线、逆日线短线和等待触发 |
 | `event.type` | 日线或小时线事件上下文 | 标记急跌、扫低、反弹候选等事件 |
 | `derivatives.funding_state` | Binance Futures 公共 funding rate 上下文 | 标记多空资金费率拥挤度 |
 | `derivatives.open_interest_state` | Binance Futures 公共 open interest 上下文 | 标记持仓量/名义规模可用性和高持仓环境 |
 | `derivatives.leverage_pressure` | funding + OI 派生摘要 | 标记多头拥挤、空头拥挤或中性杠杆压力 |
+| `order_flow.state` | Binance Futures 最近 5 分钟 K 线的主动买卖量聚合 | 标记 buy_dominant / sell_dominant / balanced |
+| `order_flow.divergence` | 同窗口价格变化与 CVD | 标记价格/CVD 背离或量价同向状态；当前只作影子验证 |
 
 这些标签只保存结构化摘要，不保存 prompt 或新闻原文，用于后续按指标组合复盘和风控降权。
 
@@ -336,7 +340,7 @@ else:
 
 Web 汇总使用 `completed_count` 表示已完成评估数，使用 `triggered_count` 表示独立成交样本数。缺少 `btc-execution-v1` 契约的旧报告会标记为不可评估，开放中的评估窗口会标记为等待数据；二者都不会显示成有效样本。
 
-`diagnostics.indicator_group_breakdown` 会按计划类型、方向、多周期对齐、价格行为、VWAP、EMA、量能确认和事件类型分组。每个分组 bucket 展示已完成评估数、触发数、胜率、平均净收益、最大回撤、平均 R 倍数和低样本置信提示。
+`diagnostics.indicator_group_breakdown` 会按计划类型、方向、多周期对齐、价格行为、VWAP、EMA、量能确认、EWMA 波动状态、主动买卖状态、价格/CVD 背离和事件类型分组。每个分组 bucket 展示已完成评估数、触发数、胜率、平均净收益、最大回撤、平均 R 倍数和低样本置信提示。订单流因子在样本充分前不会直接成为执行契约条件。
 
 ## 6. API 使用
 

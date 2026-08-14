@@ -47,6 +47,12 @@ def test_build_crypto_technical_context_adds_requested_framework() -> None:
     assert context["volume"]["ratio"] is not None
     assert context["volatility"]["atr14"] is not None
     assert context["volatility"]["atr14_pct"] is not None
+    forecast = context["volatility"]["forecast"]
+    assert forecast["model_version"] == "btc-ewma-vol-v1"
+    assert forecast["data_quality"] == "available"
+    assert forecast["forecast_sigma_pct"] is not None
+    assert forecast["regime"] in {"compressed", "normal", "elevated", "extreme"}
+    assert 0.0 < forecast["position_multiplier_cap"] <= 1.0
     assert context["vwap"]["rolling_20"] is not None
     assert context["ema"]["ema20"] is not None
     assert context["ema"]["structure"] in {"bullish", "bearish", "mixed"}
@@ -67,6 +73,25 @@ def test_build_crypto_technical_context_distinguishes_liquidity_sweep_from_break
     assert context["price_action"]["state"] == "liquidity_sweep_high"
     assert context["price_action"]["high_swept"] is True
     assert context["price_action"]["close_above_resistance"] is False
+
+
+def test_build_crypto_technical_context_caps_position_in_extreme_ewma_regime() -> None:
+    bars = _btc_bars()
+    bars[["open", "high", "low", "close"]] = bars[["open", "high", "low", "close"]].astype(float)
+    last_idx = bars.index[-1]
+    prior_close = float(bars.loc[last_idx - 1, "close"])
+    bars.loc[last_idx, "open"] = prior_close
+    bars.loc[last_idx, "high"] = prior_close * 1.13
+    bars.loc[last_idx, "low"] = prior_close * 0.99
+    bars.loc[last_idx, "close"] = prior_close * 1.12
+
+    context = build_crypto_technical_context(bars, "BTC")
+
+    assert context is not None
+    forecast = context["volatility"]["forecast"]
+    assert forecast["regime"] == "extreme"
+    assert forecast["position_multiplier_cap"] == 0.25
+    assert forecast["risk_action"] == "reduce_position_strongly"
 
 
 def test_build_crypto_technical_context_flags_selloff_rebound_candidate() -> None:

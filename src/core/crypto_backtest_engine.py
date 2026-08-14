@@ -47,6 +47,7 @@ class CryptoPlan:
     take_profit: Optional[float]
     raw_plan: dict[str, Any]
     execution_contract: Optional[dict[str, Any]] = None
+    position_multiplier_cap: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -191,6 +192,7 @@ class CryptoBacktestEngine:
             exit_price=exit_price,
             stop_loss=plan.stop_loss,
             config=config,
+            position_multiplier_cap=plan.position_multiplier_cap,
         )
         simulated_return_pct = trade["net_return_pct"]
         outcome, direction_correct = cls._classify_return(
@@ -417,6 +419,7 @@ class CryptoBacktestEngine:
             entry_price=fill_price,
             stop_loss=plan.stop_loss,
             config=config,
+            position_multiplier_cap=plan.position_multiplier_cap,
         )
         if is_perpetual_engine and instrument.get("type") == "perpetual":
             liquidation = cls._evaluate_liquidation(
@@ -997,6 +1000,7 @@ class CryptoBacktestEngine:
             "entry_price": plan.entry_price,
             "stop_loss": plan.stop_loss,
             "take_profit": plan.take_profit,
+            "position_multiplier_cap": plan.position_multiplier_cap,
             "eval_status": eval_status,
             "signal_triggered": False,
             "signal_triggered_at": None,
@@ -1103,14 +1107,26 @@ class CryptoBacktestEngine:
         entry_price: float,
         stop_loss: Optional[float],
         config: CryptoPlanBacktestConfig,
+        position_multiplier_cap: float = 1.0,
     ) -> dict[str, Any]:
+        try:
+            multiplier = float(position_multiplier_cap)
+        except (TypeError, ValueError):
+            multiplier = 1.0
+        multiplier = max(0.0, min(multiplier, 1.0))
         initial_equity = max(float(config.initial_equity), 0.0)
-        risk_budget = initial_equity * max(float(config.risk_per_trade_pct), 0.0) / 100.0
+        risk_budget = (
+            initial_equity
+            * max(float(config.risk_per_trade_pct), 0.0)
+            / 100.0
+            * multiplier
+        )
         max_notional = (
             initial_equity
             * max(float(config.max_notional_pct), 0.0)
             / 100.0
             * max(float(config.leverage), 0.0)
+            * multiplier
         )
         if stop_loss is not None and stop_loss > 0 and stop_loss != entry_price:
             stop_distance = abs(entry_price - float(stop_loss))
@@ -1128,6 +1144,7 @@ class CryptoBacktestEngine:
             "quantity": quantity,
             "position_notional": quantity * entry_price,
             "sizing_method": sizing_method,
+            "position_multiplier_cap": multiplier,
         }
 
     @classmethod
@@ -1262,17 +1279,20 @@ class CryptoBacktestEngine:
         funding_cost: float = 0.0,
         entry_order_type: str = "market",
         exit_order_type: str = "market",
+        position_multiplier_cap: float = 1.0,
     ) -> dict[str, Any]:
         sizing = sizing or cls._position_sizing(
             entry_price=entry_price,
             stop_loss=stop_loss,
             config=config,
+            position_multiplier_cap=position_multiplier_cap,
         )
         initial_equity = float(sizing["initial_equity"])
         risk_budget = float(sizing["risk_budget"])
         quantity = float(sizing["quantity"])
         notional = float(sizing["position_notional"])
         sizing_method = str(sizing["sizing_method"])
+        applied_position_multiplier = float(sizing.get("position_multiplier_cap", 1.0))
 
         slippage_rate = max(float(config.slippage_bps), 0.0) / 10000.0
         uses_order_type_fees = str(config.engine_version).strip().lower() in {"btc-plan-v4", "btc-plan-v5"}
@@ -1303,6 +1323,7 @@ class CryptoBacktestEngine:
             "position_notional": round(notional, 4),
             "quantity": round(quantity, 8),
             "sizing_method": sizing_method,
+            "position_multiplier_cap": round(applied_position_multiplier, 4),
             "executed_entry_price": round(executed_entry_price, 4),
             "executed_exit_price": round(executed_exit_price, 4),
             "gross_pnl": round(gross_pnl, 4),

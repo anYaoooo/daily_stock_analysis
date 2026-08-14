@@ -160,6 +160,24 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
         self.assertEqual(result["outcome"], "win")
         self.assertAlmostEqual(result["simulated_return_pct"], 1.4661)
 
+    def test_position_multiplier_cap_reduces_risk_budget_and_notional(self):
+        full = CryptoBacktestEngine._position_sizing(
+            entry_price=100,
+            stop_loss=95,
+            config=CryptoPlanBacktestConfig(initial_equity=10000, risk_per_trade_pct=1),
+        )
+        capped = CryptoBacktestEngine._position_sizing(
+            entry_price=100,
+            stop_loss=95,
+            config=CryptoPlanBacktestConfig(initial_equity=10000, risk_per_trade_pct=1),
+            position_multiplier_cap=0.25,
+        )
+
+        self.assertEqual(capped["position_multiplier_cap"], 0.25)
+        self.assertAlmostEqual(capped["risk_budget"], full["risk_budget"] * 0.25)
+        self.assertAlmostEqual(capped["max_notional"], full["max_notional"] * 0.25)
+        self.assertAlmostEqual(capped["quantity"], full["quantity"] * 0.25)
+
     def test_summary_includes_portfolio_risk_metrics(self):
         plan = CryptoPlan(
             plan_type="daily_long",

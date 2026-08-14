@@ -162,15 +162,15 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
       <MetricRow label={contractMetrics ? '策略契约胜率' : '触价代理胜率'} value={pct(metrics.winRatePct)} />
       <MetricRow label="方向准确率" value={pct(metrics.directionAccuracyPct)} />
       <MetricRow label="平均净收益" value={pct(metrics.avgSimulatedReturnPct)} />
-      {typeof signalTriggeredCount === 'number' ? (
-        <MetricRow label="信号 / 成交 / 拒单" value={`${signalTriggeredCount} / ${metrics.triggeredCount ?? 0} / ${typeof rejectedOrderCount === 'number' ? rejectedOrderCount : 0}`} />
+      {typeof signalTriggeredCount === 'number' && typeof rawTriggeredCount === 'number' ? (
+        <MetricRow label="信号 / 实际成交 / 拒单" value={`${signalTriggeredCount} / ${rawTriggeredCount} / ${typeof rejectedOrderCount === 'number' ? rejectedOrderCount : 0}`} />
       ) : null}
       {typeof orderFillRatePct === 'number' ? <MetricRow label="信号成交率" value={pct(orderFillRatePct)} /> : null}
       {typeof avgMissedFavorableMovePct === 'number' ? <MetricRow label="拒单后平均有利波动" value={pct(avgMissedFavorableMovePct)} /> : null}
-      <MetricRow label="独立成交 / 已完成评估" value={`${metrics.triggeredCount ?? 0} / ${metrics.completedCount}`} />
+      <MetricRow label="独立成交（收益统计）/ 已完成评估" value={`${metrics.triggeredCount ?? 0} / ${metrics.completedCount}`} />
       <MetricRow label="不可评估 / 等待数据" value={`${metrics.skippedCount ?? 0} / ${metrics.insufficientCount ?? 0}`} />
       {typeof rawTriggeredCount === 'number' && typeof overlapExcludedCount === 'number' ? (
-        <MetricRow label="原始触发 / 重叠排除" value={`${rawTriggeredCount} / ${overlapExcludedCount}`} />
+        <MetricRow label="重叠持仓排除" value={`${overlapExcludedCount}`} />
       ) : null}
       <MetricRow label="盈利 / 亏损 / 持平" value={`${metrics.winCount} / ${metrics.lossCount} / ${metrics.neutralCount}`} />
       {sampleConfidence?.minimumSampleCount ? (

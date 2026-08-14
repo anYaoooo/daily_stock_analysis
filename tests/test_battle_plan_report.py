@@ -54,6 +54,23 @@ def test_overview_handles_missing_validation_fields() -> None:
     assert "N/A" in text
 
 
+def test_overview_renders_deterministic_volatility_risk_note() -> None:
+    lines = render_directional_plan_overview(
+        {
+            "long_plan": {
+                "direction": "long",
+                "validation_status": "passed",
+                "risk_overlay": {
+                    "note": "EWMA 波动处于 extreme 区间，系统将仓位限制为原计划的 25% 以内。"
+                },
+            }
+        }
+    )
+
+    assert any(line.startswith("- 日线多单波动风控：") for line in lines)
+    assert "原计划的 25%" in "\n".join(lines)
+
+
 def test_intraday_detail_renders_validation_row() -> None:
     intraday = {
         "direction": "long",

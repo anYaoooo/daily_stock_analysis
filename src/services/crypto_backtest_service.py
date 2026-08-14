@@ -523,6 +523,9 @@ class CryptoBacktestService:
             ("ema", "structure"),
             ("vwap", "price_position"),
             ("volume", "confirmation"),
+            ("volatility_forecast", "regime"),
+            ("order_flow", "state"),
+            ("order_flow", "divergence"),
             ("intraday", "alignment"),
             ("event", "type"),
         )
@@ -772,6 +775,7 @@ class CryptoBacktestService:
     @staticmethod
     def _plan_from_payload(plan_type: str, horizon: str, direction: str, payload: dict[str, Any]) -> CryptoPlan:
         execution_contract = payload.get("execution_contract")
+        position_multiplier_cap = parse_sniper_value(payload.get("position_multiplier_cap"))
         return CryptoPlan(
             plan_type=plan_type,
             horizon=horizon,
@@ -781,6 +785,11 @@ class CryptoBacktestService:
             take_profit=parse_sniper_value(payload.get("take_profit")),
             raw_plan=dict(payload),
             execution_contract=dict(execution_contract) if isinstance(execution_contract, dict) else None,
+            position_multiplier_cap=(
+                max(0.0, min(float(position_multiplier_cap), 1.0))
+                if position_multiplier_cap is not None
+                else 1.0
+            ),
         )
 
     @staticmethod
@@ -1106,6 +1115,7 @@ class CryptoBacktestService:
         basis = derivatives.get("basis") if isinstance(derivatives.get("basis"), dict) else {}
         long_short_ratio = derivatives.get("long_short_ratio") if isinstance(derivatives.get("long_short_ratio"), dict) else {}
         cross_exchange = derivatives.get("cross_exchange") if isinstance(derivatives.get("cross_exchange"), dict) else {}
+        order_flow = derivatives.get("order_flow") if isinstance(derivatives.get("order_flow"), dict) else {}
         macro_correlation = crypto_context.get("macro_correlation") if isinstance(crypto_context.get("macro_correlation"), dict) else {}
         macro_assets = macro_correlation.get("assets") if isinstance(macro_correlation.get("assets"), dict) else {}
         nasdaq_macro = macro_assets.get("nasdaq") if isinstance(macro_assets.get("nasdaq"), dict) else {}
@@ -1114,9 +1124,12 @@ class CryptoBacktestService:
         gold_macro = macro_assets.get("gold") if isinstance(macro_assets.get("gold"), dict) else {}
         event = source_context.get("event") if isinstance(source_context.get("event"), dict) else {}
         volatility = source_context.get("volatility") if isinstance(source_context.get("volatility"), dict) else {}
+        volatility_forecast = (
+            volatility.get("forecast") if isinstance(volatility.get("forecast"), dict) else {}
+        )
 
         return {
-            "tag_version": "btc-indicators-v1",
+            "tag_version": "btc-indicators-v2",
             "source_timeframe": "hourly" if source_context is hourly_context and hourly_context else "daily",
             "price_action": {
                 "state": cls._tag_text(source_context, "price_action", "state"),
@@ -1132,6 +1145,14 @@ class CryptoBacktestService:
             },
             "volatility": {
                 "atr14_pct": cls._safe_float(volatility.get("atr14_pct")),
+            },
+            "volatility_forecast": {
+                "data_quality": cls._clean_tag_value(volatility_forecast.get("data_quality")),
+                "model_version": cls._clean_tag_value(volatility_forecast.get("model_version")),
+                "regime": cls._clean_tag_value(volatility_forecast.get("regime")),
+                "forecast_sigma_pct": cls._safe_float(volatility_forecast.get("forecast_sigma_pct")),
+                "historical_percentile": cls._safe_float(volatility_forecast.get("historical_percentile")),
+                "position_multiplier_cap": cls._safe_float(volatility_forecast.get("position_multiplier_cap")),
             },
             "intraday": {
                 "alignment": cls._clean_tag_value(intraday.get("alignment")),
@@ -1155,6 +1176,14 @@ class CryptoBacktestService:
                 "long_short_state": cls._clean_tag_value(long_short_ratio.get("state")),
                 "cross_exchange_quality": cls._clean_tag_value(cross_exchange.get("data_quality")),
                 "leverage_pressure": cls._clean_tag_value(derivatives.get("leverage_pressure")),
+            },
+            "order_flow": {
+                "data_quality": cls._clean_tag_value(order_flow.get("data_quality")),
+                "state": cls._clean_tag_value(order_flow.get("state")),
+                "divergence": cls._clean_tag_value(order_flow.get("divergence")),
+                "taker_buy_ratio_pct": cls._safe_float(order_flow.get("taker_buy_ratio_pct")),
+                "cvd_pct_of_volume": cls._safe_float(order_flow.get("cvd_pct_of_volume")),
+                "price_change_pct": cls._safe_float(order_flow.get("price_change_pct")),
             },
             "macro_correlation": {
                 "data_quality": cls._clean_tag_value(macro_correlation.get("data_quality")),
@@ -1423,6 +1452,9 @@ class CryptoBacktestService:
             ("vwap.price_position", "VWAP 状态", lambda _row, tags: cls._nested_tag(tags, "vwap", "price_position")),
             ("ema.structure", "EMA 结构", lambda _row, tags: cls._nested_tag(tags, "ema", "structure")),
             ("volume.confirmation", "量能确认", lambda _row, tags: cls._nested_tag(tags, "volume", "confirmation")),
+            ("volatility_forecast.regime", "EWMA 波动状态", lambda _row, tags: cls._nested_tag(tags, "volatility_forecast", "regime")),
+            ("order_flow.state", "主动买卖状态", lambda _row, tags: cls._nested_tag(tags, "order_flow", "state")),
+            ("order_flow.divergence", "价格/CVD 背离", lambda _row, tags: cls._nested_tag(tags, "order_flow", "divergence")),
             ("event.type", "事件类型", lambda _row, tags: cls._nested_tag(tags, "event", "type")),
         ]
         grouped: dict[str, list[dict[str, Any]]] = {}

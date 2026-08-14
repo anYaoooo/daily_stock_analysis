@@ -520,7 +520,17 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                                     "ema": {"structure": "bullish"},
                                     "vwap": {"price_position": "above"},
                                     "volume": {"confirmation": "high"},
-                                    "volatility": {"atr14_pct": 0.8},
+                                    "volatility": {
+                                        "atr14_pct": 0.8,
+                                        "forecast": {
+                                            "data_quality": "available",
+                                            "model_version": "btc-ewma-vol-v1",
+                                            "regime": "elevated",
+                                            "forecast_sigma_pct": 1.25,
+                                            "historical_percentile": 82.0,
+                                            "position_multiplier_cap": 0.5,
+                                        },
+                                    },
                                     "event": {"type": "liquidity_sweep_low_reversal_candidate"},
                                 },
                             },
@@ -537,6 +547,14 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                                 },
                                 "open_interest": {
                                     "state": "high_notional",
+                                },
+                                "order_flow": {
+                                    "data_quality": "available",
+                                    "state": "buy_dominant",
+                                    "divergence": "aligned_buying",
+                                    "taker_buy_ratio_pct": 58.5,
+                                    "cvd_pct_of_volume": 17.0,
+                                    "price_change_pct": 0.6,
                                 },
                                 "leverage_pressure": "long_crowding_risk",
                             },
@@ -563,13 +581,34 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         self.assertEqual(tags["vwap"]["price_position"], "above")
         self.assertEqual(tags["volume"]["confirmation"], "high")
         self.assertEqual(tags["volatility"]["atr14_pct"], 0.8)
+        self.assertEqual(tags["tag_version"], "btc-indicators-v2")
+        self.assertEqual(tags["volatility_forecast"]["regime"], "elevated")
+        self.assertEqual(tags["volatility_forecast"]["position_multiplier_cap"], 0.5)
         self.assertEqual(tags["intraday"]["alignment"], "countertrend_long")
         self.assertEqual(tags["derivatives"]["data_quality"], "available")
         self.assertEqual(tags["derivatives"]["funding_state"], "positive_crowded")
         self.assertEqual(tags["derivatives"]["funding_rate_pct"], 0.063)
         self.assertEqual(tags["derivatives"]["open_interest_state"], "high_notional")
         self.assertEqual(tags["derivatives"]["leverage_pressure"], "long_crowding_risk")
+        self.assertEqual(tags["order_flow"]["state"], "buy_dominant")
+        self.assertEqual(tags["order_flow"]["divergence"], "aligned_buying")
+        self.assertEqual(tags["order_flow"]["cvd_pct_of_volume"], 17.0)
         self.assertEqual(tags["event"]["type"], "liquidity_sweep_low_reversal_candidate")
+
+    def test_plan_from_payload_preserves_position_multiplier_cap(self):
+        plan = CryptoBacktestService._plan_from_payload(
+            "daily_long",
+            "daily",
+            "long",
+            {
+                "entry_price": 100,
+                "stop_loss": 95,
+                "take_profit": 110,
+                "position_multiplier_cap": 0.25,
+            },
+        )
+
+        self.assertEqual(plan.position_multiplier_cap, 0.25)
 
     def test_indicator_group_breakdown_groups_by_existing_tags(self):
         rows = [
@@ -589,6 +628,11 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                         "indicator_tags": {
                             "price_action": {"state": "breakout"},
                             "ema": {"structure": "bullish"},
+                            "volatility_forecast": {"regime": "elevated"},
+                            "order_flow": {
+                                "state": "buy_dominant",
+                                "divergence": "aligned_buying",
+                            },
                         },
                         "trade": {
                             "initial_equity": 10000,
@@ -616,6 +660,11 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
                         "indicator_tags": {
                             "price_action": {"state": "breakdown"},
                             "ema": {"structure": "bearish"},
+                            "volatility_forecast": {"regime": "normal"},
+                            "order_flow": {
+                                "state": "sell_dominant",
+                                "divergence": "aligned_selling",
+                            },
                         },
                         "trade": {
                             "initial_equity": 10000,
@@ -638,6 +687,16 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         self.assertEqual(price_action_groups["breakout"]["win_rate_pct"], 100.0)
         self.assertTrue(price_action_groups["breakout"]["sample_confidence"]["is_low_confidence"])
         self.assertEqual(price_action_groups["breakdown"]["win_rate_pct"], 0.0)
+        volatility_groups = {
+            item["key"]: item for item in breakdown["groups"]["volatility_forecast.regime"]
+        }
+        self.assertEqual(volatility_groups["elevated"]["win_rate_pct"], 100.0)
+        self.assertEqual(volatility_groups["normal"]["win_rate_pct"], 0.0)
+        order_flow_groups = {
+            item["key"]: item for item in breakdown["groups"]["order_flow.state"]
+        }
+        self.assertEqual(order_flow_groups["buy_dominant"]["win_rate_pct"], 100.0)
+        self.assertEqual(order_flow_groups["sell_dominant"]["win_rate_pct"], 0.0)
 
     def test_history_record_filters_plans_by_direction_plan_type_and_status(self):
         analysis = AnalysisHistory(

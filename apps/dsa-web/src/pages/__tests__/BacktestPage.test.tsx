@@ -218,12 +218,12 @@ describe('BacktestPage', () => {
     expect(screen.getByText('策略契约胜率')).toBeInTheDocument();
     expect(screen.getByText('亏损复盘')).toBeInTheDocument();
     expect(screen.getByText('方向判断与后续走势不一致')).toBeInTheDocument();
-    expect(screen.getByText('独立成交 / 已完成评估')).toBeInTheDocument();
-    expect(screen.getByText('信号 / 成交 / 拒单')).toBeInTheDocument();
+    expect(screen.getByText('独立成交（收益统计）/ 已完成评估')).toBeInTheDocument();
+    expect(screen.getByText('信号 / 实际成交 / 拒单')).toBeInTheDocument();
     expect(screen.getByText('信号成交率')).toBeInTheDocument();
     expect(screen.getByText('拒单后平均有利波动')).toBeInTheDocument();
     expect(screen.getByText('不可评估 / 等待数据')).toBeInTheDocument();
-    expect(screen.getByText('原始触发 / 重叠排除')).toBeInTheDocument();
+    expect(screen.getByText('重叠持仓排除')).toBeInTheDocument();
     expect(mockGetHistory).toHaveBeenCalledWith({
       code: 'BTC',
       analysisMode: 'all',

@@ -486,6 +486,15 @@ class StockAnalysisPipeline:
                                 code,
                                 period="hourly",
                                 days=7,
+                                # BTC analysis and the volatility monitor use the same
+                                # OKX perpetual trade/mark series.  Passing the contract
+                                # explicitly is required because a bare BTC alias defaults
+                                # to spot and would miss the locally cached bars.
+                                instrument={
+                                    "type": "perpetual",
+                                    "venue": "okx",
+                                    "margin_mode": "isolated",
+                                },
                             )
                         except Exception as exc:
                             logger.warning("%s(%s) BTC 小时线数据获取失败，仅使用日线分析: %s", stock_name, code, exc)
@@ -765,6 +774,7 @@ class StockAnalysisPipeline:
                         result,
                         runtime_config=self.config,
                         trigger_context=enhanced_context.get("trigger_context"),
+                        technical_context=enhanced_context.get("crypto_technical"),
                     )
 
             # Step 8: 保存分析历史记录
@@ -1381,6 +1391,7 @@ class StockAnalysisPipeline:
                         result,
                         runtime_config=self.config,
                         trigger_context=initial_context.get("trigger_context"),
+                        technical_context=initial_context.get("crypto_technical"),
                     )
 
             resolved_stock_name = result.name if result and result.name else stock_name

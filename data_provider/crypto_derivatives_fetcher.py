@@ -65,24 +65,32 @@ class CryptoDerivativesFetcher:
             "/futures/data/globalLongShortAccountRatio",
             {"symbol": symbol, "period": "1h", "limit": 24},
         )
+        order_flow_payload = self._get_array(
+            "/fapi/v1/klines",
+            {"symbol": symbol, "interval": "5m", "limit": 36},
+        )
 
         funding_rate = _safe_float(funding_payload.get("lastFundingRate"))
         mark_price = _safe_float(funding_payload.get("markPrice"))
         index_price = _safe_float(funding_payload.get("indexPrice"))
         open_interest = _safe_float(oi_payload.get("openInterest"))
 
-        if funding_rate is None and open_interest is None:
-            return {
-                "provider": "binance_futures",
-                "symbol": symbol,
-                "data_quality": "unavailable",
-                "warnings": ["funding_rate_and_open_interest_missing"],
-            }
-
         funding_rate_pct = funding_rate * 100 if funding_rate is not None else None
         funding_history = self._funding_history_summary(funding_history_payload)
         oi_history = self._oi_history_summary(oi_history_payload)
         long_short = self._long_short_summary(long_short_payload)
+        order_flow = self._order_flow_summary(order_flow_payload, interval_minutes=5)
+        if (
+            funding_rate is None
+            and open_interest is None
+            and order_flow.get("data_quality") not in {"available", "partial"}
+        ):
+            return {
+                "provider": "binance_futures",
+                "symbol": symbol,
+                "data_quality": "unavailable",
+                "warnings": ["funding_rate_open_interest_and_order_flow_missing"],
+            }
         basis_pct = (
             (mark_price - index_price) / index_price * 100
             if mark_price is not None and index_price is not None and index_price > 0
@@ -98,10 +106,18 @@ class CryptoDerivativesFetcher:
             warnings.append("funding_history_missing")
         if not oi_history_payload:
             warnings.append("open_interest_history_missing")
+        if order_flow.get("data_quality") == "unavailable":
+            warnings.append("order_flow_missing")
+        elif order_flow.get("data_quality") == "partial":
+            warnings.append("order_flow_partial")
         return {
             "provider": "binance_futures",
             "symbol": symbol,
-            "data_quality": "available",
+            "data_quality": (
+                "available"
+                if funding_rate is not None or open_interest is not None
+                else "partial"
+            ),
             "funding": {
                 "rate": funding_rate,
                 "rate_pct": round(funding_rate_pct, 4) if funding_rate_pct is not None else None,
@@ -126,6 +142,7 @@ class CryptoDerivativesFetcher:
                 "state": self._basis_state(basis_pct),
             },
             "long_short_ratio": long_short,
+            "order_flow": order_flow,
             "cross_exchange": cross_exchange,
             "leverage_pressure": self._leverage_pressure(funding_rate, open_interest),
             "warnings": warnings,
@@ -151,6 +168,17 @@ class CryptoDerivativesFetcher:
             return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
         except Exception as exc:
             logger.warning("Binance Futures 衍生品序列获取失败: endpoint=%s error=%s", path, exc)
+            return []
+
+    def _get_array(self, path: str, params: Dict[str, Any]) -> list[Any]:
+        url = f"{self.base_url}{path}"
+        try:
+            response = requests.get(url, params=params, timeout=self.timeout_seconds)
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
+        except Exception as exc:
+            logger.warning("Binance Futures 数组数据获取失败: endpoint=%s error=%s", path, exc)
             return []
 
     def _cross_exchange_snapshot(
@@ -286,6 +314,95 @@ class CryptoDerivativesFetcher:
             "current": round(ratios[-1], 4) if ratios else None,
             "change_24h_pct": round((ratios[-1] - ratios[0]) / ratios[0] * 100, 4) if len(ratios) >= 2 and ratios[0] > 0 else None,
             "state": "long_heavy" if ratios and ratios[-1] >= 1.2 else "short_heavy" if ratios and ratios[-1] <= 0.8 else "balanced" if ratios else "missing",
+        }
+
+    @staticmethod
+    def _order_flow_summary(items: list[Any], *, interval_minutes: int) -> Dict[str, Any]:
+        points: list[Dict[str, float]] = []
+        for item in items:
+            if not isinstance(item, (list, tuple)) or len(item) < 10:
+                continue
+            open_price = _safe_float(item[1])
+            close_price = _safe_float(item[4])
+            volume = _safe_float(item[5])
+            taker_buy_volume = _safe_float(item[9])
+            if (
+                open_price is None
+                or close_price is None
+                or volume is None
+                or taker_buy_volume is None
+                or volume <= 0
+            ):
+                continue
+            buy_volume = min(max(taker_buy_volume, 0.0), volume)
+            sell_volume = max(volume - buy_volume, 0.0)
+            points.append(
+                {
+                    "open": open_price,
+                    "close": close_price,
+                    "volume": volume,
+                    "buy": buy_volume,
+                    "sell": sell_volume,
+                    "close_time": item[6] if len(item) > 6 else None,
+                }
+            )
+
+        if not points:
+            return {
+                "provider": "binance_futures_klines",
+                "data_quality": "unavailable",
+                "bar_interval": f"{interval_minutes}m",
+                "bar_count": 0,
+            }
+
+        total_volume = sum(point["volume"] for point in points)
+        total_buy = sum(point["buy"] for point in points)
+        total_sell = sum(point["sell"] for point in points)
+        cvd = total_buy - total_sell
+        buy_ratio_pct = total_buy / total_volume * 100 if total_volume > 0 else None
+        cvd_pct = cvd / total_volume * 100 if total_volume > 0 else None
+        first_open = points[0]["open"]
+        last_close = points[-1]["close"]
+        price_change_pct = (
+            (last_close - first_open) / first_open * 100
+            if first_open > 0
+            else None
+        )
+
+        state = "balanced"
+        if buy_ratio_pct is not None and buy_ratio_pct >= 55:
+            state = "buy_dominant"
+        elif buy_ratio_pct is not None and buy_ratio_pct <= 45:
+            state = "sell_dominant"
+
+        divergence = "none"
+        if price_change_pct is not None and cvd_pct is not None:
+            if price_change_pct >= 0.25 and cvd_pct <= -5:
+                divergence = "bearish_price_cvd_divergence"
+            elif price_change_pct <= -0.25 and cvd_pct >= 5:
+                divergence = "bullish_price_cvd_divergence"
+            elif price_change_pct > 0 and cvd_pct > 0:
+                divergence = "aligned_buying"
+            elif price_change_pct < 0 and cvd_pct < 0:
+                divergence = "aligned_selling"
+
+        bar_count = len(points)
+        return {
+            "provider": "binance_futures_klines",
+            "data_quality": "available" if bar_count >= 12 else "partial",
+            "bar_interval": f"{interval_minutes}m",
+            "bar_count": bar_count,
+            "window_minutes": bar_count * interval_minutes,
+            "taker_buy_ratio_pct": round(buy_ratio_pct, 2) if buy_ratio_pct is not None else None,
+            "taker_buy_base_volume": round(total_buy, 4),
+            "taker_sell_base_volume": round(total_sell, 4),
+            "cvd_base_volume": round(cvd, 4),
+            "cvd_pct_of_volume": round(cvd_pct, 2) if cvd_pct is not None else None,
+            "price_change_pct": round(price_change_pct, 2) if price_change_pct is not None else None,
+            "state": state,
+            "divergence": divergence,
+            "as_of": _millis_to_iso(points[-1].get("close_time")),
+            "usage": "shadow_execution_confirmation",
         }
 
     @staticmethod

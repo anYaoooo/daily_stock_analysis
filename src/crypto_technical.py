@@ -14,6 +14,8 @@ _BAR_DURATION_BY_PERIOD = {
     "four_hour": timedelta(hours=4),
     "daily": timedelta(days=1),
 }
+_EWMA_VOLATILITY_LAMBDA = 0.94
+_EWMA_VOLATILITY_MIN_RETURNS = 20
 
 
 def _is_supported_crypto_code(code: str) -> bool:
@@ -40,6 +42,79 @@ def _pct_change(current: Optional[float], base: Optional[float]) -> Optional[flo
     if current is None or base is None or base <= 0:
         return None
     return (current - base) / base * 100
+
+
+def _build_ewma_volatility_forecast(
+    bars: pd.DataFrame,
+    *,
+    period: Optional[str],
+) -> Dict[str, Any]:
+    """Forecast next-bar volatility from closed returns using EWMA variance."""
+
+    closes = pd.to_numeric(bars.get("close"), errors="coerce")
+    closes = closes.where(closes > 0).dropna()
+    returns = closes.pct_change().dropna()
+    returns = returns[returns.map(pd.notna)]
+    sample_count = int(len(returns))
+    base = {
+        "model": "ewma",
+        "model_version": "btc-ewma-vol-v1",
+        "bar_period": period,
+        "sample_count": sample_count,
+        "ewma_lambda": _EWMA_VOLATILITY_LAMBDA,
+    }
+    if sample_count < _EWMA_VOLATILITY_MIN_RETURNS:
+        return {
+            **base,
+            "data_quality": "insufficient",
+            "forecast_sigma_pct": None,
+            "realized_sigma_20_pct": None,
+            "historical_percentile": None,
+            "regime": "insufficient",
+            "position_multiplier_cap": 1.0,
+            "risk_action": "no_adjustment",
+        }
+
+    alpha = 1.0 - _EWMA_VOLATILITY_LAMBDA
+    sigma_series = returns.pow(2).ewm(alpha=alpha, adjust=False).mean().pow(0.5)
+    forecast_sigma = _safe_float(sigma_series.iloc[-1])
+    realized_sigma = _safe_float(returns.tail(20).std(ddof=0))
+    history = sigma_series.iloc[:-1].dropna()
+    percentile = None
+    if forecast_sigma is not None and not history.empty:
+        percentile = float((history <= forecast_sigma).mean() * 100)
+
+    regime = "normal"
+    position_cap = 1.0
+    risk_action = "normal"
+    if percentile is not None and percentile >= 90:
+        regime = "extreme"
+        position_cap = 0.25
+        risk_action = "reduce_position_strongly"
+    elif percentile is not None and percentile >= 75:
+        regime = "elevated"
+        position_cap = 0.5
+        risk_action = "reduce_position"
+    elif percentile is not None and percentile <= 10:
+        regime = "compressed"
+        risk_action = "require_breakout_confirmation"
+
+    return {
+        **base,
+        "data_quality": "available",
+        "forecast_sigma_pct": _round(
+            forecast_sigma * 100 if forecast_sigma is not None else None,
+            4,
+        ),
+        "realized_sigma_20_pct": _round(
+            realized_sigma * 100 if realized_sigma is not None else None,
+            4,
+        ),
+        "historical_percentile": _round(percentile, 2),
+        "regime": regime,
+        "position_multiplier_cap": position_cap,
+        "risk_action": risk_action,
+    }
 
 
 def _utc_timestamp(value: Any) -> Optional[pd.Timestamp]:
@@ -357,6 +432,10 @@ def build_crypto_technical_context(
         vwap=vwap,
         ema20=ema20,
     )
+    volatility_forecast = _build_ewma_volatility_forecast(
+        bars,
+        period=bar_metadata.get("period"),
+    )
 
     return {
         "framework": "Price Action + Fibonacci + Volume + VWAP + EMA",
@@ -387,6 +466,7 @@ def build_crypto_technical_context(
         "volatility": {
             "atr14": _round(atr14),
             "atr14_pct": _round(atr_pct, 2),
+            "forecast": volatility_forecast,
             "stop_loss_guidance": "止损距离应避开日常 ATR 噪音，除非是明确的超短线计划。",
         },
         "vwap": {

@@ -225,6 +225,163 @@ def test_late_volatility_trigger_disables_immediate_intraday_entry() -> None:
     assert plan["execution_ladder"]["trial_entry"]["enabled"] is False
 
 
+def test_aligned_timeframes_block_opposed_intraday_plan() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=50,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="观望",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "short",
+                    "entry_price": 100,
+                    "execution_ladder": {
+                        "current_action": "trial",
+                        "trial_entry": {"enabled": True, "entry_price": 100},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context={"intraday": {"alignment": "aligned_long"}},
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["enabled"] is False
+    assert plan["direction"] == "wait"
+    assert plan["direction_guard"] == "blocked_by_aligned_timeframes"
+    assert plan["multi_timeframe_alignment"] == "aligned_long"
+    assert "日线与小时线均偏多" in plan["no_trade_reason"]
+    assert plan["execution_ladder"]["current_action"] == "wait"
+    assert plan["execution_ladder"]["trial_entry"]["enabled"] is False
+
+
+def test_extreme_ewma_volatility_caps_plan_and_trial_position() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=70,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="买入",
+        dashboard={
+            "battle_plan": {
+                "long_plan": {
+                    "direction": "long",
+                    "entry_price": 100,
+                    "stop_loss": 95,
+                    "take_profit": 110,
+                    "position_hint": "账户风险 1%",
+                    "execution_contract": _contract(),
+                    "execution_ladder": {
+                        "current_action": "trial",
+                        "trial_entry": {"entry_price": 100, "position_hint": "先试仓"},
+                        "confirmation_add": {"entry_price": 103},
+                        "invalidation": {"price": 95},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context={
+            "timeframes": {
+                "daily": {
+                    "volatility": {
+                        "forecast": {
+                            "data_quality": "available",
+                            "model_version": "btc-ewma-vol-v1",
+                            "forecast_sigma_pct": 4.2,
+                            "historical_percentile": 96.0,
+                            "regime": "extreme",
+                            "position_multiplier_cap": 0.25,
+                            "risk_action": "reduce_position_strongly",
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    plan = aligned.dashboard["battle_plan"]["long_plan"]
+    assert plan["direction"] == "long"
+    assert plan["position_multiplier_cap"] == 0.25
+    assert plan["risk_overlay"]["applied"] is True
+    assert plan["risk_overlay"]["volatility_regime"] == "extreme"
+    assert "原计划的 25%" in plan["position_hint"]
+    assert plan["execution_ladder"]["trial_entry"]["position_multiplier_cap"] == 0.25
+    assert "原计划的 25%" in plan["execution_ladder"]["trial_entry"]["position_hint"]
+
+
+def test_ewma_overlay_preserves_stricter_existing_position_cap() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=70,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="买入",
+        dashboard={
+            "battle_plan": {
+                "long_plan": {
+                    "direction": "long",
+                    "entry_price": 100,
+                    "stop_loss": 95,
+                    "take_profit": 110,
+                    "position_multiplier_cap": 0.25,
+                    "execution_contract": _contract(),
+                    "execution_ladder": {
+                        "current_action": "trial",
+                        "trial_entry": {"entry_price": 100},
+                        "confirmation_add": {"entry_price": 103},
+                        "invalidation": {"price": 95},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context={
+            "timeframes": {
+                "daily": {
+                    "volatility": {
+                        "forecast": {
+                            "data_quality": "available",
+                            "model_version": "btc-ewma-vol-v1",
+                            "forecast_sigma_pct": 2.5,
+                            "historical_percentile": 80.0,
+                            "regime": "elevated",
+                            "position_multiplier_cap": 0.5,
+                            "risk_action": "reduce_position",
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    plan = aligned.dashboard["battle_plan"]["long_plan"]
+    assert plan["position_multiplier_cap"] == 0.25
+    assert plan["risk_overlay"]["source_position_multiplier_cap"] == 0.5
+    assert plan["risk_overlay"]["binding"] is False
+    assert plan["execution_ladder"]["trial_entry"]["position_multiplier_cap"] == 0.25
+    assert "保留更严格" in plan["risk_overlay"]["note"]
+
+
 def test_analyze_aligns_execution_plans_for_crypto_context() -> None:
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
     config = SimpleNamespace(
@@ -260,4 +417,5 @@ def test_analyze_aligns_execution_plans_for_crypto_context() -> None:
         parsed_result,
         runtime_config=config,
         trigger_context=None,
+        technical_context=None,
     )

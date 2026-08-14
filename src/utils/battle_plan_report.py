@@ -86,6 +86,10 @@ def render_directional_plan_overview(battle_plan: Dict[str, Any]) -> List[str]:
         note = clean_plan_value(plan.get("validation_note"))
         if status in {"failed", "skipped"} and note != "N/A":
             lines.append(f"- {label}：{note}")
+        risk_overlay = plan.get("risk_overlay") if isinstance(plan.get("risk_overlay"), dict) else {}
+        risk_note = clean_plan_value(risk_overlay.get("note"))
+        if risk_note != "N/A":
+            lines.append(f"- {label}波动风控：{risk_note}")
     if len(lines) > 5 and lines[-1].startswith("- "):
         lines.append("")
     return lines

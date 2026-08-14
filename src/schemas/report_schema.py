@@ -122,6 +122,8 @@ class DirectionalStrategyPlan(BaseModel):
     invalid_condition: Optional[str] = None
     risk_reward: Optional[Union[str, int, float]] = None
     position_hint: Optional[str] = None
+    position_multiplier_cap: Optional[float] = None
+    risk_overlay: Optional[Dict[str, Any]] = None
     confidence: Optional[Union[str, int, float]] = None
     no_trade_reason: Optional[str] = None
     reason: Optional[str] = None
@@ -146,6 +148,8 @@ class IntradayPlan(BaseModel):
     daily_constraint: Optional[str] = None
     risk_reward: Optional[Union[str, int, float]] = None
     position_hint: Optional[str] = None
+    position_multiplier_cap: Optional[float] = None
+    risk_overlay: Optional[Dict[str, Any]] = None
     confidence: Optional[Union[str, int, float]] = None
     no_trade_reason: Optional[str] = None
     reason: Optional[str] = None

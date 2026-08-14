@@ -2138,7 +2138,12 @@ class TestAnalyzeWithAgentStockName(unittest.TestCase):
                 )
 
             self.assertIs(returned, result)
-            mock_align.assert_called_once_with(result, runtime_config=mock_cfg)
+            mock_align.assert_called_once_with(
+                result,
+                runtime_config=mock_cfg,
+                trigger_context=None,
+                technical_context=None,
+            )
             self.assertEqual(events[:2], ["align", "save"])
 
 

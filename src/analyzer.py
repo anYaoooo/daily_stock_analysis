@@ -1753,6 +1753,7 @@ def align_btc_execution_plans(
     *,
     runtime_config: Any,
     trigger_context: Optional[Dict[str, Any]] = None,
+    technical_context: Optional[Dict[str, Any]] = None,
 ) -> AnalysisResult:
     """Annotate BTC plans with execution-validation results.
 
@@ -1771,6 +1772,16 @@ def align_btc_execution_plans(
     _apply_btc_trigger_execution_guard(
         battle_plan,
         trigger_context=trigger_context,
+        language=normalize_report_language(result.report_language),
+    )
+    _apply_btc_intraday_alignment_guard(
+        battle_plan,
+        technical_context=technical_context,
+        language=normalize_report_language(result.report_language),
+    )
+    _apply_btc_volatility_risk_overlay(
+        battle_plan,
+        technical_context=technical_context,
         language=normalize_report_language(result.report_language),
     )
 
@@ -1810,11 +1821,19 @@ def align_btc_execution_plans(
             if direction in {"wait", "none", ""}:
                 payload["validation_status"] = "skipped"
                 payload["validation_errors"] = []
-                payload["validation_note"] = (
-                    "等待状态，无需执行校验"
-                    if language == "zh"
-                    else "wait state, execution validation skipped"
-                )
+                wait_reason = str(payload.get("no_trade_reason") or "").strip()
+                if language == "zh":
+                    payload["validation_note"] = (
+                        f"等待状态，无需执行校验。{wait_reason}"
+                        if wait_reason
+                        else "等待状态，无需执行校验"
+                    )
+                else:
+                    payload["validation_note"] = (
+                        f"wait state, execution validation skipped. {wait_reason}"
+                        if wait_reason
+                        else "wait state, execution validation skipped"
+                    )
             else:
                 payload["validation_status"] = "failed"
                 payload["validation_errors"] = ["unsupported_direction"]
@@ -1838,7 +1857,12 @@ def align_btc_execution_plans(
                 if isinstance(payload.get("execution_contract"), dict)
                 else None
             ),
+            position_multiplier_cap=_coerce_position_multiplier_cap(
+                payload.get("position_multiplier_cap"),
+            ),
         )
+        if "position_multiplier_cap" in payload:
+            payload["position_multiplier_cap"] = plan.position_multiplier_cap
         errors = CryptoBacktestEngine.validate_execution_plan(plan=plan, config=config)
         errors.extend(_validate_btc_execution_ladder(payload))
         if not errors:
@@ -1862,6 +1886,170 @@ def align_btc_execution_plans(
         )
 
     return result
+
+
+def _coerce_position_multiplier_cap(value: Any, *, default: float = 1.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    if not math.isfinite(parsed):
+        parsed = default
+    return max(0.0, min(parsed, 1.0))
+
+
+def _apply_btc_volatility_risk_overlay(
+    battle_plan: Dict[str, Any],
+    *,
+    technical_context: Optional[Dict[str, Any]],
+    language: str,
+) -> None:
+    """Apply deterministic EWMA volatility caps without changing direction."""
+
+    if not isinstance(technical_context, dict):
+        return
+    timeframes = technical_context.get("timeframes")
+    if not isinstance(timeframes, dict):
+        return
+
+    plan_sources = (
+        ("long_plan", "daily"),
+        ("short_plan", "daily"),
+        ("intraday_plan", "hourly"),
+    )
+    for plan_key, timeframe in plan_sources:
+        payload = battle_plan.get(plan_key)
+        source_context = timeframes.get(timeframe)
+        if not isinstance(payload, dict) or not isinstance(source_context, dict):
+            continue
+        volatility = source_context.get("volatility")
+        forecast = volatility.get("forecast") if isinstance(volatility, dict) else None
+        if not isinstance(forecast, dict) or forecast.get("data_quality") != "available":
+            continue
+
+        source_position_cap = _coerce_position_multiplier_cap(
+            forecast.get("position_multiplier_cap"),
+        )
+        previous_position_cap = _coerce_position_multiplier_cap(
+            payload.get("position_multiplier_cap"),
+        )
+        position_cap = min(source_position_cap, previous_position_cap)
+        regime = str(forecast.get("regime") or "normal").strip().lower()
+        forecast_sigma = forecast.get("forecast_sigma_pct")
+        overlay = {
+            "version": "btc-risk-overlay-v1",
+            "source_model": forecast.get("model_version") or forecast.get("model") or "ewma",
+            "source_timeframe": timeframe,
+            "volatility_regime": regime,
+            "forecast_sigma_pct": forecast_sigma,
+            "historical_percentile": forecast.get("historical_percentile"),
+            "source_position_multiplier_cap": source_position_cap,
+            "previous_position_multiplier_cap": previous_position_cap,
+            "position_multiplier_cap": position_cap,
+            "risk_action": forecast.get("risk_action") or "normal",
+            "applied": source_position_cap < 1.0,
+            "binding": source_position_cap <= previous_position_cap and source_position_cap < 1.0,
+        }
+        payload["risk_overlay"] = overlay
+        payload["position_multiplier_cap"] = position_cap
+
+        if source_position_cap >= 1.0:
+            continue
+        if language == "zh":
+            if source_position_cap <= previous_position_cap:
+                note = (
+                    f"EWMA 波动处于 {regime} 区间（下一根波动预测 {forecast_sigma}%），"
+                    f"系统将仓位限制为原计划的 {position_cap:.0%} 以内。"
+                )
+            else:
+                note = (
+                    f"EWMA 波动处于 {regime} 区间（下一根波动预测 {forecast_sigma}%），"
+                    f"其 {source_position_cap:.0%} 上限宽于现有 {position_cap:.0%} 风控，"
+                    "系统保留更严格的现有仓位上限。"
+                )
+        else:
+            if source_position_cap <= previous_position_cap:
+                note = (
+                    f"EWMA volatility is {regime} (next-bar sigma {forecast_sigma}%); "
+                    f"cap position size at {position_cap:.0%} of the original plan."
+                )
+            else:
+                note = (
+                    f"EWMA volatility is {regime} (next-bar sigma {forecast_sigma}%); "
+                    f"its {source_position_cap:.0%} cap is looser than the existing "
+                    f"{position_cap:.0%} risk cap, so the stricter cap remains in force."
+                )
+        overlay["note"] = note
+        existing_hint = str(payload.get("position_hint") or "").strip()
+        if note not in existing_hint:
+            payload["position_hint"] = f"{existing_hint}；{note}" if existing_hint and language == "zh" else (
+                f"{existing_hint}; {note}" if existing_hint else note
+            )
+
+        ladder = payload.get("execution_ladder")
+        trial_entry = ladder.get("trial_entry") if isinstance(ladder, dict) else None
+        if isinstance(trial_entry, dict):
+            trial_entry["position_multiplier_cap"] = position_cap
+            trial_hint = str(trial_entry.get("position_hint") or "").strip()
+            if note not in trial_hint:
+                trial_entry["position_hint"] = (
+                    f"{trial_hint}；{note}" if trial_hint and language == "zh" else
+                    f"{trial_hint}; {note}" if trial_hint else note
+                )
+
+
+def _apply_btc_intraday_alignment_guard(
+    battle_plan: Dict[str, Any],
+    *,
+    technical_context: Optional[Dict[str, Any]],
+    language: str,
+) -> None:
+    """Reject only intraday plans opposed by both closed-bar timeframes.
+
+    A counter-trend plan remains valid when the hourly timeframe actually
+    supports it. This guard only handles the stronger case where daily and
+    hourly bias agree against the suggested intraday direction.
+    """
+
+    if not isinstance(technical_context, dict):
+        return
+    intraday_context = technical_context.get("intraday")
+    if not isinstance(intraday_context, dict):
+        return
+    alignment = str(intraday_context.get("alignment") or "").strip().lower()
+    if alignment not in {"aligned_long", "aligned_short"}:
+        return
+
+    intraday_plan = battle_plan.get("intraday_plan")
+    if not isinstance(intraday_plan, dict) or intraday_plan.get("enabled") is False:
+        return
+    direction = str(intraday_plan.get("direction") or "").strip().lower()
+    opposed_direction = "short" if alignment == "aligned_long" else "long"
+    if direction != opposed_direction:
+        return
+
+    dominant_direction = "多" if alignment == "aligned_long" else "空"
+    direction_text = "空" if direction == "short" else "多"
+    reason = (
+        f"日线与小时线均偏{dominant_direction}，当前缺少支持日内{direction_text}单的闭合 K 线证据；等待小时线方向确认后再评估。"
+        if language == "zh"
+        else (
+            "Daily and hourly closed-bar signals both oppose this intraday "
+            "direction; wait for hourly confirmation before reassessing."
+        )
+    )
+    intraday_plan["enabled"] = False
+    intraday_plan["direction"] = "wait"
+    intraday_plan["no_trade_reason"] = reason
+    intraday_plan["reason"] = reason
+    intraday_plan["multi_timeframe_alignment"] = alignment
+    intraday_plan["direction_guard"] = "blocked_by_aligned_timeframes"
+    ladder = intraday_plan.get("execution_ladder")
+    if isinstance(ladder, dict):
+        ladder["current_action"] = "wait"
+        trial_entry = ladder.get("trial_entry")
+        if isinstance(trial_entry, dict):
+            trial_entry["enabled"] = False
 
 
 def _apply_btc_trigger_execution_guard(
@@ -3369,6 +3557,7 @@ class GeminiAnalyzer:
                         result,
                         runtime_config=config,
                         trigger_context=context.get("trigger_context"),
+                        technical_context=context.get("crypto_technical"),
                     )
 
                 # 内容完整性校验（可选）
@@ -3772,6 +3961,9 @@ class GeminiAnalyzer:
             fib_levels = fib.get("retracement_levels") or {}
             volume = daily_crypto.get("volume") or {}
             volatility = daily_crypto.get("volatility") or {}
+            daily_volatility_forecast = (
+                volatility.get("forecast") if isinstance(volatility.get("forecast"), dict) else {}
+            )
             vwap = daily_crypto.get("vwap") or {}
             ema = daily_crypto.get("ema") or {}
             mode_instruction = (
@@ -3789,6 +3981,7 @@ class GeminiAnalyzer:
 | Fibonacci（斐波那契回调） | swing high={fib.get('swing_high', 'N/A')}；swing low={fib.get('swing_low', 'N/A')}；38.2%={fib_levels.get('38.2%', 'N/A')}；50%={fib_levels.get('50.0%', 'N/A')}；61.8%={fib_levels.get('61.8%', 'N/A')} | 将这些位置作为潜在支撑/阻力，给出回踩和失守观察点 |
 | Volume（成交量） | 最新={volume.get('latest', 'N/A')}；均量={volume.get('average', 'N/A')}；量比={volume.get('ratio', 'N/A')}；确认={volume.get('confirmation', 'N/A')} | 判断突破/跌破是否有成交量确认，低量突破必须降权 |
 | Volatility / ATR（波动率） | ATR14={volatility.get('atr14', 'N/A')}；ATR14%={volatility.get('atr14_pct', 'N/A')}% | 止损与目标价必须参考 ATR，避免把止损放在日常波动噪音内；若 ATR 缺失，明确说明波动率数据不足 |
+| EWMA 波动预测 | 数据质量={daily_volatility_forecast.get('data_quality', 'N/A')}；下一根 sigma={daily_volatility_forecast.get('forecast_sigma_pct', 'N/A')}%；历史分位={daily_volatility_forecast.get('historical_percentile', 'N/A')}%；状态={daily_volatility_forecast.get('regime', 'N/A')}；仓位上限乘数={daily_volatility_forecast.get('position_multiplier_cap', 'N/A')} | 只用于仓位和风险预算，不预测方向；elevated/extreme 必须缩减仓位，compressed 不得自动加杠杆，需等待突破确认 |
 | VWAP（成交量加权均价） | rolling20 VWAP={vwap.get('rolling_20', 'N/A')}；价格位置={vwap.get('price_position', 'N/A')} | 价格在 VWAP 上方偏多头强势，下方偏空头压制；日线数据下按 rolling VWAP 解读 |
 | EMA（指数移动平均） | EMA20={ema.get('ema20', 'N/A')}；EMA50={ema.get('ema50', 'N/A')}；结构={ema.get('structure', 'N/A')} | 判断短中期趋势延续或反转，必须和 MA/MACD/RSI 交叉验证 |
 
@@ -3812,6 +4005,11 @@ class GeminiAnalyzer:
             hourly_price_action = hourly_crypto.get("price_action") if isinstance(hourly_crypto, dict) else {}
             hourly_volume = hourly_crypto.get("volume") if isinstance(hourly_crypto, dict) else {}
             hourly_volatility = hourly_crypto.get("volatility") if isinstance(hourly_crypto, dict) else {}
+            hourly_volatility_forecast = (
+                hourly_volatility.get("forecast")
+                if isinstance(hourly_volatility.get("forecast"), dict)
+                else {}
+            )
             hourly_vwap = hourly_crypto.get("vwap") if isinstance(hourly_crypto, dict) else {}
             hourly_ema = hourly_crypto.get("ema") if isinstance(hourly_crypto, dict) else {}
             hourly_event = hourly_crypto.get("event") if isinstance(hourly_crypto, dict) else {}
@@ -3826,6 +4024,7 @@ class GeminiAnalyzer:
             basis = derivatives.get("basis") if isinstance(derivatives.get("basis"), dict) else {}
             long_short_ratio = derivatives.get("long_short_ratio") if isinstance(derivatives.get("long_short_ratio"), dict) else {}
             cross_exchange = derivatives.get("cross_exchange") if isinstance(derivatives.get("cross_exchange"), dict) else {}
+            order_flow = derivatives.get("order_flow") if isinstance(derivatives.get("order_flow"), dict) else {}
             macro_correlation = crypto_technical.get("macro_correlation") if isinstance(crypto_technical.get("macro_correlation"), dict) else {}
             macro_assets = macro_correlation.get("assets") if isinstance(macro_correlation.get("assets"), dict) else {}
             nasdaq_corr = macro_assets.get("nasdaq") if isinstance(macro_assets.get("nasdaq"), dict) else {}
@@ -3874,15 +4073,17 @@ class GeminiAnalyzer:
 | 小时线偏向 | {intraday.get('hourly_bias', 'N/A')} | 只用于入场、加减仓和日内触发判断 |
 | 对齐状态 | {intraday.get('alignment', 'N/A')} | aligned_long/short 表示顺日线机会；conflict/countertrend 表示逆日线短线机会，需要更严格风控 |
 | 小时线 Price Action | 状态={hourly_price_action.get('state', unknown_text)}；前20根高点/阻力={hourly_price_action.get('recent_high', 'N/A')}；前20根低点/支撑={hourly_price_action.get('recent_low', 'N/A')}；最新涨跌={hourly_price_action.get('close_change_pct', 'N/A')}%；扫过前高={hourly_price_action.get('high_swept', 'N/A')}；收盘站上阻力={hourly_price_action.get('close_above_resistance', 'N/A')} | 日内触发必须区分真突破与插针扫高；扫高回落不得作为多单突破触发 |
-| 小时线 Volume/VWAP/EMA/ATR | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')}；ATR14={hourly_volatility.get('atr14', 'N/A')}；ATR14%={hourly_volatility.get('atr14_pct', 'N/A')}% | 判断日内触发是否有量价、均线和波动率确认；止损不得落在小时线常规 ATR 噪音内 |
+| 小时线 Volume/VWAP/EMA/ATR | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')}；ATR14={hourly_volatility.get('atr14', 'N/A')}；ATR14%={hourly_volatility.get('atr14_pct', 'N/A')}%；EWMA sigma={hourly_volatility_forecast.get('forecast_sigma_pct', 'N/A')}%；波动状态={hourly_volatility_forecast.get('regime', 'N/A')}；仓位上限乘数={hourly_volatility_forecast.get('position_multiplier_cap', 'N/A')} | 判断日内触发是否有量价、均线和波动率确认；止损不得落在小时线常规 ATR 噪音内，elevated/extreme 必须缩仓 |
 | 小时线急跌/扫低事件 | 类型={hourly_event.get('type', 'N/A')}；建议方向={hourly_event.get('suggested_direction', 'N/A')}；紧急度={hourly_event.get('urgency', 'N/A')}；参考高点={hourly_event.get('reference_high', 'N/A')}；事件低点={hourly_event.get('event_low', 'N/A')}；事件K高点={hourly_event.get('event_bar_high', 'N/A')}；高点到低点跌幅={hourly_event.get('drop_from_reference_high_pct', 'N/A')}%；低点反弹={hourly_event.get('rebound_from_event_low_pct', 'N/A')}%；ATR位移={hourly_event.get('atr_move', 'N/A')}；多单确认价={hourly_trigger_reference.get('long_confirmation_price', 'N/A')}；多单失效价={hourly_trigger_reference.get('long_invalidation_price', 'N/A')}；空单跌破价={hourly_trigger_reference.get('short_breakdown_price', 'N/A')} | 若出现 `sharp_selloff_*`、`selloff_rebound_*` 或 `liquidity_sweep_low_reversal_candidate`，不得只写泛泛观望；必须给出“上破多单确认价才进场”和“跌破空单跌破价则放弃抄底/转空”的明确二选一条件 |
 | 日内机会 | {hourly_opportunity} | 必须写清是否有日内交易机会；没有机会时说明等待什么小时线条件 |
 | 衍生品杠杆环境 | 数据质量={derivatives.get('data_quality', 'N/A')}；资金费率={funding.get('rate_pct', 'N/A')}%；状态={funding.get('state', 'N/A')}；7日均值={funding_history.get('avg_rate_pct', 'N/A')}%；趋势={funding_history.get('trend', 'N/A')}；持仓量={open_interest.get('value', 'N/A')} BTC；名义规模={open_interest.get('notional_usdt', 'N/A')} USDT；OI 24h变化={oi_history.get('change_pct', 'N/A')}%；OI趋势={oi_history.get('state', 'N/A')}；永续基差={basis.get('perpetual_premium_pct', 'N/A')}%；基差状态={basis.get('state', 'N/A')}；多空比={long_short_ratio.get('current', 'N/A')}；多空比状态={long_short_ratio.get('state', 'N/A')}；跨所质量={cross_exchange.get('data_quality', 'N/A')}；跨所Funding差={cross_exchange.get('funding_spread_pct', 'N/A')}%；杠杆压力={derivatives.get('leverage_pressure', 'N/A')} | Funding 为正且偏高时警惕多头拥挤和追多回撤；Funding 为负且偏深时警惕空头拥挤和 short squeeze；结合 Funding 趋势、OI 变化、基差和多空比判断杠杆扩张/去杠杆，跨所只有单源时必须降置信度；数据缺失必须标记为不确定而不是中性 |
+| 主动买卖量 / CVD（影子因子） | 数据质量={order_flow.get('data_quality', 'N/A')}；窗口={order_flow.get('window_minutes', 'N/A')}分钟；主动买入占比={order_flow.get('taker_buy_ratio_pct', 'N/A')}%；CVD={order_flow.get('cvd_base_volume', 'N/A')} BTC；CVD占成交量={order_flow.get('cvd_pct_of_volume', 'N/A')}%；价格变化={order_flow.get('price_change_pct', 'N/A')}%；状态={order_flow.get('state', 'N/A')}；背离={order_flow.get('divergence', 'N/A')} | 仅作为突破/回踩执行质量的影子确认因子，不得单独决定多空；价格上涨但 CVD 偏空时降低追多置信度，价格下跌但 CVD 偏多时警惕假跌破/空头衰竭 |
 | 跨市场相关性 | 数据质量={macro_correlation.get('data_quality', 'N/A')}；纳指30/60日={nasdaq_corr.get('correlation_30d', 'N/A')}/{nasdaq_corr.get('correlation_60d', 'N/A')}，状态={nasdaq_corr.get('state', 'N/A')}；DXY30/60日={dxy_corr.get('correlation_30d', 'N/A')}/{dxy_corr.get('correlation_60d', 'N/A')}，状态={dxy_corr.get('state', 'N/A')}；美债10Y30/60日={us10y_corr.get('correlation_30d', 'N/A')}/{us10y_corr.get('correlation_60d', 'N/A')}，状态={us10y_corr.get('state', 'N/A')}；黄金30/60日={gold_corr.get('correlation_30d', 'N/A')}/{gold_corr.get('correlation_60d', 'N/A')}，状态={gold_corr.get('state', 'N/A')} | 相关性只用于识别风险因子暴露和仓位降权，不作为单独入场依据；纳指高正相关时视为科技风险资产暴露，DXY/美债相关性突变时降低方向置信度；样本不足不得推断 |
 
 > BTC 小时线约束：小时线是独立的日内机会层，不再强制服从日线方向。日线偏空但小时线出现多单机会、或日线偏多但小时线出现空单机会时，可以给出逆日线短线计划，但必须明确这是日内/短线机会，止损更严格、仓位更轻、有效期更短，并写清触发价、止损、目标、失效条件和 `daily_constraint`。必须写入 `dashboard.battle_plan.intraday_plan`；若小时线数据缺失或没有日内机会，`enabled=false`、`direction="wait"`，并说明等待条件。
 > BTC 急跌机会约束：当“小时线急跌/扫低事件”的类型不是 `none` 时，`dashboard.battle_plan.intraday_plan.trigger_condition` 必须引用“多单确认价”或“空单跌破价”中的具体数值；`invalidation` 必须引用“多单失效价”或事件低点；`reason` 必须说明这是急跌后的右侧确认/假跌破反弹/跌破延续，禁止只输出“暂无明确信号”而不给可执行等待价位。
 > BTC 衍生品约束：Funding/OI 只作为杠杆拥挤度和风控降权信息，不得单独作为入场依据；当 `leverage_pressure` 显示 long/short crowding risk 时，必须在对应方向计划中降低仓位、等待更强价格确认，或解释为什么当前结构足以抵消拥挤风险。
+> BTC 订单流约束：CVD/主动买卖量当前处于影子验证阶段，只能用于降低置信度、要求更强价格确认或解释假突破风险；不得因单个订单流窗口直接反转日线/小时线方向，也不得把缺失订单流解释为中性。
 """
         
         # 添加昨日对比数据

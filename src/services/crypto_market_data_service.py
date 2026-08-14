@@ -102,10 +102,14 @@ class CryptoMarketDataService:
         duration = _SUPPORTED_PERIODS[period]
         if period == "daily":
             current_open = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            bar_count = days
         else:
             current_open = now.replace(minute=0, second=0, microsecond=0)
+            # `days` is a calendar-day lookback for both daily and hourly data.
+            # The hourly series therefore needs 24 bars per requested day.
+            bar_count = days * 24
         latest_closed = current_open - duration
-        start_at = latest_closed - duration * (days - 1)
+        start_at = latest_closed - duration * (bar_count - 1)
         return start_at, latest_closed
 
     def _fetch_remote(

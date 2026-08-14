@@ -46,6 +46,17 @@ def test_daily_cache_refreshes_once_then_serves_local_rows() -> None:
     DatabaseManager.reset_instance()
 
 
+def test_hourly_days_is_calendar_day_lookback() -> None:
+    start, end = CryptoMarketDataService._requested_window(
+        datetime(2026, 8, 10, 0, 10, tzinfo=timezone.utc),
+        period="hourly",
+        days=7,
+    )
+
+    assert end == datetime(2026, 8, 9, 23, tzinfo=timezone.utc)
+    assert start == datetime(2026, 8, 3, 0, tzinfo=timezone.utc)
+
+
 def test_cache_excludes_current_partial_bar() -> None:
     DatabaseManager.reset_instance()
     db = DatabaseManager(db_url="sqlite:///:memory:")
@@ -99,12 +110,12 @@ def test_perpetual_cache_preserves_mark_and_funding_fields() -> None:
     )
 
     bars = service.get_bars(
-        "BTC-USDT-PERP", period="hourly", days=1,
+        "BTC", period="hourly", days=1,
         instrument={"type": "perpetual", "venue": "okx", "margin_mode": "isolated"},
     )
 
     assert float(bars.iloc[0]["mark_close"]) == 100.8
-    assert bars.iloc[0]["funding_rates"] == [0.0001]
+    assert list(bars.iloc[0]["funding_rates"]) == [0.0001]
     assert bars.attrs["instrument_type"] == "perpetual"
     assert fetcher.get_perpetual_kline_data.call_count == 1
     DatabaseManager.reset_instance()
