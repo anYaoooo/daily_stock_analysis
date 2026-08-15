@@ -1406,6 +1406,12 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 | `CRYPTO_BACKTEST_MINIMUM_RISK_REWARD` | `1.2` | v5 在计划价和实际成交价阶段要求的最低风险收益比 |
 | `CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO` | `1.0` | v5 可交易计划要求的最低量比确认阈值 |
 
+### BTC 历史训练数据
+
+运行 `python scripts/backfill_btc_history.py --export-csv` 可将 OKX `BTC-USDT-SWAP` 从 `2020-02-01 UTC` 至最新闭合小时的 1 小时成交价与标记价分块写入 SQLite，并导出 `data/btc_okx_perpetual_1h_training.csv`。任务按 30 天分块、自动跳过完整区间，支持失败后直接续跑；可用 `--start`、`--end`、`--chunk-days` 和 `--force` 调整范围与刷新策略。每次完成后会报告理论/实际 bar 数、时间缺口及执行价/标记价空值。
+
+全历史资金费率不在该训练回填中补造，旧 bar 会明确保存为 `funding_complete=false`。这些数据适合训练收益率、方向概率和波动分布模型，但不能绕过 `btc-plan-v5` 对完整资金费率的严格永续回测要求。
+
 ### 自动运行
 
 回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析会在每小时 05 分执行以获取上一根完整小时 K 线，后台回测仍会每小时检查一次够龄的 BTC 历史报告。`btc-plan-v5` 从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，并要求计划携带 `btc-execution-v1` 结构化执行契约。引擎只使用已闭合 K 线验证收盘、量比和 rolling VWAP 条件，在全部条件连续满足后于下一根 K 线开盘成交。v5 会在计划价和实际开盘成交价两阶段检查多空点位关系、最低风险收益比、目标覆盖成本能力与量能门槛；若跳空越过目标或使计划质量跌破门槛，则记录为条件触发但放弃成交。合格交易再按止盈止损、最长持有 bars、手续费、滑点、风险预算和名义仓位模拟，永续合约同时要求完整标记价格与资金费率历史。未闭合窗口保持 `insufficient_data/provisional`，后续可重算，不进入胜率；缺少或含不支持条件的契约标记为不可回测，不会降级成触价成交。汇总排除同一 BTC 持仓期间的重叠信号，仅以独立触发交易计算策略契约胜率，并在独立触发样本少于 100 时标记低置信度。旧 v2/v3/v4 结果保留审计，但不与 v5 指标混合。
@@ -1677,6 +1683,22 @@ AGENT_EVENT_ALERT_RULES_JSON=[{"stock_code":"600519","alert_type":"price_cross",
 worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_triggers` 作为评估历史；正常未触发不写历史。DB 持久化规则的 `triggered` 历史按 `rule_id + target + data_source + data_timestamp` 对同一数据点做 best-effort 去重，重复命中会复用最早一条触发记录，`data_timestamp` 缺失时不去重。真实触发后会把每个通知渠道的 attempt 写入 `alert_notifications`，并为 Alert API 创建的持久化规则写入 `alert_cooldowns` 业务冷却状态；若读取持久化冷却失败，worker 会临时使用进程内 fingerprint 防止 DB 异常期间重复推送。legacy `AGENT_EVENT_ALERT_RULES_JSON` 规则继续使用进程内 fingerprint 抑制，不写持久化冷却；通知基础设施的 `notification_noise.py` 降噪仍独立生效。Web 规则列表使用后端返回的 `cooldown_active` 判断冷却状态，避免浏览器本地时区解析影响展示。
 
 技术指标规则只使用日线 close 的边缘触发，partial bar 处理是服务器本地时区 + 16:00 的启发式，不做市场日历精确判定。`watchlist` 每轮刷新 `STOCK_LIST` 后展开，`portfolio_holdings` 从持仓快照的非零持仓按 symbol 去重展开，`portfolio_account` 复用持仓风险服务做账户级聚合评估。`market` 规则的 target 仅支持 `cn|hk|us`，使用结构化 `MarketLightSnapshot`；`trade_date` 来自当次 market overview，`data_quality=unavailable` 会跳过触发，非交易日会被交易日 gate 跳过，`market_light_score_drop` 只比较跨交易日 score。WebUI 的“告警”页面可以管理持久化规则、执行一次性 dry-run 测试，并查看触发历史、通知尝试结果和只读冷却状态；批量规则的列表冷却状态是父规则摘要，子目标冷却以触发历史为准。详细边界见 [实时告警中心](alerts.md)。
+
+## BTC 小时线影子预测
+
+BTC 分析默认读取近 60 天已闭合的 1 小时 K 线，构建下一根收益率回归与上涨方向概率模型。特征仅使用当根及此前已闭合 K 线的滞后收益、滚动收益/波动、成交量偏离、实体/振幅和 EMA 偏离。验证使用 expanding walk-forward：每一折的标准化器和模型只在该折训练段拟合，再对后续连续 24 根验证 K 线生成严格折外预测；上下文会记录收益 MAE、方向命中率和 Brier 分数。
+
+输出写在历史 `context_snapshot.shadow_forecast`，包含 `mode=shadow` 与 `participates_in_decision=false`。它只供历史诊断和离线校准读取，并且在 LLM/Agent 提示、技术偏向、交易计划、入场点、仓位、风控覆盖和自动下单之前均不可见；数据不足或预测异常时仅标记数据质量，不产生降级交易信号。
+
+```env
+BTC_SHADOW_FORECAST_ENABLED=true
+BTC_SHADOW_FORECAST_LOOKBACK_DAYS=60
+BTC_SHADOW_FORECAST_MIN_TRAIN_BARS=336
+BTC_SHADOW_FORECAST_FOLDS=5
+BTC_SHADOW_FORECAST_VALIDATION_BARS=24
+```
+
+回滚方式：设置 `BTC_SHADOW_FORECAST_ENABLED=false`。该开关只停止附加影子上下文，已有 BTC 技术分析、回测和交易执行路径不受影响。
 
 ## BTC 交易机会触发分析
 

@@ -189,6 +189,7 @@ class CryptoOhlcvBar(Base):
     mark_low = Column(Float)
     mark_close = Column(Float)
     funding_rates = Column(Text)
+    funding_complete = Column(Boolean, nullable=False, default=False)
     source = Column(String(64), nullable=False)
     fetched_at = Column(DateTime, nullable=False, index=True)
 
@@ -956,6 +957,9 @@ _CRYPTO_BACKTEST_EXECUTION_COLUMN_SQL: Dict[str, str] = {
     "missed_favorable_move_pct": "FLOAT",
     "missed_adverse_move_pct": "FLOAT",
 }
+_CRYPTO_MARKET_DATA_COLUMN_SQL: Dict[str, str] = {
+    "funding_complete": "BOOLEAN NOT NULL DEFAULT 0",
+}
 _LLM_USAGE_INTEGER_TELEMETRY_COLUMNS = {
     column
     for column, column_type in _LLM_USAGE_TELEMETRY_COLUMN_SQL.items()
@@ -1208,6 +1212,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_llm_usage_telemetry_columns()
             self._ensure_backtest_timeframe_columns()
             self._ensure_crypto_backtest_execution_columns()
+            self._ensure_crypto_market_data_columns()
             self._ensure_schema_migration_record()
 
             self._initialized = True
@@ -1388,6 +1393,49 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                         delay = self._sqlite_write_retry_base_delay * (2 ** attempt)
                         logger.warning(
                             "BTC 回测执行字段 SQLite 补列遇到锁，重试: %s (%s/%s, %.2fs)",
+                            column,
+                            attempt + 1,
+                            self._sqlite_write_retry_max,
+                            delay,
+                        )
+                        if delay > 0:
+                            time.sleep(delay)
+                        continue
+                    raise
+
+    def _ensure_crypto_market_data_columns(self) -> None:
+        """Add additive metadata required by historical crypto backfills."""
+        if not self._is_sqlite_engine:
+            return
+        table_name = CryptoOhlcvBar.__tablename__
+        try:
+            existing = {
+                column["name"]
+                for column in inspect(self._engine).get_columns(table_name)
+            }
+        except Exception as exc:
+            logger.warning("BTC 行情缓存字段检查失败，跳过 SQLite 补列: %s", exc)
+            return
+
+        for column, column_type in _CRYPTO_MARKET_DATA_COLUMN_SQL.items():
+            if column in existing:
+                continue
+            for attempt in range(self._sqlite_write_retry_max + 1):
+                try:
+                    with self._engine.begin() as connection:
+                        connection.exec_driver_sql(
+                            f"ALTER TABLE {table_name} ADD COLUMN {column} {column_type}"
+                        )
+                    existing.add(column)
+                    break
+                except OperationalError as exc:
+                    if self._is_sqlite_duplicate_column_error(exc, column):
+                        existing.add(column)
+                        break
+                    if self._is_sqlite_locked_error(exc) and attempt < self._sqlite_write_retry_max:
+                        delay = self._sqlite_write_retry_base_delay * (2 ** attempt)
+                        logger.warning(
+                            "BTC 行情缓存字段 SQLite 补列遇到锁，重试: %s (%s/%s, %.2fs)",
                             column,
                             attempt + 1,
                             self._sqlite_write_retry_max,
@@ -2405,6 +2453,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                                 'mark_low': excluded.mark_low,
                                 'mark_close': excluded.mark_close,
                                 'funding_rates': excluded.funding_rates,
+                                'funding_complete': excluded.funding_complete,
                                 'source': excluded.source,
                                 'fetched_at': excluded.fetched_at,
                             },

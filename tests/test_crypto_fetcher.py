@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from unittest.mock import Mock, patch
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
@@ -277,6 +277,43 @@ def test_crypto_fetcher_builds_aligned_perpetual_trade_mark_and_funding_data() -
     assert frame.attrs["instrument_type"] == "perpetual"
     assert frame.attrs["market_symbol"] == "BTC/USDT:USDT"
     assert frame.attrs["funding_complete"] is True
+
+
+def test_crypto_fetcher_range_filters_extra_rows_and_allows_training_without_funding() -> None:
+    start_at = datetime(2020, 2, 1, tzinfo=timezone.utc)
+    end_at = start_at + timedelta(hours=1)
+    start_ms = int(start_at.timestamp() * 1000)
+    trade_rows = [
+        [start_ms - 3600000, 99.0, 101.0, 98.0, 100.0, 9.0],
+        [start_ms, 100.0, 102.0, 99.0, 101.0, 10.0],
+        [start_ms + 3600000, 101.0, 104.0, 100.0, 103.0, 11.0],
+        [start_ms + 7200000, 103.0, 105.0, 102.0, 104.0, 12.0],
+    ]
+    mark_rows = [
+        [start_ms - 3600000, 98.5, 100.5, 97.5, 99.5, 0.0],
+        [start_ms, 99.5, 101.5, 98.5, 100.5, 0.0],
+        [start_ms + 3600000, 100.5, 103.5, 99.5, 102.5, 0.0],
+        [start_ms + 7200000, 102.5, 104.5, 101.5, 103.5, 0.0],
+    ]
+    exchange = Mock()
+    exchange.fetch_ohlcv.side_effect = [trade_rows, mark_rows]
+    fetcher = CryptoFetcher()
+
+    with patch.object(fetcher, "_create_public_exchange", return_value=exchange):
+        frame = fetcher.get_perpetual_kline_range(
+            "BTC-USDT-PERP",
+            start_at=start_at,
+            end_at=end_at,
+            period="hourly",
+        )
+
+    assert frame["date"].dt.strftime("%Y-%m-%d %H:%M").tolist() == [
+        "2020-02-01 00:00",
+        "2020-02-01 01:00",
+    ]
+    assert frame["funding_complete"].tolist() == [False, False]
+    assert frame.attrs["funding_complete"] is False
+    exchange.fetch_funding_rate_history.assert_not_called()
 
 
 def test_crypto_fetcher_paginates_perpetual_mark_candles_at_provider_limit() -> None:

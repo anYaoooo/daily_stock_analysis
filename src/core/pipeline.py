@@ -464,6 +464,7 @@ class StockAnalysisPipeline:
             # Step 3: 趋势分析（基于交易理念）— 在 Agent 分支之前执行，供两条路径共用
             trend_result: Optional[TrendAnalysisResult] = None
             crypto_technical_context: Optional[Dict[str, Any]] = None
+            shadow_forecast_context: Optional[Dict[str, Any]] = None
             try:
                 from src.services.history_loader import get_frozen_target_date
                 _mkt = get_market_for_stock(normalize_stock_code(code))
@@ -482,10 +483,16 @@ class StockAnalysisPipeline:
                         try:
                             from src.services.crypto_market_data_service import CryptoMarketDataService
 
+                            shadow_enabled = bool(
+                                getattr(self.config, "btc_shadow_forecast_enabled", True)
+                            )
+                            shadow_lookback_days = int(
+                                getattr(self.config, "btc_shadow_forecast_lookback_days", 60)
+                            )
                             hourly_df = CryptoMarketDataService(db_manager=self.db).get_bars(
                                 code,
                                 period="hourly",
-                                days=7,
+                                days=max(7, shadow_lookback_days) if shadow_enabled else 7,
                                 # BTC analysis and the volatility monitor use the same
                                 # OKX perpetual trade/mark series.  Passing the contract
                                 # explicitly is required because a bare BTC alias defaults
@@ -500,6 +507,26 @@ class StockAnalysisPipeline:
                             logger.warning("%s(%s) BTC 小时线数据获取失败，仅使用日线分析: %s", stock_name, code, exc)
                     crypto_technical_context = build_crypto_multi_timeframe_context(df, hourly_df, code)
                     if crypto_technical_context and is_crypto_code(code):
+                        if bool(getattr(self.config, "btc_shadow_forecast_enabled", True)):
+                            try:
+                                from src.services.btc_shadow_forecast_service import BtcShadowForecastService
+
+                                shadow_forecast_context = BtcShadowForecastService(
+                                    min_train_bars=int(
+                                        getattr(self.config, "btc_shadow_forecast_min_train_bars", 336)
+                                    ),
+                                    folds=int(getattr(self.config, "btc_shadow_forecast_folds", 5)),
+                                    validation_bars=int(
+                                        getattr(self.config, "btc_shadow_forecast_validation_bars", 24)
+                                    ),
+                                ).build(hourly_df)
+                            except Exception as exc:
+                                logger.warning(
+                                    "%s(%s) BTC 小时线影子预测失败，继续使用现有技术面上下文: %s",
+                                    stock_name,
+                                    code,
+                                    exc,
+                                )
                         try:
                             derivatives_context = CryptoDerivativesFetcher().get_btc_derivatives_context(code)
                             if isinstance(derivatives_context, dict):
@@ -544,6 +571,7 @@ class StockAnalysisPipeline:
                     daily_market_context=daily_market_context,
                     portfolio_context=portfolio_context,
                     crypto_technical_context=crypto_technical_context,
+                    shadow_forecast_context=shadow_forecast_context,
                 )
 
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
@@ -790,6 +818,8 @@ class StockAnalysisPipeline:
                         analysis_context_pack_overview=analysis_context_pack_overview,
                         market_phase_summary=market_phase_summary,
                     )
+                    if shadow_forecast_context is not None:
+                        context_snapshot["shadow_forecast"] = shadow_forecast_context
                     result.diagnostic_context_snapshot = context_snapshot
                     saved_history_id = self.db.save_analysis_history(
                         result=result,
@@ -1144,6 +1174,7 @@ class StockAnalysisPipeline:
         daily_market_context: Optional[DailyMarketContext] = None,
         portfolio_context: Optional[Dict[str, Any]] = None,
         crypto_technical_context: Optional[Dict[str, Any]] = None,
+        shadow_forecast_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[AnalysisResult]:
         """
         使用 Agent 模式分析单只股票。
@@ -1438,6 +1469,8 @@ class StockAnalysisPipeline:
                         analysis_context_pack_overview=analysis_context_pack_overview,
                         market_phase_summary=market_phase_summary,
                     )
+                    if shadow_forecast_context is not None:
+                        agent_context_snapshot["shadow_forecast"] = shadow_forecast_context
                     result.diagnostic_context_snapshot = agent_context_snapshot
                     agent_context_snapshot["stock_name"] = resolved_stock_name
                     saved_history_id = self.db.save_analysis_history(

@@ -1236,6 +1236,12 @@ Set the following variables in `.env` (all optional, have defaults):
 | `CRYPTO_BACKTEST_MINIMUM_RISK_REWARD` | `1.2` | Minimum risk/reward required by v5 at both planned and actual fill prices |
 | `CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO` | `1.0` | Minimum `volume_ratio_gte` confirmation threshold required by v5 |
 
+### BTC Historical Training Data
+
+Run `python scripts/backfill_btc_history.py --export-csv` to backfill hourly OKX `BTC-USDT-SWAP` trade and mark candles from `2020-02-01 UTC` through the latest closed hour into SQLite and export `data/btc_okx_perpetual_1h_training.csv`. The job uses resumable 30-day chunks, skips complete ranges, and supports `--start`, `--end`, `--chunk-days`, and `--force`. Its final report checks expected versus actual bars, timestamp gaps, and missing execution or mark prices.
+
+The backfill does not fabricate unavailable full-history funding rates. Historical rows are stored with `funding_complete=false`; they are suitable for return, direction-probability, and volatility-distribution research, but they do not bypass the complete-funding requirement of strict `btc-plan-v5` perpetual backtests.
+
 ### Auto-run
 
 Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v5` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, then checks price geometry, minimum risk/reward, cost coverage, and volume confirmation at both the planned price and the next-candle fill. A gap beyond the target or below the quality threshold is recorded as a rejected fill rather than a trade. Qualified plans then apply SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Perpetual plans also require complete mark-price and funding histories to estimate liquidation, funding cost, and maker/taker fees. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing v2/v3/v4 results remain auditable but are never mixed with v5 metrics.
@@ -1516,6 +1522,22 @@ AGENT_EVENT_ALERT_RULES_JSON=[{"stock_code":"600519","alert_type":"price_cross",
 The worker writes `triggered`, `skipped`, `degraded`, and `failed` rows to `alert_triggers` as evaluation history; normal non-triggered checks do not write history. For DB-persisted rules, `triggered` history is best-effort deduplicated by `rule_id + target + data_source + data_timestamp`: repeated hits for the same data point reuse the earliest trigger row, while records without `data_timestamp` are not deduplicated. Real triggers write per-channel attempts to `alert_notifications`, and Alert API persisted rules write business cooldown state to `alert_cooldowns`; if the persisted cooldown read fails, the worker temporarily falls back to the in-process fingerprint guard to avoid repeated notifications during the DB failure. Legacy `AGENT_EVENT_ALERT_RULES_JSON` rules continue to use the in-process fingerprint suppressor and do not write persisted cooldown state; the notification infrastructure `notification_noise.py` guard remains independent. The Web rule list uses the backend-provided `cooldown_active` flag instead of browser-local timezone parsing to decide whether a rule is cooling down.
 
 Technical indicator rules use daily-close edge triggers only. Partial-bar handling is a server-local-time + 16:00 heuristic and does not implement market-calendar precision. `watchlist` rules refresh and expand `STOCK_LIST` each worker run, `portfolio_holdings` expands non-zero snapshot positions with symbol de-duplication, and `portfolio_account` reuses the portfolio risk service for account-level aggregate evaluation. `market` rules accept only `cn|hk|us` targets and use structured `MarketLightSnapshot` data; `trade_date` comes from the current market overview, `data_quality=unavailable` skips triggering, non-trading days are skipped by the trading-day gate, and `market_light_score_drop` compares score across trading days only. The WebUI "Alerts" page can manage persisted rules, run one-shot dry-run tests, and view trigger history, notification attempts, and read-only cooldown state; cooldown on batch rules is a parent-rule summary, while child-target cooldown details are visible through trigger history. See [Real-Time Alert Center](alerts.md) for detailed boundaries.
+
+## BTC Hourly Shadow Forecast
+
+BTC analysis reads the latest 60 days of closed one-hour bars by default and builds a next-bar return regressor plus an up-direction probability model. Features use only the current and prior closed bars: lagged returns, rolling return/volatility, volume deviation, candle body/range, and EMA deviation. Validation uses expanding walk-forward folds: the scaler and both models are fitted only on each fold's training segment before predicting its following contiguous 24 validation bars. The context records out-of-fold return MAE, directional accuracy, and Brier score.
+
+The result is written to historical `context_snapshot.shadow_forecast` with `mode=shadow` and `participates_in_decision=false`. It is available only for historical diagnostics and offline calibration, and is invisible before LLM/Agent prompting, technical bias, trading-plan generation, entries, position sizing, risk overrides, and order execution. Insufficient or failed data is surfaced as a data-quality state and never emits a fallback trading signal.
+
+```env
+BTC_SHADOW_FORECAST_ENABLED=true
+BTC_SHADOW_FORECAST_LOOKBACK_DAYS=60
+BTC_SHADOW_FORECAST_MIN_TRAIN_BARS=336
+BTC_SHADOW_FORECAST_FOLDS=5
+BTC_SHADOW_FORECAST_VALIDATION_BARS=24
+```
+
+To roll back, set `BTC_SHADOW_FORECAST_ENABLED=false`. This stops attaching the shadow context only; the existing BTC technical-analysis, backtest, and execution paths are unchanged.
 
 ## BTC Opportunity-Triggered Analysis
 

@@ -85,6 +85,25 @@
 
 行情适配会剔除尚未闭合的小时线和日线。K 线来源、拉取时间、范围和哈希会写入 diagnostics；当前仍是后验拉取历史 K 线，不是交易所逐笔撮合回放。
 
+### 3.3 OKX 历史训练数据回填
+
+机器学习研究使用独立的分块回填入口，将 OKX `BTC-USDT-SWAP` 成交价和标记价 K 线保存到同一 SQLite 行情表：
+
+```bash
+python scripts/backfill_btc_history.py
+python scripts/backfill_btc_history.py --export-csv
+python scripts/backfill_btc_history.py --start 2021-01-01 --end 2024-12-31T23:00:00Z --chunk-days 30
+```
+
+默认口径：
+
+- 周期为 1 小时，范围从 `2020-02-01 00:00 UTC` 到最新已闭合小时；这是 OKX 永续成交价与标记价可稳定对齐的起点，不代表 BTC 现货最早历史。
+- 每 30 天为一个事务分块。SQLite 已完整覆盖的分块自动跳过，失败后可直接重跑；`--force` 才会强制覆盖。
+- 每个分块要求成交价与标记价时间戳完整一致，并在结束时检查理论 bar 数、实际 bar 数、缺口以及执行价/标记价空值。
+- `--export-csv [PATH]` 导出模型训练 CSV；省略 PATH 时输出到 `data/btc_okx_perpetual_1h_training.csv`。`data/` 已被 Git 忽略，训练数据不会进入仓库。
+
+OKX 公共接口不能可靠提供覆盖完整永续历史的资金费率。训练回填不会补造旧 funding，而是保存空数组并令 `funding_complete=false`。这些 OHLCV/标记价数据可以用于收益率、波动率和方向概率模型，但 `btc-plan-v5` 严格永续回测仍要求窗口内每根 bar 的标记价与资金费率完整，因此不会误用这批缺失 funding 的旧历史。
+
 ## 4. 核心回测算法
 
 ### 4.1 候选报告筛选

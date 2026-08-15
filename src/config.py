@@ -739,6 +739,11 @@ class Config:
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
     btc_hourly_analysis_interval_hours: int = 4
     btc_hourly_analysis_at_minute: int = 5
+    btc_shadow_forecast_enabled: bool = True
+    btc_shadow_forecast_lookback_days: int = 60
+    btc_shadow_forecast_min_train_bars: int = 336
+    btc_shadow_forecast_folds: int = 5
+    btc_shadow_forecast_validation_bars: int = 24
     btc_volatility_monitor_enabled: bool = False
     btc_volatility_monitor_use_websocket: bool = False
     btc_volatility_monitor_ws_stale_seconds: int = 30
@@ -1611,6 +1616,34 @@ class Config:
                 field_name='BTC_HOURLY_ANALYSIS_AT_MINUTE',
                 minimum=0,
                 maximum=59,
+            ),
+            btc_shadow_forecast_enabled=parse_env_bool(
+                os.getenv('BTC_SHADOW_FORECAST_ENABLED'),
+                default=True,
+            ),
+            btc_shadow_forecast_lookback_days=parse_env_int(
+                os.getenv('BTC_SHADOW_FORECAST_LOOKBACK_DAYS'),
+                60,
+                field_name='BTC_SHADOW_FORECAST_LOOKBACK_DAYS',
+                minimum=15,
+            ),
+            btc_shadow_forecast_min_train_bars=parse_env_int(
+                os.getenv('BTC_SHADOW_FORECAST_MIN_TRAIN_BARS'),
+                336,
+                field_name='BTC_SHADOW_FORECAST_MIN_TRAIN_BARS',
+                minimum=24,
+            ),
+            btc_shadow_forecast_folds=parse_env_int(
+                os.getenv('BTC_SHADOW_FORECAST_FOLDS'),
+                5,
+                field_name='BTC_SHADOW_FORECAST_FOLDS',
+                minimum=1,
+            ),
+            btc_shadow_forecast_validation_bars=parse_env_int(
+                os.getenv('BTC_SHADOW_FORECAST_VALIDATION_BARS'),
+                24,
+                field_name='BTC_SHADOW_FORECAST_VALIDATION_BARS',
+                minimum=1,
             ),
             btc_volatility_monitor_enabled=parse_env_bool(
                 os.getenv('BTC_VOLATILITY_MONITOR_ENABLED'),

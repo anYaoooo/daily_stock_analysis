@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import pandas as pd
+from sqlalchemy import text
 
 from src.services.crypto_market_data_service import CryptoMarketDataService
 from src.services.stock_service import StockService
@@ -116,8 +117,104 @@ def test_perpetual_cache_preserves_mark_and_funding_fields() -> None:
 
     assert float(bars.iloc[0]["mark_close"]) == 100.8
     assert list(bars.iloc[0]["funding_rates"]) == [0.0001]
+    assert bool(bars.iloc[0]["funding_complete"]) is True
     assert bars.attrs["instrument_type"] == "perpetual"
     assert fetcher.get_perpetual_kline_data.call_count == 1
+    DatabaseManager.reset_instance()
+
+
+def test_perpetual_history_backfill_is_resumable_and_exports_training_csv(tmp_path) -> None:
+    DatabaseManager.reset_instance()
+    db = DatabaseManager(db_url="sqlite:///:memory:")
+    fetcher = Mock()
+
+    def range_frame(_code, *, start_at, end_at, **_kwargs):
+        timestamps = []
+        cursor = start_at
+        while cursor <= end_at:
+            timestamps.append(cursor)
+            cursor += timedelta(hours=1)
+        base = list(range(len(timestamps)))
+        return _frame(
+            {
+                "date": [value.strftime("%Y-%m-%d %H:%M") for value in timestamps],
+                "open": [100.0 + value for value in base],
+                "high": [101.0 + value for value in base],
+                "low": [99.0 + value for value in base],
+                "close": [100.5 + value for value in base],
+                "volume": [10.0 + value for value in base],
+                "execution_open": [100.0 + value for value in base],
+                "execution_high": [101.0 + value for value in base],
+                "execution_low": [99.0 + value for value in base],
+                "execution_close": [100.5 + value for value in base],
+                "mark_open": [100.1 + value for value in base],
+                "mark_high": [100.9 + value for value in base],
+                "mark_low": [99.1 + value for value in base],
+                "mark_close": [100.4 + value for value in base],
+                "funding_rates": [() for _value in base],
+                "funding_complete": [False for _value in base],
+            },
+            source="okx_ccxt",
+            venue="okx",
+            instrument_type="perpetual",
+            price_type="trade_and_mark",
+            funding_complete=False,
+        )
+
+    fetcher.get_perpetual_kline_range.side_effect = range_frame
+    service = CryptoMarketDataService(
+        db_manager=db,
+        fetcher=fetcher,
+        now_provider=lambda: datetime(2020, 2, 4, 0, 30, tzinfo=timezone.utc),
+    )
+    start_at = datetime(2020, 2, 1, tzinfo=timezone.utc)
+    end_at = datetime(2020, 2, 2, 23, tzinfo=timezone.utc)
+
+    first = service.backfill_perpetual_history(
+        start_at=start_at,
+        end_at=end_at,
+        chunk_days=1,
+    )
+    second = service.backfill_perpetual_history(
+        start_at=start_at,
+        end_at=end_at,
+        chunk_days=1,
+    )
+    with db._engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE crypto_ohlcv_bars SET mark_close = NULL "
+                "WHERE open_time = '2020-02-01 00:00:00.000000'"
+            )
+        )
+    repaired = service.backfill_perpetual_history(
+        start_at=start_at,
+        end_at=end_at,
+        chunk_days=1,
+    )
+    exported = service.export_history_csv(
+        tmp_path / "btc_training.csv",
+        code="BTC",
+        start_at=start_at,
+        end_at=end_at,
+        period="hourly",
+    )
+
+    assert first["expected_bars"] == 48
+    assert first["actual_bars"] == 48
+    assert first["missing_bars"] == 0
+    assert first["fetched_chunks"] == 2
+    assert first["funding_complete_bars"] == 0
+    assert second["fetched_chunks"] == 0
+    assert second["skipped_chunks"] == 2
+    assert repaired["fetched_chunks"] == 1
+    assert repaired["skipped_chunks"] == 1
+    assert repaired["mark_missing_bars"] == 0
+    assert fetcher.get_perpetual_kline_range.call_count == 3
+    exported_frame = pd.read_csv(exported)
+    assert len(exported_frame) == 48
+    assert exported_frame["funding_complete"].eq(False).all()
+    assert exported_frame["mark_close"].notna().all()
     DatabaseManager.reset_instance()
 
 

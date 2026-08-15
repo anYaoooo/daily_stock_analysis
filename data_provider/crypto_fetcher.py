@@ -232,9 +232,44 @@ class CryptoFetcher(BaseFetcher):
     ) -> pd.DataFrame:
         """Fetch aligned perpetual trade/mark candles and historical funding events."""
 
+        end_at = datetime.now(timezone.utc)
+        start_at = end_at - timedelta(days=max(int(days), 1))
+        return self.get_perpetual_kline_range(
+            stock_code,
+            start_at=start_at,
+            end_at=end_at,
+            period=period,
+            venue=venue,
+            margin_mode=margin_mode,
+            include_funding=True,
+            require_funding=True,
+        )
+
+    def get_perpetual_kline_range(
+        self,
+        stock_code: str,
+        *,
+        start_at: datetime,
+        end_at: datetime,
+        period: str = "hourly",
+        venue: str = "okx",
+        margin_mode: str = "isolated",
+        include_funding: bool = False,
+        require_funding: bool = False,
+    ) -> pd.DataFrame:
+        """Fetch aligned perpetual candles for an explicit inclusive UTC range.
+
+        Historical training backfills may omit funding because OKX does not expose
+        a reliable complete funding series for the full swap history. Strict
+        perpetual backtests continue to require it through
+        :meth:`get_perpetual_kline_data`.
+        """
+
         if period not in _CCXT_TIMEFRAME_BY_PERIOD:
             supported = ", ".join(sorted(_CCXT_TIMEFRAME_BY_PERIOD))
             raise DataFetchError(f"CryptoFetcher unsupported period: {period}; supported: {supported}")
+        if require_funding and not include_funding:
+            raise ValueError("require_funding=True requires include_funding=True")
         instrument = resolve_crypto_instrument(
             stock_code,
             default_type="perpetual",
@@ -244,10 +279,12 @@ class CryptoFetcher(BaseFetcher):
         if instrument is None or instrument.instrument_type != "perpetual":
             raise DataFetchError(f"CryptoFetcher unsupported perpetual symbol: {stock_code}")
 
-        end_at = datetime.now(timezone.utc)
-        start_at = end_at - timedelta(days=max(int(days), 1))
-        start_ms = int(start_at.timestamp() * 1000)
-        end_ms = int(end_at.timestamp() * 1000)
+        normalized_start = _to_utc_datetime(start_at)
+        normalized_end = _to_utc_datetime(end_at)
+        if normalized_end < normalized_start:
+            raise ValueError("end_at must not be earlier than start_at")
+        start_ms = int(normalized_start.timestamp() * 1000)
+        end_ms = int(normalized_end.timestamp() * 1000)
         timeframe = _CCXT_TIMEFRAME_BY_PERIOD[period]
         exchange = self._create_public_exchange(instrument.venue, instrument_type="perpetual")
 
@@ -276,20 +313,37 @@ class CryptoFetcher(BaseFetcher):
                 f"{instrument.venue} returned incomplete perpetual trade/mark candles for {instrument.market_symbol}"
             )
 
-        trade_by_ts = {int(row[0]): row for row in trade_rows if row and safe_int(row[0]) is not None}
-        mark_by_ts = {int(row[0]): row for row in mark_rows if row and safe_int(row[0]) is not None}
+        trade_by_ts = {
+            int(row[0]): row
+            for row in trade_rows
+            if row and safe_int(row[0]) is not None and start_ms <= int(row[0]) <= end_ms
+        }
+        mark_by_ts = {
+            int(row[0]): row
+            for row in mark_rows
+            if row and safe_int(row[0]) is not None and start_ms <= int(row[0]) <= end_ms
+        }
+        if not trade_by_ts or not mark_by_ts:
+            raise DataFetchError(
+                f"{instrument.venue} returned no perpetual trade/mark candles in the requested range"
+            )
         if set(trade_by_ts) != set(mark_by_ts):
             raise DataFetchError(
                 f"{instrument.venue} perpetual trade/mark timestamps are incomplete or unsynchronized"
             )
 
-        funding_events = self._fetch_ccxt_funding_history(
-            exchange=exchange,
-            market_symbol=instrument.market_symbol,
-            start_ms=start_ms,
-            end_ms=end_ms,
+        funding_events: list[tuple[int, float]] = []
+        if include_funding:
+            funding_events = self._fetch_ccxt_funding_history(
+                exchange=exchange,
+                market_symbol=instrument.market_symbol,
+                start_ms=start_ms,
+                end_ms=end_ms,
+            )
+        funding_complete = bool(include_funding) and (
+            bool(funding_events) or end_ms - start_ms < 8 * 60 * 60 * 1000
         )
-        if end_ms - start_ms >= 8 * 60 * 60 * 1000 and not funding_events:
+        if require_funding and not funding_complete:
             raise DataFetchError(
                 f"{instrument.venue} returned no historical funding data for {instrument.market_symbol}"
             )
@@ -310,7 +364,7 @@ class CryptoFetcher(BaseFetcher):
             funding_events=funding_events,
             period=period,
         )
-        result["funding_complete"] = True
+        result["funding_complete"] = funding_complete
         result = self._clean_data(result)
         result = self._calculate_indicators(result)
         result.attrs.update(
@@ -322,8 +376,10 @@ class CryptoFetcher(BaseFetcher):
                 "market_symbol": instrument.market_symbol,
                 "price_type": "trade_and_mark",
                 "funding_event_count": len(funding_events),
-                "funding_complete": True,
-                "fetched_at": end_at.isoformat(),
+                "funding_complete": funding_complete,
+                "range_start": normalized_start.isoformat(),
+                "range_end": normalized_end.isoformat(),
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
             }
         )
         return result
@@ -730,6 +786,14 @@ def _date_to_millis(date_text: str, *, end_of_day: bool = False) -> int:
     if end_of_day:
         dt = dt.replace(hour=23, minute=59, second=59, microsecond=999000)
     return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def _to_utc_datetime(value: datetime) -> datetime:
+    if not isinstance(value, datetime):
+        raise TypeError("range boundaries must be datetime values")
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _millis_to_iso(value: Any) -> Optional[str]:
