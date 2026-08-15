@@ -487,7 +487,7 @@ class StockAnalysisPipeline:
                                 getattr(self.config, "btc_shadow_forecast_enabled", True)
                             )
                             shadow_lookback_days = int(
-                                getattr(self.config, "btc_shadow_forecast_lookback_days", 60)
+                                getattr(self.config, "btc_shadow_forecast_lookback_days", 2500)
                             )
                             hourly_df = CryptoMarketDataService(db_manager=self.db).get_bars(
                                 code,
@@ -515,9 +515,34 @@ class StockAnalysisPipeline:
                                     min_train_bars=int(
                                         getattr(self.config, "btc_shadow_forecast_min_train_bars", 336)
                                     ),
-                                    folds=int(getattr(self.config, "btc_shadow_forecast_folds", 5)),
+                                    folds=int(getattr(self.config, "btc_shadow_forecast_folds", 12)),
                                     validation_bars=int(
-                                        getattr(self.config, "btc_shadow_forecast_validation_bars", 24)
+                                        getattr(self.config, "btc_shadow_forecast_validation_bars", 168)
+                                    ),
+                                    curve_horizon_hours=int(
+                                        getattr(self.config, "btc_shadow_forecast_curve_horizon_hours", 24)
+                                    ),
+                                    primary_horizon_hours=int(
+                                        getattr(
+                                            self.config,
+                                            "btc_shadow_forecast_primary_horizon_hours",
+                                            4,
+                                        )
+                                    ),
+                                    confidence_threshold=float(
+                                        getattr(
+                                            self.config,
+                                            "btc_shadow_forecast_confidence_threshold",
+                                            0.58,
+                                        )
+                                    ),
+                                    round_trip_cost_bps=2.0 * (
+                                        float(
+                                            getattr(self.config, "crypto_backtest_fee_rate_bps", 5.0)
+                                        )
+                                        + float(
+                                            getattr(self.config, "crypto_backtest_slippage_bps", 2.0)
+                                        )
                                     ),
                                 ).build(hourly_df)
                             except Exception as exc:

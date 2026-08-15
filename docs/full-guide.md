@@ -1686,16 +1686,23 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 ## BTC 小时线影子预测
 
-BTC 分析默认读取近 60 天已闭合的 1 小时 K 线，构建下一根收益率回归与上涨方向概率模型。特征仅使用当根及此前已闭合 K 线的滞后收益、滚动收益/波动、成交量偏离、实体/振幅和 EMA 偏离。验证使用 expanding walk-forward：每一折的标准化器和模型只在该折训练段拟合，再对后续连续 24 根验证 K 线生成严格折外预测；上下文会记录收益 MAE、方向命中率和 Brier 分数。
+BTC 分析默认读取近 2500 天已闭合的 1 小时 K 线（覆盖当前本地全量缓存），构建下一根收益率回归、上涨方向概率和未来 24 小时分析曲线。曲线对每个时距直接拟合独立的 Ridge 收益率模型与 Logistic 上涨概率模型，以最新闭合价为基准输出 24 个预测价格点，不递归使用前一预测点。特征仅使用当根及此前已闭合 K 线的滞后收益、滚动收益/波动、成交量偏离、实体/振幅和 EMA 偏离。验证使用跨历史均匀分布的 expanding walk-forward：每一折的标准化器和模型只在该折训练段拟合，再对后续连续验证窗口生成严格折外预测；上下文会记录收益 MAE、方向命中率、Brier 分数、恒定看多/前一根方向基线、高置信度覆盖率，以及 1h/4h/12h/24h 的分时距表现。高置信度多空模拟同时按现有 `CRYPTO_BACKTEST_FEE_RATE_BPS` 与 `CRYPTO_BACKTEST_SLIPPAGE_BPS` 扣除双边往返成本，输出净平均收益和净胜率。
+
+主影子预测默认使用 4 小时成本感知三分类目标：未来收益高于双边往返成本记为 `up`，低于负成本记为 `down`，中间区间记为 `no_signal`。每个外层折会按预测时距净化训练末端，随后只用训练数据的内部尾窗比较标准化 Logistic 与直方图梯度提升的多分类 Brier，并选择概率向历史类别率收缩的校准权重。输出的 `primary_forecast` 包含三类概率、条件方向概率、入选模型和校准权重；方向概率未达到阈值或中性概率过高时明确返回 `no_signal`。
+
+`primary_evaluation.eligible_for_promotion` 只有在至少 1000 个折外样本、200 个影子信号、成本后均值为正、至少三分之二历史折为正、最近三折均为正且多分类 Brier 优于历史类别率基线时才会为 `true`。该字段只是离线升级门槛，不会自动改变影子模式或交易权限。
 
 输出写在历史 `context_snapshot.shadow_forecast`，包含 `mode=shadow` 与 `participates_in_decision=false`。它只供历史诊断和离线校准读取，并且在 LLM/Agent 提示、技术偏向、交易计划、入场点、仓位、风控覆盖和自动下单之前均不可见；数据不足或预测异常时仅标记数据质量，不产生降级交易信号。
 
 ```env
 BTC_SHADOW_FORECAST_ENABLED=true
-BTC_SHADOW_FORECAST_LOOKBACK_DAYS=60
+BTC_SHADOW_FORECAST_LOOKBACK_DAYS=2500
 BTC_SHADOW_FORECAST_MIN_TRAIN_BARS=336
-BTC_SHADOW_FORECAST_FOLDS=5
-BTC_SHADOW_FORECAST_VALIDATION_BARS=24
+BTC_SHADOW_FORECAST_FOLDS=12
+BTC_SHADOW_FORECAST_VALIDATION_BARS=168
+BTC_SHADOW_FORECAST_CURVE_HORIZON_HOURS=24
+BTC_SHADOW_FORECAST_PRIMARY_HORIZON_HOURS=4
+BTC_SHADOW_FORECAST_CONFIDENCE_THRESHOLD=0.58
 ```
 
 回滚方式：设置 `BTC_SHADOW_FORECAST_ENABLED=false`。该开关只停止附加影子上下文，已有 BTC 技术分析、回测和交易执行路径不受影响。

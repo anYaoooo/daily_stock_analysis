@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.config import Config
 from src.services.btc_shadow_forecast_service import BtcShadowForecastService
@@ -43,6 +44,7 @@ def test_shadow_forecast_uses_expanding_walk_forward_and_train_only_scaling() ->
         min_train_bars=336,
         folds=4,
         validation_bars=24,
+        confidence_threshold=0.5,
     ).build(_hourly_bars())
 
     assert result["mode"] == "shadow"
@@ -51,13 +53,50 @@ def test_shadow_forecast_uses_expanding_walk_forward_and_train_only_scaling() ->
     assert result["target"] == "next_closed_1h_return"
     assert result["forecast"]["predicted_direction"] in {"up", "down"}
     assert 0.0 <= result["forecast"]["up_probability"] <= 1.0
+    primary = result["primary_forecast"]
+    assert primary["horizon_hours"] == 4
+    assert primary["target"] == "cost_aware_up_down_no_signal"
+    assert primary["predicted_action"] in {"up", "down", "no_signal"}
+    assert primary["selected_model"] in {"logistic", "hist_gradient_boosting"}
+    assert primary["participates_in_decision"] is False
+    assert primary["up_probability"] + primary["down_probability"] + primary[
+        "no_signal_probability"
+    ] == pytest.approx(1.0, abs=0.0002)
+    curve = result["curve"]
+    assert curve["model"] == "direct_multi_horizon_ridge_logistic"
+    assert curve["horizon_hours"] == 24
+    assert len(curve["points"]) == 24
+    assert [point["offset_hours"] for point in curve["points"]] == list(range(1, 25))
+    assert all(point["training_bars"] >= 336 for point in curve["points"])
     walk_forward = result["walk_forward"]
     assert walk_forward["scheme"] == "expanding_walk_forward"
+    assert walk_forward["origin_selection"] == "evenly_spaced_historical"
     assert walk_forward["fold_count"] == 4
     assert walk_forward["out_of_fold_samples"] == 96
     for fold in walk_forward["folds"]:
         assert fold["scaler_fit_scope"] == "train_only"
         assert pd.Timestamp(fold["train_end_at"]) < pd.Timestamp(fold["validation_start_at"])
+    assert set(result["horizon_evaluation"]) == {"1h", "4h", "12h", "24h"}
+    primary_evaluation = result["primary_evaluation"]
+    assert primary_evaluation["scheme"] == (
+        "purged_expanding_walk_forward_with_inner_model_selection"
+    )
+    assert primary_evaluation["eligible_for_promotion"] is False
+    assert primary_evaluation["out_of_fold_samples"] == 96
+    assert all(
+        fold["purged_horizon_bars"] == 4
+        and fold["inner_purged_horizon_bars"] == 4
+        and fold["model_selection_scope"] == "train_inner_tail_only"
+        and pd.Timestamp(fold["validation_start_at"])
+        - pd.Timestamp(fold["train_end_at"])
+        > pd.Timedelta(hours=4)
+        for fold in primary_evaluation["folds"]
+    )
+    assert "baselines" in walk_forward
+    assert "high_confidence" in walk_forward["confidence_slices"]
+    high_confidence = walk_forward["confidence_slices"]["high_confidence"]
+    assert high_confidence["round_trip_cost_bps"] == 14.0
+    assert "net_mean_return_pct_after_cost" in high_confidence
 
 
 def test_shadow_forecast_excludes_current_open_hour() -> None:
@@ -83,6 +122,7 @@ def test_shadow_forecast_reports_insufficient_data_without_fallback_signal() -> 
 
     assert result["data_quality"] == "insufficient"
     assert result["forecast"] is None
+    assert result["primary_forecast"] is None
     assert result["walk_forward"] is None
 
 
@@ -93,6 +133,9 @@ def test_shadow_forecast_config_can_be_disabled_and_tuned() -> None:
         "BTC_SHADOW_FORECAST_MIN_TRAIN_BARS": "360",
         "BTC_SHADOW_FORECAST_FOLDS": "3",
         "BTC_SHADOW_FORECAST_VALIDATION_BARS": "12",
+        "BTC_SHADOW_FORECAST_CURVE_HORIZON_HOURS": "48",
+        "BTC_SHADOW_FORECAST_PRIMARY_HORIZON_HOURS": "6",
+        "BTC_SHADOW_FORECAST_CONFIDENCE_THRESHOLD": "0.62",
     }
     with patch.dict(os.environ, env, clear=True):
         config = Config._load_from_env()
@@ -102,3 +145,6 @@ def test_shadow_forecast_config_can_be_disabled_and_tuned() -> None:
     assert config.btc_shadow_forecast_min_train_bars == 360
     assert config.btc_shadow_forecast_folds == 3
     assert config.btc_shadow_forecast_validation_bars == 12
+    assert config.btc_shadow_forecast_curve_horizon_hours == 48
+    assert config.btc_shadow_forecast_primary_horizon_hours == 6
+    assert config.btc_shadow_forecast_confidence_threshold == 0.62

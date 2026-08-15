@@ -1525,16 +1525,23 @@ Technical indicator rules use daily-close edge triggers only. Partial-bar handli
 
 ## BTC Hourly Shadow Forecast
 
-BTC analysis reads the latest 60 days of closed one-hour bars by default and builds a next-bar return regressor plus an up-direction probability model. Features use only the current and prior closed bars: lagged returns, rolling return/volatility, volume deviation, candle body/range, and EMA deviation. Validation uses expanding walk-forward folds: the scaler and both models are fitted only on each fold's training segment before predicting its following contiguous 24 validation bars. The context records out-of-fold return MAE, directional accuracy, and Brier score.
+BTC analysis reads the latest 2,500 days of closed one-hour bars by default, covering the current complete local cache, and builds a next-bar return regressor, an up-direction probability model, and a 24-hour analysis curve. Each horizon directly fits its own Ridge return model and Logistic up-probability model, using the latest closed price as the base and emitting 24 predicted price points without feeding prior predictions back into later inputs. Features use only the current and prior closed bars: lagged returns, rolling return/volatility, volume deviation, candle body/range, and EMA deviation. Validation uses expanding walk-forward folds distributed evenly across history: the scaler and both models are fitted only on each fold's training segment before predicting its following validation window. The context records out-of-fold return MAE, directional accuracy, Brier score, always-up/previous-return baselines, high-confidence coverage, and separate 1h/4h/12h/24h results. High-confidence long/short simulations deduct the existing `CRYPTO_BACKTEST_FEE_RATE_BPS` and `CRYPTO_BACKTEST_SLIPPAGE_BPS` on both entry and exit, then report net mean return and net win rate.
+
+The primary shadow forecast defaults to a cost-aware 4-hour three-class target. A future return above round-trip cost is labeled `up`, one below negative cost is labeled `down`, and the middle band is `no_signal`. Each outer fold purges the end of its training window by the forecast horizon, then uses only an inner training tail to compare standardized Logistic and histogram gradient boosting by multiclass Brier score and to select probability shrinkage toward historical class rates. `primary_forecast` reports all three probabilities, conditional directional confidence, the selected model, and its calibration weight. It explicitly returns `no_signal` when directional confidence is below the configured threshold or neutral probability is too high.
+
+`primary_evaluation.eligible_for_promotion` becomes `true` only with at least 1,000 out-of-fold samples, 200 shadow signals, positive mean return after costs, at least two-thirds positive historical folds, all three recent folds positive, and multiclass Brier better than the historical-class-rate baseline. This is an offline promotion gate only and never changes shadow mode or trading permissions automatically.
 
 The result is written to historical `context_snapshot.shadow_forecast` with `mode=shadow` and `participates_in_decision=false`. It is available only for historical diagnostics and offline calibration, and is invisible before LLM/Agent prompting, technical bias, trading-plan generation, entries, position sizing, risk overrides, and order execution. Insufficient or failed data is surfaced as a data-quality state and never emits a fallback trading signal.
 
 ```env
 BTC_SHADOW_FORECAST_ENABLED=true
-BTC_SHADOW_FORECAST_LOOKBACK_DAYS=60
+BTC_SHADOW_FORECAST_LOOKBACK_DAYS=2500
 BTC_SHADOW_FORECAST_MIN_TRAIN_BARS=336
-BTC_SHADOW_FORECAST_FOLDS=5
-BTC_SHADOW_FORECAST_VALIDATION_BARS=24
+BTC_SHADOW_FORECAST_FOLDS=12
+BTC_SHADOW_FORECAST_VALIDATION_BARS=168
+BTC_SHADOW_FORECAST_CURVE_HORIZON_HOURS=24
+BTC_SHADOW_FORECAST_PRIMARY_HORIZON_HOURS=4
+BTC_SHADOW_FORECAST_CONFIDENCE_THRESHOLD=0.58
 ```
 
 To roll back, set `BTC_SHADOW_FORECAST_ENABLED=false`. This stops attaching the shadow context only; the existing BTC technical-analysis, backtest, and execution paths are unchanged.

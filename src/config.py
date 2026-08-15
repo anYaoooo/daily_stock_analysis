@@ -740,10 +740,13 @@ class Config:
     btc_hourly_analysis_interval_hours: int = 4
     btc_hourly_analysis_at_minute: int = 5
     btc_shadow_forecast_enabled: bool = True
-    btc_shadow_forecast_lookback_days: int = 60
+    btc_shadow_forecast_lookback_days: int = 2500
     btc_shadow_forecast_min_train_bars: int = 336
-    btc_shadow_forecast_folds: int = 5
-    btc_shadow_forecast_validation_bars: int = 24
+    btc_shadow_forecast_folds: int = 12
+    btc_shadow_forecast_validation_bars: int = 168
+    btc_shadow_forecast_curve_horizon_hours: int = 24
+    btc_shadow_forecast_primary_horizon_hours: int = 4
+    btc_shadow_forecast_confidence_threshold: float = 0.58
     btc_volatility_monitor_enabled: bool = False
     btc_volatility_monitor_use_websocket: bool = False
     btc_volatility_monitor_ws_stale_seconds: int = 30
@@ -1623,7 +1626,7 @@ class Config:
             ),
             btc_shadow_forecast_lookback_days=parse_env_int(
                 os.getenv('BTC_SHADOW_FORECAST_LOOKBACK_DAYS'),
-                60,
+                2500,
                 field_name='BTC_SHADOW_FORECAST_LOOKBACK_DAYS',
                 minimum=15,
             ),
@@ -1635,15 +1638,36 @@ class Config:
             ),
             btc_shadow_forecast_folds=parse_env_int(
                 os.getenv('BTC_SHADOW_FORECAST_FOLDS'),
-                5,
+                12,
                 field_name='BTC_SHADOW_FORECAST_FOLDS',
                 minimum=1,
             ),
             btc_shadow_forecast_validation_bars=parse_env_int(
                 os.getenv('BTC_SHADOW_FORECAST_VALIDATION_BARS'),
-                24,
+                168,
                 field_name='BTC_SHADOW_FORECAST_VALIDATION_BARS',
                 minimum=1,
+            ),
+            btc_shadow_forecast_curve_horizon_hours=parse_env_int(
+                os.getenv('BTC_SHADOW_FORECAST_CURVE_HORIZON_HOURS'),
+                24,
+                field_name='BTC_SHADOW_FORECAST_CURVE_HORIZON_HOURS',
+                minimum=1,
+                maximum=168,
+            ),
+            btc_shadow_forecast_primary_horizon_hours=parse_env_int(
+                os.getenv('BTC_SHADOW_FORECAST_PRIMARY_HORIZON_HOURS'),
+                4,
+                field_name='BTC_SHADOW_FORECAST_PRIMARY_HORIZON_HOURS',
+                minimum=1,
+                maximum=24,
+            ),
+            btc_shadow_forecast_confidence_threshold=parse_env_float(
+                os.getenv('BTC_SHADOW_FORECAST_CONFIDENCE_THRESHOLD'),
+                0.58,
+                field_name='BTC_SHADOW_FORECAST_CONFIDENCE_THRESHOLD',
+                minimum=0.5,
+                maximum=0.95,
             ),
             btc_volatility_monitor_enabled=parse_env_bool(
                 os.getenv('BTC_VOLATILITY_MONITOR_ENABLED'),

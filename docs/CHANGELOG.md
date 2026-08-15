@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- [新功能] BTC 小时线新增收益率与方向概率影子预测：基于闭合 K 线执行折内缩放的 expanding walk-forward，记录严格折外收益 MAE、方向命中率和 Brier 分数；预测仅写入分析上下文和历史诊断，不参与交易方向、点位、仓位或自动执行。
+- [新功能] BTC 小时线新增收益率、方向概率与 24 小时分析曲线影子模型：基于闭合 K 线执行折内缩放的多起点 expanding walk-forward，并按预测时距直接拟合 Ridge/Logistic 模型，输出朴素基线、置信度分桶及 1h/4h/12h/24h 折外表现；结果仅写入历史诊断，不参与交易方向、点位、仓位或自动执行。
+- [改进] BTC 影子预测新增默认 4 小时成本感知三分类主模型：在 purged expanding walk-forward 的训练内层比较 Logistic 与直方图梯度提升并校准概率，低置信度输出无信号；只有跨折稳定性、成本后收益、样本量和 Brier 全部达标时才标记具备升级资格，仍不自动参与交易决策。
 - [新功能] 新增 OKX BTC-USDT 永续合约历史 K 线分块回填 CLI，默认从 2020-02-01 UTC 拉取 1 小时成交价与标记价至最新闭合 bar，支持断点续跑、连续性校验和训练 CSV 导出；旧历史资金费率明确标记为不完整，不进入严格永续回测。
 - [新功能] BTC 日线与小时线技术上下文新增基于闭合收益率的 EWMA 下一根波动预测；报告生成后由确定性风险覆盖层为 elevated/extreme 波动计划设置 50%/25% 仓位乘数上限，不改变交易方向、止损或真实交易开关。
 - [新功能] BTC 衍生品上下文新增 Binance Futures 5 分钟主动买卖量、CVD、价格/CVD 背离影子因子，并固化到 `btc-indicators-v2` 回测标签与分组汇总；该因子当前只用于执行确认和历史验证，不单独触发多空反转。
