@@ -10,6 +10,7 @@
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 - [src/services/task_service.py](file://src/services/task_service.py)
 - [src/services/crypto_backtest_service.py](file://src/services/crypto_backtest_service.py)
+- [src/core/crypto_backtest_engine.py](file://src/core/crypto_backtest_engine.py)
 - [strategies/bull_trend.yaml](file://strategies/bull_trend.yaml)
 - [strategies/box_oscillation.yaml](file://strategies/box_oscillation.yaml)
 - [strategies/bottom_volume.yaml](file://strategies/bottom_volume.yaml)
@@ -26,11 +27,11 @@
 
 ## 更新摘要
 **所做更改**
-- 新增异步回测API章节，详细说明 `/crypto/run-selected-async` 和 `/crypto/tasks/{task_id}` 端点
-- 更新任务队列架构，增加后台任务处理机制
-- 增强参数验证功能，添加 `_validate_selected_plan_types` 函数
-- 更新性能考量部分，说明批量回测的异步处理方案
-- 新增异步任务状态跟踪和进度监控指南
+- 新增计划质量指标、交易性状态、仓位乘数上限、逆势控制参数等字段说明
+- 增强MFE/MAE测量和原始方向准确率跟踪功能
+- 更新CryptoBacktestResultItem和CryptoBacktestHistoryPlan模型结构
+- 补充异步任务处理中的新字段支持
+- 完善性能指标计算方法的文档说明
 
 ## 目录
 1. [简介](#简介)
@@ -52,7 +53,7 @@
 - 结果数据结构与数据分析指南
 - 常见配置示例与最佳实践
 
-**更新** 新增了针对大批量回测的异步处理机制，通过后台任务队列解决HTTP请求超时问题。
+**更新** 新增了针对大批量回测的异步处理机制，通过后台任务队列解决HTTP请求超时问题，并增强了计划质量评估和交易性控制功能。
 
 ## 项目结构
 回测相关代码主要分布在以下模块：
@@ -157,7 +158,7 @@ Y9 -.-> BE
   - 持久化任务元数据、执行日志、结果快照
   - 提供查询与导出能力
 
-**更新** 新增了后台任务队列机制，专门处理大批量回测任务，通过异步方式避免HTTP请求超时。
+**更新** 新增了后台任务队列机制，专门处理大批量回测任务，通过异步方式避免HTTP请求超时，并增强了计划质量评估和交易性控制功能。
 
 **章节来源**
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
@@ -257,7 +258,7 @@ CryptoBacktestTaskAccepted <.. CryptoBacktestTaskStatus : "状态查询"
 **图表来源** 
 - [api/v1/schemas/backtest.py](file://api/v1/schemas/backtest.py)
 
-**更新** 新增了异步任务相关的请求和响应模型，支持任务ID管理和状态跟踪。
+**更新** 新增了异步任务相关的请求和响应模型，支持任务ID管理和状态跟踪，并增强了计划质量评估字段。
 
 **章节来源**
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
@@ -304,7 +305,7 @@ ReturnErr --> End
 - [api/v1/endpoints/backtest.py:188-266](file://api/v1/endpoints/backtest.py#L188-L266)
 - [src/services/task_queue.py:464-505](file://src/services/task_queue.py#L464-L505)
 
-**更新** 这是本次更新的核心功能，解决了大批量回测的性能问题。
+**更新** 这是本次更新的核心功能，解决了大批量回测的性能问题，并增强了计划质量评估和交易性控制功能。
 
 **章节来源**
 - [api/v1/endpoints/backtest.py:172-266](file://api/v1/endpoints/backtest.py#L172-L266)
@@ -350,7 +351,7 @@ MarkFail --> End
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
 
-**更新** 增强了异步任务处理能力，支持后台执行和状态跟踪。
+**更新** 增强了异步任务处理能力，支持后台执行和状态跟踪，并增加了计划质量评估和交易性控制功能。
 
 **章节来源**
 - [src/services/backtest_service.py](file://src/services/backtest_service.py)
@@ -382,7 +383,7 @@ Failed --> [*]
 - [src/services/task_service.py](file://src/services/task_service.py)
 - [src/services/task_queue.py](file://src/services/task_queue.py)
 
-**更新** 新增了后台任务执行机制，支持长时间运行的回测任务。
+**更新** 新增了后台任务执行机制，支持长时间运行的回测任务，并增强了计划质量评估功能。
 
 **章节来源**
 - [src/services/task_service.py](file://src/services/task_service.py)
@@ -397,6 +398,9 @@ Failed --> [*]
   - 收益类：累计收益、年化收益、月度收益分布
   - 风险类：最大回撤、波动率、VaR
   - 交易质量：胜率、盈亏比、滑点与手续费影响
+  - **新增** 计划质量评分：方向准确性、位置合理性、风险收益比、执行效率
+  - **新增** MFE/MAE测量：最大有利移动和最大不利移动百分比
+  - **新增** 原始方向准确率：基于MFE/MAE的方向判断准确率
 - 结果输出
   - 标准化JSON结构，包含摘要、明细与图表数据
 
@@ -409,7 +413,9 @@ Loop --> Signal["生成交易信号"]
 Signal --> Order["下单与撮合"]
 Order --> Update["更新持仓与现金"]
 Update --> Metrics["计算阶段指标"]
-Metrics --> Next{"是否继续?"}
+Metrics --> Quality["计算计划质量评分"]
+Quality --> MFE_MAE["计算MFE/MAE"]
+MFE_MAE --> Next{"是否继续?"}
 Next --> |是| Loop
 Next --> |否| Output["输出结果与指标"]
 Output --> EEnd(["引擎结束"])
@@ -418,6 +424,8 @@ Output --> EEnd(["引擎结束"])
 **图表来源** 
 - [src/core/backtest_engine.py](file://src/core/backtest_engine.py)
 
+**更新** 新增了计划质量评估、MFE/MAE测量和原始方向准确率计算功能。
+
 **章节来源**
 - [src/core/backtest_engine.py](file://src/core/backtest_engine.py)
 
@@ -425,7 +433,11 @@ Output --> EEnd(["引擎结束"])
 - 任务元数据：任务ID、策略ID、标的、时间范围、初始资金、状态、进度
 - 执行日志：阶段日志、错误堆栈、重试计数
 - 结果快照：摘要、净值曲线、成交明细、指标字典
+- **新增** 计划质量数据：四维评分、质量状态、缺失字段
+- **新增** 交易性控制：交易性状态、原因、仓位乘数上限、逆势控制参数
 - 查询接口：按任务ID、策略ID、时间范围筛选
+
+**更新** 新增了计划质量和交易性控制相关的数据存储支持。
 
 **章节来源**
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
@@ -489,6 +501,33 @@ STRATEGY ||--o{ BACKTEST_TASK : "被引用"
 - [strategies/wave_theory.yaml](file://strategies/wave_theory.yaml)
 - [strategies/box_oscillation.yaml](file://strategies/box_oscillation.yaml)
 
+### 计划质量评估与交易性控制（新增功能）
+- 计划质量评分体系
+  - 方向准确性评分：基于价格行为、EMA结构、VWAP位置的评分
+  - 位置合理性评分：基于入场条件、设置类型、条件类型的评分
+  - 风险收益比评分：基于风险距离、奖励距离、成本缓冲的评分
+  - 执行效率评分：基于合约质量、质量检查、信号触发、订单执行的评分
+- 交易性状态控制
+  - 正常交易：tradeability_status为"normal"
+  - 逆势限制：tradeability_status为"countertrend_limited"，仓位乘数上限为0.5
+  - 降级交易：tradeability_status为"degraded_missing_context"，当缺失关键数据时
+  - 阻止交易：tradeability_status为"blocked"，当存在严重问题时
+- 逆势控制参数
+  - position_multiplier_cap：仓位乘数上限，逆势交易限制为0.5
+  - max_validity_bars：最大有效K线数，逆势交易限制为6根
+  - alignment：对齐状态，识别逆势交易机会
+- MFE/MAE测量
+  - mfe_pct：最大有利移动百分比，衡量理想情况下的收益
+  - mae_pct：最大不利移动百分比，衡量最坏情况下的损失
+  - direction_correct_raw：基于MFE/MAE的原始方向准确率
+
+**更新** 这是本次更新的核心功能，提供了更全面的计划质量评估和风险控制机制。
+
+**章节来源**
+- [api/v1/schemas/backtest.py:108-176](file://api/v1/schemas/backtest.py#L108-L176)
+- [src/core/crypto_backtest_engine.py:800-872](file://src/core/crypto_backtest_engine.py#L800-L872)
+- [src/analyzer.py:2023-2079](file://src/analyzer.py#L2023-L2079)
+
 ## 依赖关系分析
 - 耦合度
   - API层仅依赖服务层，不直接访问引擎与存储，保持高内聚低耦合
@@ -518,7 +557,7 @@ Q --> TS
 - [src/core/backtest_engine.py](file://src/core/backtest_engine.py)
 - [src/repositories/backtest_repo.py](file://src/repositories/backtest_repo.py)
 
-**更新** 新增了任务队列作为独立组件，支持异步任务处理。
+**更新** 新增了任务队列作为独立组件，支持异步任务处理，并增强了计划质量评估和交易性控制功能。
 
 **章节来源**
 - [api/v1/endpoints/backtest.py](file://api/v1/endpoints/backtest.py)
@@ -546,8 +585,12 @@ Q --> TS
   - 异步API避免HTTP请求超时问题
   - 后台队列支持任务优先级和限流
   - 进度跟踪和状态查询提升用户体验
+- **新增** 计划质量评估优化
+  - 增量计算计划质量评分，避免重复计算
+  - 缓存指标标签和质量评分结果
+  - 支持部分数据缺失时的降级评估
 
-**更新** 新增了异步处理和批量优化的性能考虑，特别针对大批量回测场景。
+**更新** 新增了异步处理和批量优化的性能考虑，特别针对大批量回测场景，并增强了计划质量评估的性能优化。
 
 ## 故障排查指南
 - 常见问题
@@ -556,13 +599,17 @@ Q --> TS
   - 执行失败：查看任务日志与错误堆栈，确认数据可用性与策略参数合理性
   - 结果不完整：确认引擎是否中途异常退出，必要时启用断点续跑
   - 异步任务无响应：检查task_id是否正确，确认任务是否存在于队列中
+  - **新增** 计划质量评分异常：检查指标数据完整性，确认质量评估配置
+  - **新增** 交易性状态异常：检查数据质量，确认逆势控制参数设置
 - 定位手段
   - 通过任务ID查询状态与进度
   - 拉取执行日志与中间结果快照
   - 复现实验时使用最小数据集与简化策略
   - 使用SSE事件流实时监控任务状态
+  - **新增** 检查计划质量评分的四维分数，定位质量问题所在维度
+  - **新增** 分析交易性状态变化原因，确认数据缺失或控制参数问题
 
-**更新** 新增了异步任务相关的故障排查指南。
+**更新** 新增了异步任务相关的故障排查指南，并增加了计划质量评估和交易性控制的故障排查方法。
 
 **章节来源**
 - [tests/test_backtest_service.py](file://tests/test_backtest_service.py)
@@ -570,7 +617,7 @@ Q --> TS
 - [tests/test_crypto_backtest_task_api.py](file://tests/test_crypto_backtest_task_api.py)
 
 ## 结论
-本回测系统API以分层架构与异步任务为核心，提供稳定可靠的回测能力。通过清晰的策略定义、完善的指标计算与结果输出，以及健壮的错误恢复与进度跟踪机制，能够满足多策略、多标的的回测需求。**新增的异步回测机制**特别适用于大批量数据处理场景，通过后台任务队列避免了HTTP请求超时问题，显著提升了系统的性能和用户体验。建议在生产环境中结合队列监控、日志采集与结果归档，确保系统的高可用与可观测性。
+本回测系统API以分层架构与异步任务为核心，提供稳定可靠的回测能力。通过清晰的策略定义、完善的指标计算与结果输出，以及健壮的错误恢复与进度跟踪机制，能够满足多策略、多标的的回测需求。**新增的异步回测机制**特别适用于大批量数据处理场景，通过后台任务队列避免了HTTP请求超时问题，显著提升了系统的性能和用户体验。**新增的计划质量评估和交易性控制功能**进一步增强了回测结果的可靠性和实用性，提供了更全面的策略分析和风险管理能力。建议在生产环境中结合队列监控、日志采集与结果归档，确保系统的高可用与可观测性。
 
 ## 附录
 - 回测任务提交示例
@@ -580,9 +627,14 @@ Q --> TS
   - 关注净值曲线、最大回撤、夏普比率、胜率与盈亏比
   - 结合成交明细分析滑点与手续费影响
   - 对不同策略进行横向对比与稳健性检验
+  - **新增** 分析计划质量评分，评估策略在不同维度的表现
+  - **新增** 检查交易性状态，理解策略的可交易性和风险控制
+  - **新增** 利用MFE/MAE分析策略的理想收益和潜在风险
 - 异步任务最佳实践
   - 合理设置轮询间隔，避免过度请求
   - 实现任务取消和超时处理机制
   - 提供友好的用户界面展示任务进度
+  - **新增** 监控计划质量评分的变化趋势，及时发现策略退化
+  - **新增** 分析交易性状态的分布，优化策略的风险控制参数
 
-**更新** 新增了异步模式的示例和最佳实践指导。
+**更新** 新增了异步模式的示例和最佳实践指导，并增加了计划质量评估和交易性控制的使用指南。

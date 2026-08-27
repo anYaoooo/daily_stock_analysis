@@ -14,16 +14,16 @@
 - [tests/test_btc_shadow_forecast_service.py](file://tests/test_btc_shadow_forecast_service.py)
 - [tests/test_btc_volatility_monitor.py](file://tests/test_btc_volatility_monitor.py)
 - [src/config.py](file://src/config.py)
+- [src/analyzer.py](file://src/analyzer.py)
+- [src/core/crypto_backtest_engine.py](file://src/core/crypto_backtest_engine.py)
 </cite>
 
 ## 更新摘要
 **变更内容**
-- 完全重构为多模型比较系统，支持Logistic Regression与HistGradientBoostingClassifier的自动选择
-- 新增24小时分析曲线预测功能，支持多时间框架（4小时主预测+24小时曲线预测）
-- 实现成本感知三分类目标（up/down/no_signal），考虑交易成本的影响
-- 引入内部分模型选择机制，在walk-forward验证中动态选择最优模型
-- 新增_FoldPrediction和_TradeFoldPrediction数据类，支持历史概率跟踪和多分类评估指标
-- 增强配置管理，支持更多可调节参数
+- 新增交易可行性防护系统，实现复杂风险控制、冲突指标自动阻断/降级和增强诊断能力
+- 支持实时与影子预测模式的独立测试能力
+- 增强BTC分析流水线，集成多时间框架对齐保护、波动率风险覆盖和触发执行防护
+- 改进回测引擎的诊断功能，提供风险评估和交易拦截审计
 
 ## 目录
 1. [简介](#简介)
@@ -41,6 +41,7 @@
 本项目是一个聚焦比特币（BTC）的AI驱动分析与交易辅助系统。当前运行时仅支持BTC标的，提供7x24行情、新闻缓存、AI分析、多空策略与通知分发能力，并内置"BTC影子预测"与"波动触发监控"两大关键能力：
 - **BTC影子预测**：已完全重构为多模型比较系统，支持24小时分析曲线、成本感知三分类目标（up/down/no_signal）、多时间框架预测（4小时主预测+24小时曲线预测），以及walk-forward验证中的内部分模型选择（Logistic Regression vs HistGradientBoostingClassifier）。输出下一小时预期收益率与涨跌概率，仅供观察与离线校准，不直接参与交易决策。
 - **波动触发监控**：在价格快速波动时发出预警或触发一次小时级分析，形成入场确认价与失效价等参考信息。
+- **交易可行性防护系统**：新增的智能风控层，能够检测冲突指标、缺失上下文和高风险场景，自动阻断或降级交易计划，并提供详细的诊断信息。
 
 系统同时提供FastAPI后端、Web前端与命令行调度，支持定时任务、回测与交易接口（dry-run/真实下单需显式开启）。
 
@@ -61,9 +62,10 @@ A["命令行/调度<br/>main.py"] --> B["FastAPI服务<br/>api/app.py"]
 B --> C["分析流水线<br/>src/core/pipeline.py"]
 C --> D["BTC影子预测服务<br/>src/services/btc_shadow_forecast_service.py"]
 C --> E["波动触发监控<br/>src/services/btc_volatility_monitor.py"]
-C --> F["数据获取/存储<br/>data_provider / storage"]
-B --> G["交易接口<br/>api/v1/endpoints/crypto_trading.py"]
-A --> H["定时任务/运行锁<br/>main.py"]
+C --> F["交易可行性防护<br/>src/analyzer.py"]
+C --> G["数据获取/存储<br/>data_provider / storage"]
+B --> H["交易接口<br/>api/v1/endpoints/crypto_trading.py"]
+A --> I["定时任务/运行锁<br/>main.py"]
 ```
 
 **图表来源**
@@ -72,6 +74,7 @@ A --> H["定时任务/运行锁<br/>main.py"]
 - [src/core/pipeline.py:101-168](file://src/core/pipeline.py#L101-L168)
 - [src/services/btc_shadow_forecast_service.py:30-120](file://src/services/btc_shadow_forecast_service.py#L30-L120)
 - [src/services/btc_volatility_monitor.py:80-167](file://src/services/btc_volatility_monitor.py#L80-L167)
+- [src/analyzer.py:1935-2297](file://src/analyzer.py#L1935-L2297)
 - [api/v1/endpoints/crypto_trading.py:33-76](file://api/v1/endpoints/crypto_trading.py#L33-L76)
 
 **章节来源**
@@ -82,6 +85,7 @@ A --> H["定时任务/运行锁<br/>main.py"]
 ## 核心组件
 - **BTC影子预测服务**：已完全重构为多模型比较系统，对小时K线进行特征工程与滚动窗口验证，输出预期收益与涨跌概率，明确标记不参与交易决策。支持成本感知的三分类目标（up/down/no_signal）和24小时分析曲线预测。
 - **波动触发监控**：维护短期价格快照序列，检测阈值突破、速度异常、插针回撤等事件，生成预警与机会状态，并可触发小时分析。
+- **交易可行性防护系统**：新增的智能风控层，包括冲突指标检测、缺失上下文处理、多时间框架对齐保护和波动率风险覆盖，自动阻断或降级高风险交易计划。
 - **分析流水线**：协调数据获取、上下文构建、AI分析、通知与回测；在BTC路径中注入影子预测与衍生品上下文。
 - **交易接口**：提供余额、持仓、订单、杠杆与保证金模式查询/操作，默认dry-run，需配置开关才真实下单。
 - **BTC约束**：统一将BTC别名归一化为"BTC"，限制运行时仅处理BTC相关逻辑。
@@ -89,12 +93,13 @@ A --> H["定时任务/运行锁<br/>main.py"]
 **章节来源**
 - [src/services/btc_shadow_forecast_service.py:30-120](file://src/services/btc_shadow_forecast_service.py#L30-L120)
 - [src/services/btc_volatility_monitor.py:80-167](file://src/services/btc_volatility_monitor.py#L80-L167)
+- [src/analyzer.py:1935-2297](file://src/analyzer.py#L1935-L2297)
 - [src/core/pipeline.py:507-535](file://src/core/pipeline.py#L507-L535)
 - [api/v1/endpoints/crypto_trading.py:33-76](file://api/v1/endpoints/crypto_trading.py#L33-L76)
 - [src/core/btc_only.py:9-23](file://src/core/btc_only.py#L9-L23)
 
 ## 架构总览
-下图展示了从调度到分析、再到影子预测与波动监控的整体流程，以及API与交易接口的交互关系。
+下图展示了从调度到分析、再到影子预测、波动监控和交易可行性防护的整体流程，以及API与交易接口的交互关系。
 
 ```mermaid
 sequenceDiagram
@@ -103,6 +108,7 @@ participant API as "FastAPI<br/>api/app.py"
 participant PIPE as "分析流水线<br/>pipeline.py"
 participant SHADOW as "影子预测<br/>btc_shadow_forecast_service.py"
 participant VOL as "波动监控<br/>btc_volatility_monitor.py"
+participant GUARD as "交易防护<br/>analyzer.py"
 participant DATA as "数据源<br/>data_provider"
 participant TRD as "交易接口<br/>crypto_trading.py"
 CLI->>PIPE : 执行BTC分析(daily/hourly)
@@ -111,6 +117,8 @@ PIPE->>SHADOW : 构建影子预测(可选)
 SHADOW-->>PIPE : 返回预期收益/涨跌概率
 PIPE->>VOL : 读取波动监控状态(若启用)
 VOL-->>CLI : 预警/触发分析(事件驱动)
+PIPE->>GUARD : 应用交易可行性防护
+GUARD-->>PIPE : 返回调整后的交易计划
 API->>TRD : 查询/下单(默认dry-run)
 TRD-->>API : 返回结果
 ```
@@ -120,6 +128,7 @@ TRD-->>API : 返回结果
 - [src/core/pipeline.py:507-535](file://src/core/pipeline.py#L507-L535)
 - [src/services/btc_shadow_forecast_service.py:48-120](file://src/services/btc_shadow_forecast_service.py#L48-L120)
 - [src/services/btc_volatility_monitor.py:106-167](file://src/services/btc_volatility_monitor.py#L106-L167)
+- [src/analyzer.py:1935-2297](file://src/analyzer.py#L1935-L2297)
 - [api/v1/endpoints/crypto_trading.py:154-183](file://api/v1/endpoints/crypto_trading.py#L154-L183)
 
 ## 详细组件分析
@@ -218,26 +227,70 @@ Skip --> Next
 - [src/services/btc_volatility_monitor.py:80-167](file://src/services/btc_volatility_monitor.py#L80-L167)
 - [tests/test_btc_volatility_monitor.py:15-42](file://tests/test_btc_volatility_monitor.py#L15-L42)
 
+### 交易可行性防护系统（新增）
+职责与特性：
+- **冲突指标检测**：识别高风险的指标冲突场景，如看跌价格行为且位于VWAP下方、量能偏低且无突破确认等。
+- **缺失上下文处理**：检测衍生品数据、订单流、宏观相关性等关键上下文缺失，自动降级仓位上限。
+- **多时间框架对齐保护**：确保日内计划与日线和小时线趋势一致，避免逆趋势交易。
+- **波动率风险覆盖**：基于EWMA波动率预测动态调整仓位上限，适应不同市场波动环境。
+- **触发执行防护**：防止晚期脉冲或衰竭信号导致的不合理追涨杀跌。
+
+防护机制：
+- **阻断模式**：当检测到严重冲突或缺失时，完全禁用交易计划，设置为等待状态。
+- **降级模式**：当存在风险因素但非致命时，降低仓位上限至原计划的50%或更低。
+- **诊断信息**：详细记录触发原因、风险类型和建议行动，便于后续分析和调试。
+
+```mermaid
+flowchart TD
+Start(["交易计划输入"]) --> CheckConflicts["检测指标冲突"]
+CheckConflicts --> |发现冲突| Block["阻断交易<br/>设置等待状态"]
+CheckConflicts --> |无冲突| CheckMissing["检查上下文完整性"]
+CheckMissing --> |缺失关键数据| Degrade["降级处理<br/>降低仓位上限"]
+CheckMissing --> |完整| CheckAlignment["检查多时间框架对齐"]
+CheckAlignment --> |方向冲突| Block
+CheckAlignment --> |一致| CheckVolatility["检查波动率风险"]
+CheckVolatility --> |高风险| Degrade
+CheckVolatility --> |正常| ApplyOverlay["应用波动率覆盖"]
+ApplyOverlay --> Output["输出调整后的交易计划"]
+Block --> Output
+Degrade --> Output
+```
+
+**图表来源**
+- [src/analyzer.py:1935-2095](file://src/analyzer.py#L1935-L2095)
+- [src/analyzer.py:2098-2297](file://src/analyzer.py#L2098-L2297)
+
+**章节来源**
+- [src/analyzer.py:1935-2297](file://src/analyzer.py#L1935-L2297)
+
 ### 分析流水线中的集成点
 - 在BTC路径中，当获取到小时线数据后，会尝试构建影子预测上下文；失败时降级继续使用现有技术面上下文。
 - 同时可附加衍生品上下文（如资金费率、持仓等），增强分析背景。
 - 调度器通过运行锁保证同一时刻只进行一次BTC分析，避免重复提交。
+- **新增**：交易可行性防护系统在AI分析后、交易执行前应用，确保所有交易计划都经过严格的风险检查。
 
 ```mermaid
 sequenceDiagram
 participant P as "流水线<br/>pipeline.py"
 participant S as "影子预测<br/>shadow service"
+participant A as "AI分析<br/>analyzer.py"
+participant G as "交易防护<br/>guard system"
 participant D as "衍生品数据"
 P->>P : 获取日线/小时线
 P->>S : 构建影子预测(可配置开关)
 S-->>P : 返回影子上下文(预期收益/概率)
 P->>D : 获取衍生品上下文(可选)
 D-->>P : 返回衍生品指标
-P-->>P : 合并上下文并进入AI分析
+P->>A : AI分析生成交易计划
+A-->>P : 返回初步交易计划
+P->>G : 应用交易可行性防护
+G-->>P : 返回调整后的安全交易计划
+P-->>P : 进入执行阶段
 ```
 
 **图表来源**
 - [src/core/pipeline.py:507-535](file://src/core/pipeline.py#L507-L535)
+- [src/analyzer.py:1935-2297](file://src/analyzer.py#L1935-L2297)
 
 **章节来源**
 - [src/core/pipeline.py:507-535](file://src/core/pipeline.py#L507-L535)
@@ -246,6 +299,7 @@ P-->>P : 合并上下文并进入AI分析
 - 提供状态查询、余额、持仓、挂单、订单创建/撤销、杠杆与保证金模式设置。
 - 默认dry-run，仅在配置允许且认证开启时才真实下单。
 - 错误分类清晰：配置错误、请求无效、内部错误分别返回不同状态码与消息。
+- **新增**：支持回测诊断功能，提供风险评估和交易拦截审计信息。
 
 **章节来源**
 - [api/v1/endpoints/crypto_trading.py:33-76](file://api/v1/endpoints/crypto_trading.py#L33-L76)
@@ -269,20 +323,37 @@ graph LR
 M["main.py"] --> P["pipeline.py"]
 M --> V["btc_volatility_monitor.py"]
 P --> S["btc_shadow_forecast_service.py"]
+P --> A["analyzer.py"]
 P --> DF["data_provider"]
-A["api/app.py"] --> T["crypto_trading.py"]
-M --> A
+A --> G["guard system"]
+A --> VO["volatility overlay"]
+A --> TA["timeframe alignment"]
+A --> TE["trigger execution guard"]
+A["analyzer.py"] --> R["risk controls"]
+A["analyzer.py"] --> D["diagnostics"]
+A["analyzer.py"] --> B["backtest integration"]
+A["analyzer.py"] --> L["live/shadow modes"]
+A["analyzer.py"] --> I["indicator conflicts"]
+A["analyzer.py"] --> C["context missing"]
+A["analyzer.py"] --> M["multi-timeframe"]
+A["analyzer.py"] --> T["trading feasibility"]
+A["analyzer.py"] --> G["guard system"]
+A["analyzer.py"] --> O["overlay"]
+A["analyzer.py"] --> A["alignment"]
+A["analyzer.py"] --> E["execution guard"]
 ```
 
 **图表来源**
 - [main.py:685-800](file://main.py#L685-L800)
 - [src/core/pipeline.py:507-535](file://src/core/pipeline.py#L507-L535)
+- [src/analyzer.py:1935-2297](file://src/analyzer.py#L1935-L2297)
 - [api/app.py:176-245](file://api/app.py#L176-L245)
 - [api/v1/endpoints/crypto_trading.py:33-76](file://api/v1/endpoints/crypto_trading.py#L33-L76)
 
 **章节来源**
 - [main.py:685-800](file://main.py#L685-L800)
 - [src/core/pipeline.py:507-535](file://src/core/pipeline.py#L507-L535)
+- [src/analyzer.py:1935-2297](file://src/analyzer.py#L1935-L2297)
 - [api/app.py:176-245](file://api/app.py#L176-L245)
 - [api/v1/endpoints/crypto_trading.py:33-76](file://api/v1/endpoints/crypto_trading.py#L33-L76)
 
@@ -294,6 +365,10 @@ M --> A
 - **波动监控**：
   - 滑动窗口与自适应阈值降低误报；冷却与超时控制避免频繁触发。
   - 速度检测基于最近采样统计，兼顾噪声过滤与及时性。
+- **交易可行性防护**：
+  - 轻量级规则检查，几乎不增加额外延迟。
+  - 冲突检测和上下文验证采用高效的数据结构访问。
+  - 诊断信息收集采用懒加载策略，只在需要时生成详细报告。
 - **流水线**：
   - 并发工作线程可控；搜索服务初始化失败不阻断主流程。
   - 运行锁避免重复分析，提升资源利用率。
@@ -307,6 +382,10 @@ M --> A
 - **波动监控未触发**：
   - 检查阈值与早预警配置；确认adaptive_enabled与velocity_enabled是否开启。
   - 查看冷却抑制与超时逻辑，确认是否被抑制或观察期已过。
+- **交易可行性防护过度拦截**：
+  - 检查tradeability_status和tradeability_reasons字段，了解具体阻断原因。
+  - 确认缺失的上下文数据（derivatives、order_flow、macro_correlation）是否可获取。
+  - 验证多时间框架对齐状态，确认是否存在方向冲突。
 - **交易接口报错**：
   - 配置错误（缺少API密钥/密码）返回400；内部错误返回500；确认dry_run与auth开关。
 - **前端静态资源不一致**：
@@ -315,11 +394,12 @@ M --> A
 **章节来源**
 - [src/services/btc_shadow_forecast_service.py:48-120](file://src/services/btc_shadow_forecast_service.py#L48-L120)
 - [src/services/btc_volatility_monitor.py:106-167](file://src/services/btc_volatility_monitor.py#L106-L167)
+- [src/analyzer.py:1935-2297](file://src/analyzer.py#L1935-L2297)
 - [api/v1/endpoints/crypto_trading.py:154-183](file://api/v1/endpoints/crypto_trading.py#L154-L183)
 - [api/app.py:58-95](file://api/app.py#L58-L95)
 
 ## 结论
-BTC影子预测服务经过完全重构，现已成为功能强大的多模型比较系统，提供下一小时预期收益与涨跌概率，明确限定为观察与校准用途，不干扰交易决策。新增的24小时分析曲线、成本感知三分类目标和内部分模型选择机制，显著提升了预测的准确性和实用性。结合波动触发监控，系统能够在市场异动时及时预警并触发深入分析，形成"预警—确认—计划"的闭环。配合FastAPI与Web界面，用户可便捷地查看行情、分析报告与交易状态，实现从数据到洞察的一体化体验。
+BTC影子预测服务经过完全重构，现已成为功能强大的多模型比较系统，提供下一小时预期收益与涨跌概率，明确限定为观察与校准用途，不干扰交易决策。新增的交易可行性防护系统显著增强了系统的风险控制能力，能够自动检测冲突指标、缺失上下文和高风险场景，并智能地阻断或降级交易计划。结合波动触发监控和多时间框架对齐保护，系统能够在市场异动时及时预警并触发深入分析，形成"预警—确认—计划—防护—执行"的完整闭环。配合FastAPI与Web界面，用户可便捷地查看行情、分析报告与交易状态，实现从数据到洞察的一体化体验。
 
 ## 附录
 - **环境变量与开关（示例）**：

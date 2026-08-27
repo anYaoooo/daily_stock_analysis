@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.analyzer import AnalysisResult, GeminiAnalyzer, align_btc_execution_plans
+from src.services.crypto_backtest_service import build_btc_mfe_calibration
 
 
 def _runtime_config() -> SimpleNamespace:
@@ -75,6 +76,59 @@ def test_invalid_btc_trade_plan_is_annotated_not_downgraded() -> None:
     assert short_plan["validation_status"] == "skipped"
     assert aligned.operation_advice == "买入"
     assert aligned.decision_type == "buy"
+
+
+def test_mfe_calibration_uses_completed_triggered_rows_by_horizon() -> None:
+    rows = [
+        SimpleNamespace(eval_status="completed", signal_triggered=True, horizon="intraday", mfe_pct=0.4),
+        SimpleNamespace(eval_status="completed", signal_triggered=True, horizon="intraday", mfe_pct=0.8),
+        SimpleNamespace(eval_status="completed", signal_triggered=True, horizon="intraday", mfe_pct=1.2),
+        SimpleNamespace(eval_status="completed", signal_triggered=False, horizon="intraday", mfe_pct=9.0),
+        SimpleNamespace(eval_status="skipped", signal_triggered=True, horizon="daily", mfe_pct=9.0),
+    ]
+
+    calibration = build_btc_mfe_calibration(rows)
+
+    assert calibration["intraday"]["sample_count"] == 3
+    assert calibration["intraday"]["mfe_p50_pct"] == 0.8
+    assert calibration["intraday"]["mfe_p70_pct"] == 0.96
+    assert "daily" not in calibration
+
+
+def test_mfe_calibration_marks_target_beyond_p70_without_downgrading() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=70,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="买入",
+        decision_type="buy",
+        dashboard={
+            "battle_plan": {
+                "long_plan": {
+                    "direction": "long",
+                    "entry_price": 100,
+                    "stop_loss": 95,
+                    "take_profit": 110,
+                    "execution_contract": _contract(),
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        mfe_calibration={
+            "daily": {"sample_count": 20, "mfe_p50_pct": 0.5, "mfe_p70_pct": 2.0},
+            "intraday": {"sample_count": 20, "mfe_p50_pct": 0.5, "mfe_p70_pct": 2.0},
+        },
+    )
+
+    plan = aligned.dashboard["battle_plan"]["long_plan"]
+    assert plan["target_calibration"]["status"] == "beyond_typical_mfe"
+    assert plan["validation_status"] == "passed"
 
 
 def test_valid_btc_trade_plan_keeps_directional_advice() -> None:

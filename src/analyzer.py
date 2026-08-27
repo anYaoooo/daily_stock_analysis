@@ -407,6 +407,7 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
 # ---------- chip_structure fallback (Issue #589) ----------
 
 _CHIP_KEYS: tuple = ("profit_ratio", "avg_cost", "concentration", "chip_health")
+_BTC_MFE_MIN_SAMPLE_COUNT = 10
 
 
 def _is_value_placeholder(v: Any) -> bool:
@@ -1776,12 +1777,79 @@ def _normalize_btc_risk_reward(
         )
 
 
+def _annotate_btc_target_mfe_calibration(
+    payload: dict[str, Any],
+    *,
+    direction: str,
+    horizon: str,
+    calibration: Optional[Dict[str, Any]],
+    language: str,
+) -> None:
+    """Annotate take-profit distance against historical signal MFE percentiles.
+
+    Diagnostic only: the annotation never changes direction, enabled state or
+    validation outcome (same annotate-not-downgrade contract as validation).
+    """
+    if not isinstance(calibration, dict):
+        return
+    stats = calibration.get(horizon)
+    if not isinstance(stats, dict):
+        return
+    try:
+        sample_count = int(stats.get("sample_count") or 0)
+    except (TypeError, ValueError):
+        return
+    if sample_count < _BTC_MFE_MIN_SAMPLE_COUNT:
+        return
+    mfe_p70 = stats.get("mfe_p70_pct")
+    if not isinstance(mfe_p70, (int, float)) or mfe_p70 <= 0:
+        return
+    entry = parse_sniper_value(payload.get("entry_price"))
+    target = parse_sniper_value(payload.get("take_profit"))
+    if entry is None or entry <= 0 or target is None:
+        return
+    distance = target - entry if direction == "long" else entry - target
+    if distance <= 0:
+        return
+    target_distance_pct = distance / entry * 100.0
+    beyond = target_distance_pct > float(mfe_p70)
+    annotation: dict[str, Any] = {
+        "status": "beyond_typical_mfe" if beyond else "within_typical_mfe",
+        "target_distance_pct": round(target_distance_pct, 4),
+        "mfe_p50_pct": stats.get("mfe_p50_pct"),
+        "mfe_p70_pct": stats.get("mfe_p70_pct"),
+        "sample_count": stats.get("sample_count"),
+    }
+    if beyond:
+        annotation["note"] = (
+            f"止盈距离 {target_distance_pct:.2f}% 超过同周期历史信号 MFE P70（{float(mfe_p70):.2f}%），"
+            "按历史波动该目标较难在持有窗口内达成，建议核对目标价或持有窗口。"
+            if language == "zh"
+            else (
+                f"Target distance {target_distance_pct:.2f}% exceeds the historical signal MFE P70 "
+                f"({float(mfe_p70):.2f}%) for this horizon; the target is statistically hard to reach "
+                "within the holding window — review the target or holding window."
+            )
+        )
+    else:
+        annotation["note"] = (
+            f"止盈距离 {target_distance_pct:.2f}% 在同周期历史信号 MFE P70（{float(mfe_p70):.2f}%）以内。"
+            if language == "zh"
+            else (
+                f"Target distance {target_distance_pct:.2f}% sits within the historical signal MFE P70 "
+                f"({float(mfe_p70):.2f}%) for this horizon."
+            )
+        )
+    payload["target_calibration"] = annotation
+
+
 def align_btc_execution_plans(
     result: AnalysisResult,
     *,
     runtime_config: Any,
     trigger_context: Optional[Dict[str, Any]] = None,
     technical_context: Optional[Dict[str, Any]] = None,
+    mfe_calibration: Optional[Dict[str, Any]] = None,
 ) -> AnalysisResult:
     """Annotate BTC plans with execution-validation results.
 
@@ -1895,6 +1963,13 @@ def align_btc_execution_plans(
             ),
         )
         _normalize_btc_risk_reward(payload, direction=direction, language=language)
+        _annotate_btc_target_mfe_calibration(
+            payload,
+            direction=direction,
+            horizon=horizon,
+            calibration=mfe_calibration,
+            language=language,
+        )
         if "position_multiplier_cap" in payload:
             payload["position_multiplier_cap"] = plan.position_multiplier_cap
         errors = CryptoBacktestEngine.validate_execution_plan(plan=plan, config=config)
@@ -3750,12 +3825,17 @@ class GeminiAnalyzer:
                 result.analysis_timeframe = analysis_timeframe
                 normalize_chip_structure_availability(result, context.get("chip"))
                 if is_crypto_context:
-                    align_btc_execution_plans(
-                        result,
-                        runtime_config=config,
-                        trigger_context=context.get("trigger_context"),
-                        technical_context=context.get("crypto_technical"),
-                    )
+                    from src.services.crypto_backtest_service import fetch_btc_mfe_calibration
+
+                    alignment_kwargs: dict[str, Any] = {
+                        "runtime_config": config,
+                        "trigger_context": context.get("trigger_context"),
+                        "technical_context": context.get("crypto_technical"),
+                    }
+                    mfe_calibration = fetch_btc_mfe_calibration()
+                    if mfe_calibration:
+                        alignment_kwargs["mfe_calibration"] = mfe_calibration
+                    align_btc_execution_plans(result, **alignment_kwargs)
 
                 # 内容完整性校验（可选）
                 if not config.report_integrity_enabled:
@@ -4149,6 +4229,12 @@ class GeminiAnalyzer:
             minimum_volume_ratio = float(
                 getattr(runtime_config, "crypto_backtest_minimum_volume_ratio", 1.0)
             )
+            taker_fee_bps = max(float(getattr(runtime_config, "crypto_backtest_taker_fee_rate_bps", 5.0)), 0.0)
+            slippage_bps = max(float(getattr(runtime_config, "crypto_backtest_slippage_bps", 2.0)), 0.0)
+            neutral_band_pct = max(float(getattr(runtime_config, "crypto_backtest_neutral_band_pct", 0.2)), 0.0)
+            round_trip_cost_bps = 2.0 * taker_fee_bps + 2.0 * slippage_bps
+            round_trip_cost_pct = round_trip_cost_bps / 100.0
+            minimum_target_buffer_pct = round_trip_cost_pct + neutral_band_pct
             timeframes = crypto_technical.get("timeframes") or {}
             daily_crypto = timeframes.get("daily") if isinstance(timeframes.get("daily"), dict) else crypto_technical
             hourly_crypto = timeframes.get("hourly") if isinstance(timeframes.get("hourly"), dict) else None
@@ -4193,7 +4279,7 @@ class GeminiAnalyzer:
 > BTC 可回测执行契约：所有 `direction=long/short` 且可交易的 BTC 计划必须同时输出 `execution_contract`，版本固定为 `btc-execution-v1`。`instrument` 必须完整保留系统给出的 `type`、`venue`、`symbol`、`market_symbol`、成交/触发/强平价格类型和保证金模式，不得把现货与永续互换。`entry.setup_type` 只能是 `breakout` 或 `pullback`。入场条件只允许 `close_above`、`close_below`、`low_lte`、`high_gte`、`volume_ratio_gte`、`volume_ratio_lte`、`close_above_vwap`、`close_below_vwap`；`logic` 固定为 `all`，`fill` 固定为 `next_bar_open`，并给出 `confirmation_bars`、`max_wait_bars` 和 `exit.max_holding_bars`。契约必须完整表达 `trigger_condition`，禁止把“站稳、放量、企稳”等额外条件只写在自然语言里。无法用这些原语完整表达时必须设为不交易，不得输出会被降级为触价成交的计划。
 > `execution_contract.entry.conditions[].type` 必须从上述单个枚举值中选择，禁止输出带 `/` 的组合占位字符串。`breakout` 多单通常使用 `close_above` + `volume_ratio_gte` + `close_above_vwap`，空单使用对应的向下条件；`pullback` 多单应使用 `low_lte` 触及支撑后配合 `close_above`/`close_above_vwap` 收回确认，空单使用 `high_gte` 触及压力后配合 `close_below`/`close_below_vwap`。
 > BTC 点位字段格式：`entry_price`、`stop_loss`、`take_profit` 只能填写单个正数，不得混入“突破、回踩、站稳、跌破”等说明文字；区间放入 `entry_zone`，确认逻辑放入 `trigger_condition`，失效说明放入 `invalid_condition`。
-> BTC 计划质量门槛：可交易计划必须满足多单 `stop_loss < entry_price < take_profit`、空单 `take_profit < entry_price < stop_loss`；计划风险收益比不得低于 1:{minimum_risk_reward:g}，目标空间还必须覆盖双边手续费、滑点和中性收益带，否则设为不交易。
+> BTC 计划质量门槛：可交易计划必须满足多单 `stop_loss < entry_price < take_profit`、空单 `take_profit < entry_price < stop_loss`；计划风险收益比不得低于 1:{minimum_risk_reward:g}。当前按 taker 双边手续费 {taker_fee_bps:g}bps/边、双边滑点 {2 * slippage_bps:g}bps、中性收益带 {neutral_band_pct:g}% 计算，往返成本约 {round_trip_cost_bps:g}bps（{round_trip_cost_pct:.4f}%），目标毛空间至少先覆盖 {minimum_target_buffer_pct:.4f}%；实际目标还必须满足 `reward_distance >= {minimum_risk_reward:g} * risk_distance`，并在此基础上再覆盖上述成本缓冲，否则设为不交易。
 > BTC 计划选择规则：趋势已经明确但突破追价会让风险收益不足时，优先生成 `pullback` 计划并冻结支撑/压力、止损、目标和有效 bars，不得在后续报告中随着价格上涨持续抬高同一方向的触发价。只有原计划过期、失效或方向反转后才能启用新计划。
 > BTC 量能与确认门槛：`breakout` 计划必须包含 `volume_ratio_gte` 且阈值不得低于 {minimum_volume_ratio:g}，普通突破/跌破使用至少 2 根闭合 K 线确认；`pullback` 计划以触及关键位后收回为硬条件，量能只用于置信度和仓位降权，不强制作为硬门槛。Price Action、VWAP、EMA 未形成可解释结构，或日线/小时线方向处于 `wait_for_*` 等冲突状态时，默认 `enabled=false`/等待确认，不得勉强给出入场计划。
 > BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。

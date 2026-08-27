@@ -17,13 +17,25 @@
 - [pages/HomePage.tsx](file://apps/dsa-web/src/pages/HomePage.tsx)
 - [pages/LoginPage.tsx](file://apps/dsa-web/src/pages/LoginPage.tsx)
 - [pages/NotFoundPage.tsx](file://apps/dsa-web/src/pages/NotFoundPage.tsx)
+- [pages/BacktestPage.tsx](file://apps/dsa-web/src/pages/BacktestPage.tsx)
 - [contexts/AuthContext.tsx](file://apps/dsa-web/src/contexts/AuthContext.tsx)
 - [hooks/useAuth.ts](file://apps/dsa-web/src/hooks/useAuth.ts)
 - [stores/index.ts](file://apps/dsa-web/src/stores/index.ts)
 - [tailwind.config.js](file://apps/dsa-web/tailwind.config.js)
 - [vitest.config.ts](file://apps/dsa-web/vitest.config.ts)
 - [playwright.config.ts](file://apps/dsa-web/playwright.config.ts)
+- [types/backtest.ts](file://apps/dsa-web/src/types/backtest.ts)
+- [api/backtest.ts](file://apps/dsa-web/src/api/backtest.ts)
+- [i18n/uiText.ts](file://apps/dsa-web/src/i18n/uiText.ts)
 </cite>
+
+## 更新摘要
+**变更内容**   
+- 更新了回测页面组件的详细功能说明，包括新增的指标显示系统
+- 增强了BTC回测功能的文档描述，涵盖信号质量率、执行成交率等关键指标
+- 添加了计划质量评分系统的详细说明（方向/位置/盈亏比/执行）
+- 新增了成本敏感性分析和降级评估计数的文档
+- 完善了损失指标标签系统的中文翻译支持
 
 ## 目录
 1. [简介](#简介)
@@ -58,8 +70,8 @@ graph TB
 A["index.html"] --> B["main.tsx"]
 B --> C["App.tsx"]
 C --> D["路由与布局<br/>Shell.tsx / RouteBoundary.tsx"]
-C --> E["页面组件<br/>HomePage.tsx / LoginPage.tsx / NotFoundPage.tsx"]
-C --> F["API层<br/>api/index.ts / api/error.ts"]
+C --> E["页面组件<br/>HomePage.tsx / LoginPage.tsx / NotFoundPage.tsx / BacktestPage.tsx"]
+C --> F["API层<br/>api/index.ts / api/error.ts / backtest.ts"]
 C --> G["上下文与状态<br/>AuthContext.tsx / stores/index.ts"]
 C --> H["样式与主题<br/>tailwind.config.js"]
 B --> I["构建与运行<br/>vite.config.ts"]
@@ -91,10 +103,11 @@ C --> K["代码质量<br/>eslint.config.js"]
 - 路由与布局
   - Shell.tsx提供应用外壳（头部、侧边栏、内容区）
   - RouteBoundary.tsx提供路由边界能力（加载、错误、权限拦截）
-  - 页面组件按功能域拆分（首页、登录、未找到等）
+  - 页面组件按功能域拆分（首页、登录、未找到、回测等）
 - API层与错误处理
   - api/index.ts统一导出接口方法，集中管理请求参数与响应类型
   - api/error.ts封装错误分类、提示与重试策略
+  - backtest.ts专门处理BTC回测相关的API调用
 - 状态管理与上下文
   - AuthContext.tsx管理用户认证状态与生命周期
   - stores/index.ts聚合轻量状态（可选Zustand/Redux等）
@@ -111,11 +124,12 @@ C --> K["代码质量<br/>eslint.config.js"]
 - [components/layout/RouteBoundary.tsx:1-100](file://apps/dsa-web/src/components/layout/RouteBoundary.tsx#L1-L100)
 - [api/index.ts:1-120](file://apps/dsa-web/src/api/index.ts#L1-L120)
 - [api/error.ts:1-80](file://apps/dsa-web/src/api/error.ts#L1-L80)
+- [api/backtest.ts:1-262](file://apps/dsa-web/src/api/backtest.ts#L1-L262)
 - [contexts/AuthContext.tsx:1-120](file://apps/dsa-web/src/contexts/AuthContext.tsx#L1-L120)
 - [stores/index.ts:1-60](file://apps/dsa-web/src/stores/index.ts#L1-L60)
 
 ## 架构总览
-前端采用“页面-组件-状态-API”的分层架构，配合Vite的模块化与按需加载，实现高内聚低耦合。关键交互如下：
+前端采用"页面-组件-状态-API"的分层架构，配合Vite的模块化与按需加载，实现高内聚低耦合。关键交互如下：
 - 启动阶段：index.html -> main.tsx -> App.tsx -> 路由与布局 -> 页面渲染
 - 数据流：页面组件通过Hooks或Store获取数据，调用api层发起HTTP请求，统一错误处理与提示
 - 认证流程：AuthContext维护登录态，受保护路由在RouteBoundary中校验
@@ -130,7 +144,7 @@ participant A as "App.tsx"
 participant L as "Shell.tsx"
 participant R as "RouteBoundary.tsx"
 participant P as "页面组件"
-participant API as "api/index.ts"
+participant API as "api/index.ts / backtest.ts"
 participant ERR as "api/error.ts"
 U->>V : 访问根路径
 V-->>U : 返回index.html
@@ -152,6 +166,7 @@ P-->>U : 展示结果或错误信息
 - [components/layout/Shell.tsx:1-120](file://apps/dsa-web/src/components/layout/Shell.tsx#L1-L120)
 - [components/layout/RouteBoundary.tsx:1-100](file://apps/dsa-web/src/components/layout/RouteBoundary.tsx#L1-L100)
 - [api/index.ts:1-120](file://apps/dsa-web/src/api/index.ts#L1-L120)
+- [api/backtest.ts:1-262](file://apps/dsa-web/src/api/backtest.ts#L1-L262)
 - [api/error.ts:1-80](file://apps/dsa-web/src/api/error.ts#L1-L80)
 
 ## 详细组件分析
@@ -207,10 +222,16 @@ class LoginPage {
 class NotFoundPage {
 +render()
 }
+class BacktestPage {
++renderMetrics()
++renderHistory()
++runBacktest()
+}
 Shell --> RouteBoundary : "包裹路由"
 RouteBoundary --> HomePage : "渲染页面"
 RouteBoundary --> LoginPage : "渲染页面"
 RouteBoundary --> NotFoundPage : "渲染页面"
+RouteBoundary --> BacktestPage : "渲染页面"
 ```
 
 图表来源
@@ -219,6 +240,7 @@ RouteBoundary --> NotFoundPage : "渲染页面"
 - [pages/HomePage.tsx:1-120](file://apps/dsa-web/src/pages/HomePage.tsx#L1-L120)
 - [pages/LoginPage.tsx:1-120](file://apps/dsa-web/src/pages/LoginPage.tsx#L1-L120)
 - [pages/NotFoundPage.tsx:1-80](file://apps/dsa-web/src/pages/NotFoundPage.tsx#L1-L80)
+- [pages/BacktestPage.tsx:1-991](file://apps/dsa-web/src/pages/BacktestPage.tsx#L1-L991)
 
 章节来源
 - [components/layout/Shell.tsx:1-120](file://apps/dsa-web/src/components/layout/Shell.tsx#L1-L120)
@@ -230,11 +252,12 @@ RouteBoundary --> NotFoundPage : "渲染页面"
 ### API层与错误处理
 - api/index.ts统一导出接口方法，集中管理请求参数、响应类型与拦截器
 - api/error.ts封装错误分类、提示与重试策略，确保一致的异常体验
+- backtest.ts专门处理BTC回测相关的复杂API调用，包括异步任务管理和批量操作
 
 ```mermaid
 sequenceDiagram
 participant Page as "页面组件"
-participant API as "api/index.ts"
+participant API as "api/index.ts / backtest.ts"
 participant HTTP as "HTTP客户端"
 participant ERR as "api/error.ts"
 Page->>API : 调用接口方法
@@ -251,10 +274,12 @@ end
 
 图表来源
 - [api/index.ts:1-120](file://apps/dsa-web/src/api/index.ts#L1-L120)
+- [api/backtest.ts:1-262](file://apps/dsa-web/src/api/backtest.ts#L1-L262)
 - [api/error.ts:1-80](file://apps/dsa-web/src/api/error.ts#L1-L80)
 
 章节来源
 - [api/index.ts:1-120](file://apps/dsa-web/src/api/index.ts#L1-L120)
+- [api/backtest.ts:1-262](file://apps/dsa-web/src/api/backtest.ts#L1-L262)
 - [api/error.ts:1-80](file://apps/dsa-web/src/api/error.ts#L1-L80)
 
 ### 认证上下文与状态管理
@@ -292,6 +317,70 @@ useAuth --> Store : "读取状态"
 - [contexts/AuthContext.tsx:1-120](file://apps/dsa-web/src/contexts/AuthContext.tsx#L1-L120)
 - [hooks/useAuth.ts:1-80](file://apps/dsa-web/src/hooks/useAuth.ts#L1-L80)
 - [stores/index.ts:1-60](file://apps/dsa-web/src/stores/index.ts#L1-L60)
+
+### 回测页面组件增强功能
+
+**更新** BacktestPage组件经过大幅增强，提供了全面的BTC回测分析和可视化功能。
+
+#### 核心指标显示系统
+- **信号质量率**：衡量交易信号的整体质量，过滤低质量信号
+- **执行成交率**：反映委托订单的实际成交比例
+- **触价代理胜率**：基于价格触发条件的策略表现
+- **原始方向命中率**：包含MFE/MAE的方向预测准确性
+
+#### 计划质量评分系统
+- **方向评分**：评估做多/做空方向的准确性
+- **位置评分**：评价入场点位的选择质量
+- **盈亏比评分**：衡量风险回报比的合理性
+- **执行评分**：评估实际执行效果
+
+#### 成本敏感性分析
+- **基础成本场景**：手续费5bps + 滑点2bps
+- **保守成本场景**：手续费15bps + 滑点10bps
+- **净收益对比**：不同成本假设下的收益影响
+
+#### 降级评估计数
+- **缺失数据降级**：记录因数据不完整而降低评估质量的次数
+- **数据层统计**：按数据类型统计缺失情况
+- **样本可信度**：基于样本数量的置信度评估
+
+#### 损失指标标签系统
+实现了完整的中文翻译支持，包括：
+- **价格行为**：价格在上方/下方/附近
+- **EMA/VWAP**：多头排列/空头排列/方向混合
+- **成交量**：低量/正常量能/放量
+- **波动状态**：波动收缩/波动升高/极端波动
+- **订单流**：买卖均衡/主动买方占优/主动卖方占优
+- **多周期方向**：同向做多/同向做空/逆势做多/逆势做空
+- **行情事件**：向上突破/向下跌破/区间震荡等
+
+```mermaid
+flowchart TD
+A["回测数据"] --> B["信号质量分析"]
+A --> C["执行效果评估"]
+A --> D["计划质量评分"]
+A --> E["成本敏感性分析"]
+A --> F["降级评估统计"]
+B --> G["信号质量率"]
+C --> H["执行成交率"]
+D --> I["方向/位置/盈亏比/执行评分"]
+E --> J["基础/保守成本场景"]
+F --> K["缺失数据降级计数"]
+G --> L["综合绩效卡片"]
+H --> L
+I --> L
+J --> L
+K --> L
+```
+
+图表来源
+- [pages/BacktestPage.tsx:172-274](file://apps/dsa-web/src/pages/BacktestPage.tsx#L172-L274)
+- [types/backtest.ts:251-293](file://apps/dsa-web/src/types/backtest.ts#L251-L293)
+
+章节来源
+- [pages/BacktestPage.tsx:1-991](file://apps/dsa-web/src/pages/BacktestPage.tsx#L1-L991)
+- [types/backtest.ts:1-324](file://apps/dsa-web/src/types/backtest.ts#L1-L324)
+- [api/backtest.ts:1-262](file://apps/dsa-web/src/api/backtest.ts#L1-L262)
 
 ### 构建配置与工程化
 - vite.config.ts：开发服务器、插件、代理、打包优化、环境变量
@@ -396,7 +485,7 @@ Output --> Assets["静态资源"]
 - [contexts/AuthContext.tsx:1-120](file://apps/dsa-web/src/contexts/AuthContext.tsx#L1-L120)
 
 ## 结论
-本Web应用采用现代化的前端工程化方案，以Vite为核心构建工具，结合React、TypeScript与Tailwind CSS，实现了高内聚低耦合的模块化架构。通过统一的API层、错误处理机制与状态管理，保障了代码质量与用户体验。在生产环境中，通过构建优化与运行时策略，有效提升了性能与稳定性。建议团队遵循本文档的最佳实践，持续优化代码结构与性能表现。
+本Web应用采用现代化的前端工程化方案，以Vite为核心构建工具，结合React、TypeScript与Tailwind CSS，实现了高内聚低耦合的模块化架构。通过统一的API层、错误处理机制与状态管理，保障了代码质量与用户体验。特别是BacktestPage组件的大幅增强，提供了全面的BTC回测分析功能，包括信号质量率、执行成交率、计划质量评分、成本敏感性分析等关键指标，以及完善的中文本地化支持。在生产环境中，通过构建优化与运行时策略，有效提升了性能与稳定性。建议团队遵循本文档的最佳实践，持续优化代码结构与性能表现。
 
 [本节为总结性内容，不直接分析具体文件]
 

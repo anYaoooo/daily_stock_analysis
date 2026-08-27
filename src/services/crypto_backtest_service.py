@@ -35,6 +35,52 @@ from src.utils.timeframe import analysis_timeframe_label, horizon_to_analysis_mo
 logger = logging.getLogger(__name__)
 
 BTC_PLAN_ENGINE_VERSION = "btc-plan-v5"
+BTC_MFE_CALIBRATION_LIMIT = 2000
+
+
+def build_btc_mfe_calibration(rows: list[Any]) -> dict[str, dict[str, Any]]:
+    """Build horizon-level MFE percentiles from completed triggered signals."""
+    grouped: dict[str, list[float]] = {}
+    for row in rows:
+        if getattr(row, "eval_status", None) != "completed":
+            continue
+        if getattr(row, "signal_triggered", None) is not True:
+            continue
+        horizon = str(getattr(row, "horizon", "") or "").strip().lower()
+        mfe = getattr(row, "mfe_pct", None)
+        if not horizon or not isinstance(mfe, (int, float)) or pd.isna(mfe) or float(mfe) < 0:
+            continue
+        grouped.setdefault(horizon, []).append(float(mfe))
+
+    calibration: dict[str, dict[str, Any]] = {}
+    for horizon, values in grouped.items():
+        series = pd.Series(values, dtype="float64")
+        calibration[horizon] = {
+            "sample_count": int(len(series)),
+            "mfe_p50_pct": round(float(series.quantile(0.5)), 4),
+            "mfe_p70_pct": round(float(series.quantile(0.7)), 4),
+        }
+    return calibration
+
+
+def fetch_btc_mfe_calibration(
+    *,
+    db_manager: Optional[DatabaseManager] = None,
+    engine_version: str = BTC_PLAN_ENGINE_VERSION,
+    limit: int = BTC_MFE_CALIBRATION_LIMIT,
+) -> dict[str, dict[str, Any]]:
+    """Read recent MFE calibration without making report generation depend on it."""
+    try:
+        repo = CryptoBacktestRepository(db_manager or DatabaseManager.get_instance())
+        rows = repo.list_results(
+            code="BTC",
+            engine_version=engine_version,
+            limit=max(1, int(limit)),
+        )
+        return build_btc_mfe_calibration(rows)
+    except Exception as exc:
+        logger.warning("BTC MFE calibration unavailable: %s", exc)
+        return {}
 
 
 @dataclass(frozen=True)

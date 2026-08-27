@@ -1,9 +1,0 @@
-schema_version: 1
-module_path: templates
-title: 股票分析报告模板（Jinja2）
-scope:
-    - templates/
-source_files: []
-depends_on: []
-related_to:
-    - path: core_engine

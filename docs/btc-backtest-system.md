@@ -619,3 +619,9 @@ r_multiple = net_pnl / risk_budget
 1. 升级引擎至 v2                 1. 状态机动态复利重构               1. 1m K线局部降维路由
 2. 增加前视偏差防作弊校验          2. 并发持仓管理器与风控熔断          2. 静态/动态计划质量评分
 3. K线数据哈希与元数据固化         3. 永续合约资金费率与多空费用拆分     3. 统计显著性（Bootstrap置信区间）
+
+## 13. 复评后的执行校准工具
+
+分析生成阶段会读取近期已完成且已触发的 v5 结果，按 `horizon` 计算 MFE P50/P70，并在计划的 `target_calibration` 中标注目标距离是否超过同周期历史 P70。该标注只用于诊断，不改变方向、启用状态或校验结果；数据库不可用或样本不足时按无校准数据继续生成报告。
+
+可用 `python scripts/evaluate_btc_direction_history.py` 对 `data/btc_okx_perpetual_1h_training.csv` 离线评估确定性 EMA/VWAP/Price Action 投票，并与恒定做多、上一根方向、固定种子随机基线比较。脚本只读 CSV，不写数据库；`--horizon-bars` 控制 MFE/MAE 前瞻窗口，`--step` 可用于快速抽样。
