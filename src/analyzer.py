@@ -1748,6 +1748,34 @@ def _validate_btc_execution_ladder(payload: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _normalize_btc_risk_reward(
+    payload: dict[str, Any],
+    *,
+    direction: str,
+    language: str,
+) -> None:
+    """Replace model-authored risk/reward prose with deterministic arithmetic."""
+    entry = parse_sniper_value(payload.get("entry_price"))
+    stop = parse_sniper_value(payload.get("stop_loss"))
+    target = parse_sniper_value(payload.get("take_profit"))
+    if entry is None or stop is None or target is None:
+        return
+    risk = entry - stop if direction == "long" else stop - entry
+    reward = target - entry if direction == "long" else entry - target
+    if risk <= 0 or reward <= 0:
+        return
+    ratio = reward / risk
+    payload["calculated_risk_reward"] = round(ratio, 4)
+    if language == "zh":
+        payload["risk_reward"] = (
+            f"1:{ratio:.2f}（按入场 {entry:g}、止损 {stop:g}、止盈 {target:g} 重新计算）"
+        )
+    else:
+        payload["risk_reward"] = (
+            f"1:{ratio:.2f} (recalculated from entry {entry:g}, stop {stop:g}, target {target:g})"
+        )
+
+
 def align_btc_execution_plans(
     result: AnalysisResult,
     *,
@@ -1780,6 +1808,11 @@ def align_btc_execution_plans(
         language=normalize_report_language(result.report_language),
     )
     _apply_btc_volatility_risk_overlay(
+        battle_plan,
+        technical_context=technical_context,
+        language=normalize_report_language(result.report_language),
+    )
+    _apply_btc_tradeability_guard(
         battle_plan,
         technical_context=technical_context,
         language=normalize_report_language(result.report_language),
@@ -1861,6 +1894,7 @@ def align_btc_execution_plans(
                 payload.get("position_multiplier_cap"),
             ),
         )
+        _normalize_btc_risk_reward(payload, direction=direction, language=language)
         if "position_multiplier_cap" in payload:
             payload["position_multiplier_cap"] = plan.position_multiplier_cap
         errors = CryptoBacktestEngine.validate_execution_plan(plan=plan, config=config)
@@ -1896,6 +1930,169 @@ def _coerce_position_multiplier_cap(value: Any, *, default: float = 1.0) -> floa
     if not math.isfinite(parsed):
         parsed = default
     return max(0.0, min(parsed, 1.0))
+
+
+def _apply_btc_tradeability_guard(
+    battle_plan: Dict[str, Any],
+    *,
+    technical_context: Optional[Dict[str, Any]],
+    language: str,
+) -> None:
+    """Translate high-risk indicator conflicts and missing context into executable state."""
+    if not isinstance(technical_context, dict):
+        return
+    timeframes = technical_context.get("timeframes")
+    timeframes = timeframes if isinstance(timeframes, dict) else {}
+    daily = timeframes.get("daily") if isinstance(timeframes.get("daily"), dict) else technical_context
+    hourly = timeframes.get("hourly") if isinstance(timeframes.get("hourly"), dict) else {}
+    intraday = technical_context.get("intraday")
+    intraday = intraday if isinstance(intraday, dict) else {}
+
+    def text(payload: Dict[str, Any], *path: str) -> str:
+        current: Any = payload
+        for key in path:
+            if not isinstance(current, dict):
+                return ""
+            current = current.get(key)
+        return str(current or "").strip().lower()
+
+    def disable(payload: Dict[str, Any], reason_key: str, reason_zh: str, reason_en: str) -> None:
+        reason = reason_zh if language == "zh" else reason_en
+        payload["enabled"] = False
+        payload["direction"] = "wait"
+        payload["tradeability_status"] = "blocked"
+        payload["tradeability_reasons"] = [reason_key]
+        payload["no_trade_reason"] = reason
+        payload["reason"] = reason
+        ladder = payload.get("execution_ladder")
+        if isinstance(ladder, dict):
+            ladder["current_action"] = "wait"
+            trial_entry = ladder.get("trial_entry")
+            if isinstance(trial_entry, dict):
+                trial_entry["enabled"] = False
+
+    for plan_key, source in (("long_plan", daily), ("intraday_plan", hourly or daily)):
+        payload = battle_plan.get(plan_key)
+        if not isinstance(payload, dict) or payload.get("enabled") is False:
+            continue
+        if str(payload.get("direction") or "").strip().lower() != "long":
+            continue
+        price_action = text(source, "price_action", "state")
+        vwap_position = text(source, "vwap", "price_position")
+        volume_state = text(source, "volume", "confirmation")
+        breakout_confirmed = (
+            price_action == "breakout"
+            or (source.get("price_action") or {}).get("close_above_resistance") is True
+        )
+        if price_action == "bearish_push" and vwap_position == "below":
+            disable(
+                payload,
+                "long_bearish_push_below_vwap",
+                "价格行为向下且收盘位于 VWAP 下方，多单降级为等待。",
+                "Bearish price action below VWAP blocks the long plan until confirmation improves.",
+            )
+            continue
+        if volume_state == "low" and not breakout_confirmed:
+            disable(
+                payload,
+                "long_low_volume_without_close_breakout",
+                "量能偏低且没有收盘突破确认，多单降级为等待。",
+                "Low volume without a confirmed close breakout blocks the long plan.",
+            )
+
+    intraday_plan = battle_plan.get("intraday_plan")
+    if isinstance(intraday_plan, dict) and intraday_plan.get("enabled") is not False:
+        direction = str(intraday_plan.get("direction") or "").strip().lower()
+        daily_bias = text(intraday, "daily_bias")
+        hourly_bias = text(intraday, "hourly_bias")
+        alignment = text(intraday, "alignment")
+        counter_daily = (
+            (direction == "long" and daily_bias == "short")
+            or (direction == "short" and daily_bias == "long")
+        )
+        if alignment == "hourly_only_wait_daily_confirmation" or (
+            counter_daily and hourly_bias in {"neutral", "wait", ""}
+        ):
+            disable(
+                intraday_plan,
+                "countertrend_without_hourly_confirmation",
+                "逆日线计划缺少小时线方向确认，当前仅允许等待。",
+                "The counter-trend plan lacks hourly confirmation and is blocked until confirmation appears.",
+            )
+
+        # Counter-trend opportunities remain available only as a separate,
+        # short-lived risk bucket. They cannot inherit the full-size trend
+        # allocation or wait indefinitely for a stale trigger.
+        countertrend = alignment in {"countertrend_long", "countertrend_short"} or counter_daily
+        if countertrend and direction in {"long", "short"}:
+            position_cap = min(_coerce_position_multiplier_cap(intraday_plan.get("position_multiplier_cap")), 0.5)
+            intraday_plan["position_multiplier_cap"] = position_cap
+            reasons = [
+                str(reason)
+                for reason in (intraday_plan.get("tradeability_reasons") or [])
+                if str(reason).strip()
+            ]
+            if "countertrend_position_cap_50pct" not in reasons:
+                reasons.append("countertrend_position_cap_50pct")
+            intraday_plan["tradeability_reasons"] = reasons
+            if intraday_plan.get("tradeability_status") not in {"blocked", "degraded_missing_context"}:
+                intraday_plan["tradeability_status"] = "countertrend_limited"
+            intraday_plan["countertrend_control"] = {
+                "position_multiplier_cap": position_cap,
+                "max_validity_bars": 6,
+                "alignment": alignment or "countertrend",
+            }
+            contract = intraday_plan.get("execution_contract")
+            entry_contract = contract.get("entry") if isinstance(contract, dict) else None
+            if isinstance(entry_contract, dict):
+                try:
+                    entry_contract["max_wait_bars"] = min(int(entry_contract.get("max_wait_bars", 24)), 6)
+                except (TypeError, ValueError):
+                    entry_contract["max_wait_bars"] = 6
+            ladder = intraday_plan.get("execution_ladder")
+            trial_entry = ladder.get("trial_entry") if isinstance(ladder, dict) else None
+            if isinstance(trial_entry, dict):
+                trial_entry["position_multiplier_cap"] = position_cap
+
+    quality_sources = {
+        "derivatives": technical_context.get("derivatives"),
+        "order_flow": (technical_context.get("derivatives") or {}).get("order_flow")
+        if isinstance(technical_context.get("derivatives"), dict) else None,
+        "macro_correlation": technical_context.get("macro_correlation"),
+    }
+    missing_shared = [
+        key for key, value in quality_sources.items()
+        if not isinstance(value, dict) or text(value, "data_quality") not in {"available", "ok", "complete"}
+    ]
+    for plan_key, source in (("long_plan", daily), ("short_plan", daily), ("intraday_plan", hourly or daily)):
+        payload = battle_plan.get(plan_key)
+        if not isinstance(payload, dict) or str(payload.get("direction") or "").strip().lower() not in {"long", "short"}:
+            continue
+        volatility = source.get("volatility") if isinstance(source, dict) else None
+        forecast = volatility.get("forecast") if isinstance(volatility, dict) else None
+        missing_layers = list(missing_shared)
+        if not isinstance(forecast, dict) or text(forecast, "data_quality") not in {"available", "ok", "complete"}:
+            missing_layers.append("volatility_forecast")
+        if not missing_layers:
+            payload.setdefault("tradeability_status", "normal")
+            continue
+        position_cap = min(_coerce_position_multiplier_cap(payload.get("position_multiplier_cap")), 0.5)
+        payload["tradeability_status"] = "degraded_missing_context"
+        existing_reasons = [
+            str(reason)
+            for reason in (payload.get("tradeability_reasons") or [])
+            if str(reason).strip()
+        ]
+        payload["tradeability_reasons"] = existing_reasons + [
+            f"missing:{layer}"
+            for layer in missing_layers
+            if f"missing:{layer}" not in existing_reasons
+        ]
+        payload["position_multiplier_cap"] = position_cap
+        ladder = payload.get("execution_ladder")
+        trial_entry = ladder.get("trial_entry") if isinstance(ladder, dict) else None
+        if isinstance(trial_entry, dict):
+            trial_entry["position_multiplier_cap"] = position_cap
 
 
 def _apply_btc_volatility_risk_overlay(

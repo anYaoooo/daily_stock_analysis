@@ -16,7 +16,14 @@ from sqlalchemy.sql import func
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.config import Config
-from src.storage import Base, CURRENT_SCHEMA_VERSION, DatabaseManager, DatabaseSchemaMigration, StockDaily
+from src.storage import (
+    Base,
+    CURRENT_SCHEMA_VERSION,
+    CryptoBacktestResult,
+    DatabaseManager,
+    DatabaseSchemaMigration,
+    StockDaily,
+)
 
 class TestStorage(unittest.TestCase):
 
@@ -45,13 +52,53 @@ class TestStorage(unittest.TestCase):
                 "signal_triggered_at",
                 "order_status",
                 "order_rejection_reason",
+                "entry_triggered",
+                "entry_triggered_at",
                 "missed_favorable_move_pct",
                 "missed_adverse_move_pct",
+                "mfe_pct",
+                "mae_pct",
+                "direction_correct_raw",
             }.issubset(columns)
         )
 
         DatabaseManager.reset_instance()
         temp_dir.cleanup()
+
+    def test_crypto_backtest_state_migration_backfills_price_trajectory(self):
+        DatabaseManager.reset_instance()
+        db = DatabaseManager(db_url="sqlite:///:memory:")
+        with db.get_session() as session:
+            session.add(
+                CryptoBacktestResult(
+                    analysis_history_id=1,
+                    code="BTCUSDT",
+                    plan_type="intraday",
+                    horizon="intraday",
+                    direction="long",
+                    engine_version="btc-plan-v5",
+                    eval_status="completed",
+                    entry_price=100.0,
+                    simulated_entry_price=100.0,
+                    max_high=108.0,
+                    min_low=99.0,
+                    simulated_exit_reason="fill_quality_gate_rejected",
+                )
+            )
+            session.commit()
+
+        db._normalize_crypto_backtest_execution_states()
+
+        with db.get_session() as session:
+            row = session.execute(select(CryptoBacktestResult)).scalar_one()
+            self.assertTrue(row.signal_triggered)
+            self.assertEqual(row.order_status, "rejected")
+            self.assertFalse(row.entry_triggered)
+            self.assertAlmostEqual(row.mfe_pct, 8.0)
+            self.assertAlmostEqual(row.mae_pct, 1.0)
+            self.assertTrue(row.direction_correct_raw)
+
+        DatabaseManager.reset_instance()
 
     def test_database_initialization_records_schema_version(self):
         DatabaseManager.reset_instance()

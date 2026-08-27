@@ -128,6 +128,9 @@ class CryptoBacktestResultItem(BaseModel):
     order_rejection_reason: Optional[str] = None
     entry_triggered: Optional[bool] = None
     entry_triggered_at: Optional[str] = None
+    mfe_pct: Optional[float] = None
+    mae_pct: Optional[float] = None
+    direction_correct_raw: Optional[bool] = None
     direction_correct: Optional[bool] = None
     outcome: Optional[str] = None
     hit_stop_loss: Optional[bool] = None
@@ -158,6 +161,11 @@ class CryptoBacktestHistoryPlan(BaseModel):
     risk_reward: Optional[str] = None
     position_hint: Optional[str] = None
     confidence: Optional[str] = None
+    tradeability_status: Optional[str] = None
+    tradeability_reasons: List[str] = Field(default_factory=list)
+    position_multiplier_cap: Optional[float] = None
+    countertrend_control: Optional[Dict[str, Any]] = None
+    plan_quality: Optional[Dict[str, Any]] = None
     backtestable: bool
     quality_status: str
     missing_fields: List[str] = Field(default_factory=list)
@@ -285,6 +293,9 @@ class CryptoBacktestMetrics(BaseModel):
     loss_count: int
     neutral_count: int
     direction_accuracy_pct: Optional[float] = None
+    direction_accuracy_raw_pct: Optional[float] = None
+    signal_quality_rate_pct: Optional[float] = None
+    execution_fill_rate_pct: Optional[float] = None
     win_rate_pct: Optional[float] = None
     avg_simulated_return_pct: Optional[float] = None
     plan_type_breakdown: Dict[str, Any] = Field(default_factory=dict)

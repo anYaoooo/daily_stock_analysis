@@ -46,7 +46,7 @@
 - `direction`：多/空方向，日内计划会额外检查 enabled 状态。
 - `execution_contract`：版本为 `btc-execution-v1` 的机器执行契约，完整表达执行模板、价格触达、收盘、量比、VWAP、确认 bars、等待 bars、成交方式和最长持有 bars。
 
-计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。新报告额外提供 `execution_ladder`，按试仓（`trial_entry`）、确认加仓（`confirmation_add`）和失效退出（`invalidation`）分步展示。顶层 `entry_price`、`entry_zone`、`trigger_condition` 和 `execution_contract` 始终对应试仓层，因此回测不把确认加仓当成第二笔模拟成交，也不会从自然语言猜测加仓条件；`stop_loss` 与 `invalidation.price` 使用同一失效位。`execution_contract.entry.setup_type` 支持 `breakout` 和 `pullback`：突破计划要求量能确认，回踩计划可用固定价格触达加收盘收复/承压表达，不强制要求量比门槛。BTC 分析完成后会复用 v5 的静态执行校验：不满足风险收益、成本覆盖、量能或执行契约要求的方案会保留原计划，但标注为 `validation_status=failed`，仅供人工复核，不会被误写成已通过校验的策略。日内计划额外检查闭合日线与小时线的方向：两周期已同向、且均与计划方向相反时，计划会降为 `direction=wait` 并写明等待原因；小时线本身支持的逆日线短线机会仍允许保留。EWMA 风险覆盖生成的 `position_multiplier_cap` 会被回测仓位计算实际消费，同时作用于风险预算、最大名义仓位和成交数量；若计划已有更严格的仓位上限，系统只保留两者中的较小值，不会因重复对齐或普通波动状态放大仓位。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。v4 引入的标记价格、资金费率、强平与 maker/taker 成本在 v5 中继续保留；v5 额外增加计划价和实际成交价两阶段质量门槛，旧 v2/v3/v4 结果保留审计但不与 v5 指标混合。
+计划结构还会透出 `entry_zone`、`invalid_condition`、`risk_reward`、`position_hint`、`confidence` 和 `no_trade_reason`，用于报告展示和人工复盘。新报告额外提供 `execution_ladder`，按试仓（`trial_entry`）、确认加仓（`confirmation_add`）和失效退出（`invalidation`）分步展示。顶层 `entry_price`、`entry_zone`、`trigger_condition` 和 `execution_contract` 始终对应试仓层，因此回测不把确认加仓当成第二笔模拟成交，也不会从自然语言猜测加仓条件；`stop_loss` 与 `invalidation.price` 使用同一失效位。`execution_contract.entry.setup_type` 支持 `breakout` 和 `pullback`：突破计划要求量能确认，回踩计划可用固定价格触达加收盘收复/承压表达，不强制要求量比门槛。BTC 分析完成后会复用 v5 的静态执行校验：不满足风险收益、成本覆盖、量能或执行契约要求的方案会保留原计划，但标注为 `validation_status=failed`，仅供人工复核，不会被误写成已通过校验的策略。日内计划额外检查闭合日线与小时线的方向：两周期已同向、且均与计划方向相反时，计划会降为 `direction=wait` 并写明等待原因；小时线本身支持的逆日线短线机会仍允许保留。多单同时出现 `bearish_push` 与 VWAP 下方，或低量且没有收盘突破确认时，也会由确定性可交易门直接改为等待；逆日线且缺少小时线确认的日内计划同样阻断。仍保留的逆日线短线计划会写入 `tradeability_status=countertrend_limited`，将仓位乘数上限限制为 50%，并把入场等待窗口收紧到最多 6 根小时线；限仓和有效期会透传到回测使用的执行契约。衍生品、订单流、EWMA 或宏观层缺失时不再解释为中性，而是写入 `tradeability_status=degraded_missing_context`，并把仓位乘数上限收紧至 50%；已有更严格上限时继续保留更严格值。EWMA 风险覆盖生成的 `position_multiplier_cap` 会被回测仓位计算实际消费，同时作用于风险预算、最大名义仓位和成交数量；若计划已有更严格的仓位上限，系统只保留两者中的较小值，不会因重复对齐或普通波动状态放大仓位。报告自然语言与回测必须引用同一份 `execution_contract`；缺失契约、契约不完整或包含不支持条件的交易计划会标记为 `invalid_plan/skipped`，不会从文本猜测条件，也不会降级成触价成交。明确 `direction=wait` 的观望计划标记为 `no_trade_plan/skipped`，不把方向或执行契约误报为缺失，也不计入有效样本。v4 引入的标记价格、资金费率、强平与 maker/taker 成本在 v5 中继续保留；v5 额外增加计划价和实际成交价两阶段质量门槛，旧 v2/v3/v4 结果保留审计但不与 v5 指标混合。
 
 同一 BTC、同一周期、同一方向已有活动 DecisionSignal 时，新分析产生的同方向候选计划会归档，并记录冻结它的活动信号；只有原计划过期、失效或方向反转时才允许新计划接管。观望信号不会阻挡新的可交易计划。这个生命周期约束用于避免趋势行情中每次分析都抬高入场价，导致计划持续追价而永远无法触发。
 
@@ -192,9 +192,9 @@ r_multiple = net_pnl / risk_budget
 默认按账户风险预算和止损距离推导仓位。
 
 ```text
-initial_equity = CRYPTO_BACKTEST_INITIAL_EQUITY
-risk_budget = initial_equity * CRYPTO_BACKTEST_RISK_PER_TRADE_PCT / 100
-max_notional = initial_equity * CRYPTO_BACKTEST_MAX_NOTIONAL_PCT / 100 * CRYPTO_BACKTEST_LEVERAGE
+equity_before = previous_completed_equity if CRYPTO_BACKTEST_DYNAMIC_EQUITY_SIZING=true else CRYPTO_BACKTEST_INITIAL_EQUITY
+risk_budget = equity_before * CRYPTO_BACKTEST_RISK_PER_TRADE_PCT / 100
+max_notional = equity_before * CRYPTO_BACKTEST_MAX_NOTIONAL_PCT / 100 * CRYPTO_BACKTEST_LEVERAGE
 ```
 
 若计划有有效止损：
@@ -250,7 +250,7 @@ else:
     outcome = neutral
 ```
 
-方向正确率只统计已经触发入场且非中性的计划。
+`direction_accuracy_pct` 只统计独立成交且非中性的计划，代表含成本的成交后净结果命中率；`direction_accuracy_raw_pct` 使用信号触发后的纯价格 MFE/MAE 判断原始方向，不受手续费、滑点和资金费影响。两者分母必须在汇总诊断的 `metric_denominators` 中分别解释。
 
 ## 5. 指标体系
 
@@ -270,6 +270,8 @@ else:
 | `order_status` | `filled` / `rejected` / `pending_fill` / `not_triggered` 等委托状态 |
 | `order_rejection_reason` | 信号成立但下一根实际成交价未通过风控时的拒单原因 |
 | `entry_triggered` | 是否已经实际模拟成交 |
+| `mfe_pct` / `mae_pct` | 信号触发后纯价格最大有利 / 不利偏移（不含成本） |
+| `direction_correct_raw` | `mfe_pct > mae_pct` 时的原始方向命中标记 |
 | `missed_favorable_move_pct` | 拒单后评估窗口内相对拒绝价的最大有利波动 |
 | `missed_adverse_move_pct` | 拒单后评估窗口内相对拒绝价的最大不利波动 |
 | `first_hit` | `take_profit` / `stop_loss` / `ambiguous` / `neither` |
@@ -293,6 +295,7 @@ else:
 | 字段 | 含义 |
 | --- | --- |
 | `initial_equity` | 初始权益 |
+| `equity_before` | 本笔交易入场前可用权益；动态 sizing 开启时用于风险预算和净收益分母 |
 | `risk_budget` | 单笔风险预算 |
 | `position_notional` | 名义仓位 |
 | `quantity` | 模拟交易数量 |
@@ -327,13 +330,19 @@ else:
 | `win_count` | 胜数 |
 | `loss_count` | 负数 |
 | `neutral_count` | 中性数 |
-| `direction_accuracy_pct` | 方向正确率 |
+| `direction_accuracy_pct` | 成交后非中性净结果命中率（仅独立成交，已含成本） |
+| `direction_accuracy_raw_pct` | 原始方向命中率（信号触发后，以纯价格 MFE/MAE 判断，不含成本） |
+| `signal_quality_rate_pct` | 信号质量率：已形成信号 / 已完成评估 |
+| `execution_fill_rate_pct` | 执行成交率：实际成交 / 已形成信号 |
 | `win_rate_pct` | 胜率，胜 / (胜 + 负) |
 | `avg_simulated_return_pct` | 平均单笔账户净收益率 |
 | `diagnostics.signal_triggered_count` | 已形成交易信号的计划数 |
 | `diagnostics.rejected_order_count` | 信号形成后因成交价质量门槛被拒绝的委托数 |
 | `diagnostics.order_fill_rate_pct` | 实际成交数 / 信号形成数 |
 | `diagnostics.avg_missed_favorable_move_pct` | 拒单后最大有利波动的样本均值 |
+| `diagnostics.plan_quality_summary` | 计划质量四维分数（方向、位置、风险收益、执行）的样本均值 |
+| `diagnostics.cost_sensitivity` | 手续费 5/10/15 bps 与滑点 2/5/10 bps 的 3×3 成本敏感性矩阵 |
+| `diagnostics.risk_controls` | 组合风险、连续亏损和单日亏损护栏的审计结果；`would_block_new_trade=true` 时建议暂停新增交易 |
 
 交易风险指标：
 
@@ -482,6 +491,10 @@ curl -X DELETE "http://127.0.0.1:8000/api/v1/backtest/crypto/results/123?plan_ty
 | `CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE` | `0.005` | v4/v5 永续合约强平估算使用的维持保证金率 |
 | `CRYPTO_BACKTEST_MINIMUM_RISK_REWARD` | `1.2` | v5 在计划价和实际成交价阶段要求的最低风险收益比 |
 | `CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO` | `1.0` | v5 可交易计划中 `volume_ratio_gte` 的最低阈值 |
+| `CRYPTO_BACKTEST_DYNAMIC_EQUITY_SIZING` | `true` | 是否按上一笔完成后的权益计算下一笔风险预算；关闭后使用固定初始权益 |
+| `CRYPTO_BACKTEST_MAX_PORTFOLIO_RISK_PCT` | `2.0` | 组合风险审计阈值（仅诊断） |
+| `CRYPTO_BACKTEST_CONSECUTIVE_LOSS_COOLDOWN` | `3` | 连续亏损后触发冷却的审计阈值（仅诊断） |
+| `CRYPTO_BACKTEST_DAILY_LOSS_LIMIT_PCT` | `3.0` | 单日亏损保护审计阈值（仅诊断） |
 
 ## 8. 当前评估
 

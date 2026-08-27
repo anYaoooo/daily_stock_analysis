@@ -109,6 +109,39 @@ def test_valid_btc_trade_plan_keeps_directional_advice() -> None:
     assert aligned.decision_type == "buy"
 
 
+def test_confirmation_price_must_preserve_minimum_risk_reward() -> None:
+    contract = _contract()
+    contract["entry"]["conditions"][0]["value"] = 108
+    result = AnalysisResult(
+        code="BTC",
+        name="Bitcoin",
+        sentiment_score=70,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="等待回踩",
+        dashboard={
+            "battle_plan": {
+                "long_plan": {
+                    "direction": "long",
+                    "entry_price": 100,
+                    "stop_loss": 95,
+                    "take_profit": 110,
+                    "risk_reward": "1:9.99（模型误算）",
+                    "execution_contract": contract,
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(result, runtime_config=_runtime_config())
+
+    plan = aligned.dashboard["battle_plan"]["long_plan"]
+    assert plan["validation_status"] == "failed"
+    assert "risk_reward_below_minimum_at_confirmation" in plan["validation_errors"]
+    assert plan["calculated_risk_reward"] == 2.0
+    assert plan["risk_reward"] == "1:2.00（按入场 100、止损 95、止盈 110 重新计算）"
+
+
 def test_execution_ladder_mismatch_is_annotated_on_plan() -> None:
     result = AnalysisResult(
         code="BTCUSDT",
@@ -262,6 +295,192 @@ def test_aligned_timeframes_block_opposed_intraday_plan() -> None:
     assert "日线与小时线均偏多" in plan["no_trade_reason"]
     assert plan["execution_ladder"]["current_action"] == "wait"
     assert plan["execution_ladder"]["trial_entry"]["enabled"] is False
+
+
+def test_bearish_push_below_vwap_blocks_long_plan() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=60,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="买入",
+        dashboard={
+            "battle_plan": {
+                "long_plan": {
+                    "direction": "long",
+                    "entry_price": 100,
+                    "stop_loss": 95,
+                    "take_profit": 110,
+                    "execution_contract": _contract(),
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context={
+            "timeframes": {
+                "daily": {
+                    "price_action": {"state": "bearish_push"},
+                    "vwap": {"price_position": "below"},
+                    "volume": {"confirmation": "normal"},
+                }
+            }
+        },
+    )
+
+    plan = aligned.dashboard["battle_plan"]["long_plan"]
+    assert plan["enabled"] is False
+    assert plan["direction"] == "wait"
+    assert plan["tradeability_status"] == "blocked"
+    assert plan["tradeability_reasons"] == ["long_bearish_push_below_vwap"]
+    assert plan["validation_status"] == "skipped"
+
+
+def test_low_volume_without_breakout_blocks_long_plan() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=60,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="买入",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "long",
+                    "entry_price": 100,
+                    "stop_loss": 95,
+                    "take_profit": 110,
+                    "execution_contract": _contract(),
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context={
+            "timeframes": {
+                "hourly": {
+                    "price_action": {"state": "range", "close_above_resistance": False},
+                    "vwap": {"price_position": "above"},
+                    "volume": {"confirmation": "low"},
+                }
+            }
+        },
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["direction"] == "wait"
+    assert plan["tradeability_reasons"] == ["long_low_volume_without_close_breakout"]
+
+
+def test_countertrend_intraday_plan_is_capped_and_expires_early() -> None:
+    contract = _contract()
+    contract["entry"]["max_wait_bars"] = 24
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=50,
+        trend_prediction="震荡",
+        report_language="zh",
+        operation_advice="观望",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "long",
+                    "entry_price": 100,
+                    "stop_loss": 95,
+                    "take_profit": 110,
+                    "execution_contract": contract,
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context={
+            "intraday": {
+                "alignment": "countertrend_long",
+                "daily_bias": "short",
+                "hourly_bias": "long",
+            },
+            "derivatives": {
+                "data_quality": "available",
+                "order_flow": {"data_quality": "available"},
+            },
+            "macro_correlation": {"data_quality": "available"},
+            "timeframes": {
+                "hourly": {
+                    "volatility": {
+                        "forecast": {
+                            "data_quality": "available",
+                            "position_multiplier_cap": 1.0,
+                        }
+                    }
+                }
+            },
+        },
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["tradeability_status"] == "countertrend_limited"
+    assert plan["position_multiplier_cap"] == 0.5
+    assert "countertrend_position_cap_50pct" in plan["tradeability_reasons"]
+    assert plan["countertrend_control"]["max_validity_bars"] == 6
+    assert plan["execution_contract"]["entry"]["max_wait_bars"] == 6
+
+
+def test_missing_context_degrades_position_cap_without_changing_direction() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=60,
+        trend_prediction="看空",
+        report_language="zh",
+        operation_advice="卖出",
+        dashboard={
+            "battle_plan": {
+                "short_plan": {
+                    "direction": "short",
+                    "entry_price": 100,
+                    "stop_loss": 105,
+                    "take_profit": 90,
+                    "execution_contract": {
+                        **_contract(),
+                        "entry": {
+                            **_contract()["entry"],
+                            "conditions": [
+                                {"type": "close_below", "value": 100},
+                                {"type": "volume_ratio_gte", "value": 1.0},
+                            ],
+                        },
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context={"timeframes": {"daily": {}}},
+    )
+
+    plan = aligned.dashboard["battle_plan"]["short_plan"]
+    assert plan["direction"] == "short"
+    assert plan["tradeability_status"] == "degraded_missing_context"
+    assert plan["position_multiplier_cap"] == 0.5
+    assert "missing:volatility_forecast" in plan["tradeability_reasons"]
 
 
 def test_extreme_ewma_volatility_caps_plan_and_trial_position() -> None:

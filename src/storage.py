@@ -527,6 +527,9 @@ class CryptoBacktestResult(Base):
     order_rejection_reason = Column(String(128))
     entry_triggered = Column(Boolean)
     entry_triggered_at = Column(DateTime)
+    mfe_pct = Column(Float)
+    mae_pct = Column(Float)
+    direction_correct_raw = Column(Boolean, nullable=True)
 
     start_price = Column(Float)
     end_close = Column(Float)
@@ -588,6 +591,9 @@ class CryptoBacktestSummary(Base):
     neutral_count = Column(Integer, default=0)
 
     direction_accuracy_pct = Column(Float)
+    direction_accuracy_raw_pct = Column(Float)
+    signal_quality_rate_pct = Column(Float)
+    execution_fill_rate_pct = Column(Float)
     win_rate_pct = Column(Float)
     avg_simulated_return_pct = Column(Float)
 
@@ -954,8 +960,18 @@ _CRYPTO_BACKTEST_EXECUTION_COLUMN_SQL: Dict[str, str] = {
     "signal_triggered_at": "DATETIME",
     "order_status": "VARCHAR(24)",
     "order_rejection_reason": "VARCHAR(128)",
+    "entry_triggered": "BOOLEAN",
+    "entry_triggered_at": "DATETIME",
     "missed_favorable_move_pct": "FLOAT",
     "missed_adverse_move_pct": "FLOAT",
+    "mfe_pct": "FLOAT",
+    "mae_pct": "FLOAT",
+    "direction_correct_raw": "BOOLEAN",
+}
+_CRYPTO_BACKTEST_SUMMARY_COLUMN_SQL: Dict[str, str] = {
+    "direction_accuracy_raw_pct": "FLOAT",
+    "signal_quality_rate_pct": "FLOAT",
+    "execution_fill_rate_pct": "FLOAT",
 }
 _CRYPTO_MARKET_DATA_COLUMN_SQL: Dict[str, str] = {
     "funding_complete": "BOOLEAN NOT NULL DEFAULT 0",
@@ -1212,6 +1228,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_llm_usage_telemetry_columns()
             self._ensure_backtest_timeframe_columns()
             self._ensure_crypto_backtest_execution_columns()
+            self._ensure_crypto_backtest_summary_columns()
+            self._normalize_crypto_backtest_execution_states()
             self._ensure_crypto_market_data_columns()
             self._ensure_schema_migration_record()
 
@@ -1402,6 +1420,85 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                             time.sleep(delay)
                         continue
                     raise
+
+    def _ensure_crypto_backtest_summary_columns(self) -> None:
+        """Add derived metric columns to existing SQLite summary tables."""
+        if not self._is_sqlite_engine:
+            return
+        table_name = CryptoBacktestSummary.__tablename__
+        try:
+            existing = {
+                column["name"]
+                for column in inspect(self._engine).get_columns(table_name)
+            }
+        except Exception as exc:
+            logger.warning("BTC 回测汇总字段检查失败，跳过 SQLite 补列: %s", exc)
+            return
+        for column, column_type in _CRYPTO_BACKTEST_SUMMARY_COLUMN_SQL.items():
+            if column in existing:
+                continue
+            try:
+                with self._engine.begin() as connection:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column} {column_type}"
+                    )
+                existing.add(column)
+            except OperationalError as exc:
+                if self._is_sqlite_duplicate_column_error(exc, column):
+                    existing.add(column)
+                    continue
+                raise
+
+    def _normalize_crypto_backtest_execution_states(self) -> None:
+        """Backfill lifecycle fields so legacy rows use one explicit contract."""
+        if not self._is_sqlite_engine:
+            return
+        table = CryptoBacktestResult.__tablename__
+        statements = (
+            f"UPDATE {table} SET signal_triggered = CASE "
+            "WHEN signal_triggered IS NOT NULL THEN signal_triggered "
+            "WHEN entry_triggered = 1 OR order_status = 'filled' OR simulated_exit_reason = 'fill_quality_gate_rejected' THEN 1 "
+            "ELSE 0 END",
+            f"UPDATE {table} SET order_status = CASE "
+            "WHEN order_status IS NOT NULL AND trim(order_status) <> '' THEN order_status "
+            "WHEN entry_triggered = 1 THEN 'filled' "
+            "WHEN simulated_exit_reason = 'fill_quality_gate_rejected' THEN 'rejected' "
+            "WHEN eval_status = 'insufficient_data' THEN 'not_evaluated' "
+            "WHEN eval_status = 'skipped' THEN 'not_applicable' "
+            "ELSE 'not_triggered' END",
+            f"UPDATE {table} SET entry_triggered = CASE "
+            "WHEN entry_triggered IS NOT NULL THEN entry_triggered "
+            "WHEN order_status = 'filled' THEN 1 ELSE 0 END",
+            # Legacy rows predate the persisted cost-free trajectory fields.
+            # Use the same reference/extrema semantics as the engine fallback
+            # so historical API results and recomputed summaries agree.
+            f"UPDATE {table} SET mfe_pct = CASE "
+            "WHEN mfe_pct IS NOT NULL THEN mfe_pct "
+            "WHEN signal_triggered = 1 AND direction IN ('long', 'short') "
+            "AND COALESCE(simulated_entry_price, start_price, entry_price) > 0 "
+            "AND max_high IS NOT NULL AND min_low IS NOT NULL THEN "
+            "CASE WHEN direction = 'short' THEN MAX((COALESCE(simulated_entry_price, start_price, entry_price) - min_low) / COALESCE(simulated_entry_price, start_price, entry_price) * 100.0, 0.0) "
+            "ELSE MAX((max_high - COALESCE(simulated_entry_price, start_price, entry_price)) / COALESCE(simulated_entry_price, start_price, entry_price) * 100.0, 0.0) END "
+            "ELSE NULL END",
+            f"UPDATE {table} SET mae_pct = CASE "
+            "WHEN mae_pct IS NOT NULL THEN mae_pct "
+            "WHEN signal_triggered = 1 AND direction IN ('long', 'short') "
+            "AND COALESCE(simulated_entry_price, start_price, entry_price) > 0 "
+            "AND max_high IS NOT NULL AND min_low IS NOT NULL THEN "
+            "CASE WHEN direction = 'short' THEN MAX((max_high - COALESCE(simulated_entry_price, start_price, entry_price)) / COALESCE(simulated_entry_price, start_price, entry_price) * 100.0, 0.0) "
+            "ELSE MAX((COALESCE(simulated_entry_price, start_price, entry_price) - min_low) / COALESCE(simulated_entry_price, start_price, entry_price) * 100.0, 0.0) END "
+            "ELSE NULL END",
+            f"UPDATE {table} SET direction_correct_raw = CASE "
+            "WHEN direction_correct_raw IS NOT NULL THEN direction_correct_raw "
+            "WHEN mfe_pct IS NOT NULL AND mae_pct IS NOT NULL THEN CASE WHEN mfe_pct > mae_pct THEN 1 ELSE 0 END "
+            "ELSE NULL END",
+        )
+        try:
+            with self._engine.begin() as connection:
+                for statement in statements:
+                    connection.exec_driver_sql(statement)
+        except OperationalError as exc:
+            logger.warning("BTC 回测执行状态规范化失败: %s", exc)
 
     def _ensure_crypto_market_data_columns(self) -> None:
         """Add additive metadata required by historical crypto backfills."""

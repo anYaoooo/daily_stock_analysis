@@ -65,6 +65,10 @@ class CryptoPlanBacktestConfig:
     maintenance_margin_rate: float = 0.005
     minimum_risk_reward: float = 1.2
     minimum_volume_ratio: float = 1.0
+    dynamic_equity_sizing: bool = True
+    max_portfolio_risk_pct: float = 2.0
+    consecutive_loss_cooldown: int = 3
+    daily_loss_limit_pct: float = 3.0
 
 
 class CryptoBacktestEngine:
@@ -78,6 +82,7 @@ class CryptoBacktestEngine:
         forward_bars: Sequence[CryptoBarLike],
         config: CryptoPlanBacktestConfig,
         evaluation_complete: bool = True,
+        equity_before: Optional[float] = None,
     ) -> dict[str, Any]:
         if str(config.engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4", "btc-plan-v5"}:
             return cls._evaluate_contract_plan(
@@ -85,9 +90,15 @@ class CryptoBacktestEngine:
                 forward_bars=forward_bars,
                 config=config,
                 evaluation_complete=evaluation_complete,
+                equity_before=equity_before,
             )
 
-        return cls._evaluate_legacy_plan(plan=plan, forward_bars=forward_bars, config=config)
+        return cls._evaluate_legacy_plan(
+            plan=plan,
+            forward_bars=forward_bars,
+            config=config,
+            equity_before=equity_before,
+        )
 
     @classmethod
     def validate_execution_plan(
@@ -116,13 +127,32 @@ class CryptoBacktestEngine:
         if str(config.engine_version).strip().lower() != "btc-plan-v5":
             return []
 
-        return cls._plan_quality_errors(
+        errors = cls._plan_quality_errors(
             plan=plan,
             contract=contract,
             entry_price=float(plan.entry_price),
             config=config,
             require_volume_gate=True,
         )
+        confirmation_entry = cls._confirmation_entry_boundary(
+            contract=contract,
+            direction=direction,
+            planned_entry=float(plan.entry_price),
+        )
+        if confirmation_entry is not None:
+            confirmation_errors = cls._plan_quality_errors(
+                plan=plan,
+                contract=contract,
+                entry_price=confirmation_entry,
+                config=config,
+                require_volume_gate=False,
+            )
+            errors.extend(
+                f"{error}_at_confirmation"
+                for error in confirmation_errors
+                if error not in errors
+            )
+        return errors
 
     @classmethod
     def _evaluate_legacy_plan(
@@ -131,6 +161,7 @@ class CryptoBacktestEngine:
         plan: CryptoPlan,
         forward_bars: Sequence[CryptoBarLike],
         config: CryptoPlanBacktestConfig,
+        equity_before: Optional[float] = None,
     ) -> dict[str, Any]:
         direction = (plan.direction or "").strip().lower()
         if direction not in {"long", "short"}:
@@ -193,11 +224,17 @@ class CryptoBacktestEngine:
             stop_loss=plan.stop_loss,
             config=config,
             position_multiplier_cap=plan.position_multiplier_cap,
+            equity=equity_before if config.dynamic_equity_sizing else None,
         )
         simulated_return_pct = trade["net_return_pct"]
         outcome, direction_correct = cls._classify_return(
             simulated_return_pct=simulated_return_pct,
             neutral_band_pct=config.neutral_band_pct,
+        )
+        price_trajectory = cls._price_trajectory_metrics(
+            direction=direction,
+            reference_price=float(plan.entry_price),
+            trade_bars=trade_bars,
         )
 
         return {
@@ -228,6 +265,7 @@ class CryptoBacktestEngine:
                 "gross_return_pct": gross_return_pct,
                 "execution": cls._execution_config(config),
                 "trade": trade,
+                "price_trajectory": price_trajectory,
             },
         }
 
@@ -239,6 +277,7 @@ class CryptoBacktestEngine:
         forward_bars: Sequence[CryptoBarLike],
         config: CryptoPlanBacktestConfig,
         evaluation_complete: bool,
+        equity_before: Optional[float] = None,
     ) -> dict[str, Any]:
         direction = (plan.direction or "").strip().lower()
         if direction not in {"long", "short"}:
@@ -393,6 +432,11 @@ class CryptoBacktestEngine:
                         "rejected_fill_price": fill_price,
                         "quality_errors": fill_quality_errors,
                         "missed_move": missed_moves,
+                        "price_trajectory": cls._price_trajectory_metrics(
+                            direction=direction,
+                            reference_price=fill_price,
+                            trade_bars=available_trade_bars[:max_holding_bars],
+                        ),
                         "execution_contract": contract,
                         "execution": cls._execution_config(config),
                     },
@@ -420,6 +464,7 @@ class CryptoBacktestEngine:
             stop_loss=plan.stop_loss,
             config=config,
             position_multiplier_cap=plan.position_multiplier_cap,
+            equity=equity_before if config.dynamic_equity_sizing else None,
         )
         if is_perpetual_engine and instrument.get("type") == "perpetual":
             liquidation = cls._evaluate_liquidation(
@@ -494,6 +539,11 @@ class CryptoBacktestEngine:
             simulated_return_pct=simulated_return_pct,
             neutral_band_pct=config.neutral_band_pct,
         )
+        price_trajectory = cls._price_trajectory_metrics(
+            direction=direction,
+            reference_price=fill_price,
+            trade_bars=trade_bars,
+        )
         return {
             **cls._base(plan, eval_status="completed"),
             "signal_triggered": True,
@@ -523,6 +573,7 @@ class CryptoBacktestEngine:
                 "execution_contract": contract,
                 "execution": cls._execution_config(config),
                 "trade": trade,
+                "price_trajectory": price_trajectory,
             },
         }
 
@@ -720,6 +771,136 @@ class CryptoBacktestEngine:
 
         return errors
 
+    @classmethod
+    def score_plan_quality(
+        cls,
+        *,
+        plan: CryptoPlan,
+        config: CryptoPlanBacktestConfig,
+        indicator_tags: Optional[dict[str, Any]] = None,
+        evaluation: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Score plan quality independently from the LLM confidence text.
+
+        Scores are diagnostic (0-100) and never override the execution state.
+        Keeping this deterministic makes the score suitable for grouping and
+        walk-forward comparisons while preserving the original plan payload.
+        """
+        direction = str(plan.direction or "").strip().lower()
+        tags = indicator_tags if isinstance(indicator_tags, dict) else {}
+        evaluation = evaluation if isinstance(evaluation, dict) else {}
+        quality_errors = set()
+        diagnostics = evaluation.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            quality_errors.update(str(item) for item in diagnostics.get("quality_errors") or [])
+
+        if direction not in {"long", "short"}:
+            direction_score = 0.0
+        else:
+            direction_score = 50.0
+            price_action = ((tags.get("price_action") or {}).get("state") or "").lower()
+            ema = ((tags.get("ema") or {}).get("structure") or "").lower()
+            vwap = ((tags.get("vwap") or {}).get("price_position") or "").lower()
+            alignment = ((tags.get("intraday") or {}).get("alignment") or "").lower()
+            if direction == "long":
+                direction_score += 15 if price_action in {"breakout", "bullish_push", "liquidity_sweep_low"} else -15 if price_action == "bearish_push" else 0
+                direction_score += 15 if ema == "bullish" else -15 if ema == "bearish" else 0
+                direction_score += 10 if vwap == "above" else -10 if vwap == "below" else 0
+                direction_score += 10 if alignment in {"aligned_long", "wait_for_long_trigger"} else -10 if alignment in {"countertrend_long", "hourly_only_wait_daily_confirmation"} else 0
+            else:
+                direction_score += 15 if price_action in {"breakdown", "bearish_push", "liquidity_sweep_high"} else -15 if price_action == "bullish_push" else 0
+                direction_score += 15 if ema == "bearish" else -15 if ema == "bullish" else 0
+                direction_score += 10 if vwap == "below" else -10 if vwap == "above" else 0
+                direction_score += 10 if alignment in {"aligned_short", "wait_for_short_trigger"} else -10 if alignment in {"countertrend_short", "hourly_only_wait_daily_confirmation"} else 0
+            if not any((tags.get(name) or {}).get(key) for name, key in (("price_action", "state"), ("ema", "structure"), ("vwap", "price_position"))):
+                direction_score = 50.0
+
+        entry = float(plan.entry_price or 0.0)
+        stop = float(plan.stop_loss or 0.0)
+        target = float(plan.take_profit or 0.0)
+        location_score = 0.0
+        if entry > 0 and stop > 0 and target > 0:
+            location_score += 30.0
+        contract, contract_errors = cls._validated_contract(plan.execution_contract, direction=direction)
+        setup = str((contract.get("entry") or {}).get("setup_type") or "").lower()
+        conditions = (contract.get("entry") or {}).get("conditions") or []
+        condition_types = {str(item.get("type") or "") for item in conditions if isinstance(item, dict)}
+        if setup in {"breakout", "pullback"}:
+            location_score += 25.0
+        if setup == "breakout" and ({"close_above", "close_below"} & condition_types):
+            location_score += 25.0
+        if setup == "pullback" and (("low_lte" in condition_types and direction == "long") or ("high_gte" in condition_types and direction == "short")):
+            location_score += 25.0
+        if condition_types:
+            location_score += 20.0
+
+        risk_reward_score = 0.0
+        if entry > 0 and stop > 0 and target > 0:
+            risk_distance = entry - stop if direction == "long" else stop - entry
+            reward_distance = target - entry if direction == "long" else entry - target
+            if risk_distance > 0 and reward_distance > 0:
+                ratio = reward_distance / risk_distance
+                risk_reward_score = min(70.0, ratio / 2.0 * 70.0)
+                target_return_pct = reward_distance / entry * 100.0
+                cost_buffer = target_return_pct - cls._estimated_round_trip_cost_pct(contract=contract, config=config)
+                if cost_buffer >= max(float(config.neutral_band_pct), 0.0):
+                    risk_reward_score += 30.0
+                elif cost_buffer > 0:
+                    risk_reward_score += 15.0
+
+        execution_score = 0.0
+        if not contract_errors:
+            execution_score += 40.0
+        if not quality_errors:
+            execution_score += 20.0
+        if evaluation.get("signal_triggered") is True:
+            execution_score += 20.0
+        if evaluation.get("entry_triggered") is True or evaluation.get("order_status") == "filled":
+            execution_score += 20.0
+        scores = {
+            "direction_score": round(max(0.0, min(direction_score, 100.0)), 2),
+            "location_score": round(max(0.0, min(location_score, 100.0)), 2),
+            "risk_reward_score": round(max(0.0, min(risk_reward_score, 100.0)), 2),
+            "execution_score": round(max(0.0, min(execution_score, 100.0)), 2),
+        }
+        return {
+            "version": "btc-plan-quality-v1",
+            "scores": scores,
+            "total_score": round(sum(scores.values()) / len(scores), 2),
+            "quality_errors": sorted(quality_errors),
+            "contract_errors": contract_errors,
+        }
+
+    @staticmethod
+    def _confirmation_entry_boundary(
+        *,
+        contract: dict[str, Any],
+        direction: str,
+        planned_entry: float,
+    ) -> Optional[float]:
+        """Estimate the least favorable entry implied by close confirmation."""
+        conditions = (contract.get("entry") or {}).get("conditions") or []
+        if direction == "long":
+            thresholds = [
+                float(condition["value"])
+                for condition in conditions
+                if condition.get("type") == "close_above" and condition.get("value") is not None
+            ]
+            if not thresholds:
+                return None
+            boundary = max(thresholds)
+            return boundary if boundary > planned_entry else None
+
+        thresholds = [
+            float(condition["value"])
+            for condition in conditions
+            if condition.get("type") == "close_below" and condition.get("value") is not None
+        ]
+        if not thresholds:
+            return None
+        boundary = min(thresholds)
+        return boundary if boundary < planned_entry else None
+
     @staticmethod
     def _estimated_round_trip_cost_pct(
         *,
@@ -797,12 +978,13 @@ class CryptoBacktestEngine:
         scope: str,
         code: Optional[str],
         engine_version: str,
+        neutral_band_pct: float = 0.2,
     ) -> dict[str, Any]:
         rows = list(results)
         completed = [row for row in rows if getattr(row, "eval_status", None) == "completed"]
         signal_triggered = [row for row in completed if cls._row_signal_triggered(row)]
         rejected_orders = [row for row in signal_triggered if cls._row_order_status(row) == "rejected"]
-        raw_triggered = [row for row in completed if getattr(row, "entry_triggered", None) is True]
+        raw_triggered = [row for row in completed if cls._row_entry_triggered(row)]
         structured_engine = str(engine_version).strip().lower() in {"btc-plan-v3", "btc-plan-v4", "btc-plan-v5"}
         if structured_engine:
             triggered, overlap_excluded = cls._independent_triggered_rows(raw_triggered)
@@ -818,6 +1000,25 @@ class CryptoBacktestEngine:
 
         correct_rows = [row for row in triggered if getattr(row, "direction_correct", None) is not None]
         correct = sum(1 for row in correct_rows if getattr(row, "direction_correct", None) is True)
+        raw_direction_rows = [
+            row for row in signal_triggered
+            if cls._price_trajectory(row).get("direction_correct") is not None
+        ]
+        raw_direction_correct = sum(
+            1 for row in raw_direction_rows
+            if cls._price_trajectory(row).get("direction_correct") is True
+        )
+        missing_layer_counts: dict[str, int] = {}
+        degraded_evaluations = 0
+        for row in rows:
+            quality = cls._diagnostics(row).get("data_quality")
+            if not isinstance(quality, dict):
+                continue
+            if quality.get("tradeability") == "degraded":
+                degraded_evaluations += 1
+            for layer in quality.get("missing_layers") or []:
+                key = str(layer)
+                missing_layer_counts[key] = missing_layer_counts.get(key, 0) + 1
         win_loss_denominator = len(wins) + len(losses)
 
         by_plan_type: dict[str, dict[str, Any]] = {}
@@ -893,6 +1094,12 @@ class CryptoBacktestEngine:
             sample_count=len(triggered),
             minimum_sample_count=100 if structured_engine else 30,
         )
+        plan_quality_summary = cls._plan_quality_summary(rows)
+        cost_sensitivity = cls._cost_sensitivity(triggered, neutral_band_pct=neutral_band_pct)
+        risk_controls = cls._risk_control_diagnostics(
+            triggered,
+            initial_equity=cls._summary_initial_equity(triggered),
+        )
 
         return {
             "scope": scope,
@@ -908,6 +1115,10 @@ class CryptoBacktestEngine:
             "loss_count": len(losses),
             "neutral_count": len(neutral),
             "direction_accuracy_pct": round(correct / len(correct_rows) * 100, 2) if correct_rows else None,
+            "direction_accuracy_raw_pct": (
+                round(raw_direction_correct / len(raw_direction_rows) * 100, 2)
+                if raw_direction_rows else None
+            ),
             "win_rate_pct": round(len(wins) / win_loss_denominator * 100, 2) if win_loss_denominator else None,
             "avg_simulated_return_pct": cls._average(
                 getattr(row, "simulated_return_pct", None) for row in triggered
@@ -916,9 +1127,14 @@ class CryptoBacktestEngine:
             "risk_metrics": risk_metrics,
             "equity_curve": equity_curve,
             "diagnostics": {
+                "summary_contract_version": "btc-backtest-summary-v2",
                 "sample_confidence": sample_confidence,
                 "signal_triggered_count": len(signal_triggered),
                 "rejected_order_count": len(rejected_orders),
+                "signal_quality_rate_pct": (
+                    round(len(signal_triggered) / len(completed) * 100, 2)
+                    if completed else None
+                ),
                 "order_fill_rate_pct": (
                     round(len(raw_triggered) / len(signal_triggered) * 100, 2)
                     if signal_triggered
@@ -935,6 +1151,20 @@ class CryptoBacktestEngine:
                 ),
                 "raw_triggered_count": len(raw_triggered),
                 "overlap_excluded_count": len(overlap_excluded),
+                "direction_accuracy_raw_denominator": len(raw_direction_rows),
+                "direction_accuracy_raw_correct_count": raw_direction_correct,
+                "degraded_evaluation_count": degraded_evaluations,
+                "missing_data_layer_counts": missing_layer_counts,
+                "metric_denominators": {
+                    "direction_accuracy_raw": "completed signal-triggered rows with MFE/MAE, including rejected signals",
+                    "direction_accuracy_net": "independent filled non-neutral rows",
+                    "signal_quality": "completed evaluations",
+                    "execution_quality": "signal-triggered rows",
+                    "account_result": "independent filled rows",
+                },
+                "plan_quality_summary": plan_quality_summary,
+                "cost_sensitivity": cost_sensitivity,
+                "risk_controls": risk_controls,
             },
         }
 
@@ -948,6 +1178,13 @@ class CryptoBacktestEngine:
         return getattr(row, "simulated_exit_reason", None) == "fill_quality_gate_rejected"
 
     @staticmethod
+    def _row_entry_triggered(row: Any) -> bool:
+        value = getattr(row, "entry_triggered", None)
+        if value is not None:
+            return value is True
+        return CryptoBacktestEngine._row_order_status(row) == "filled"
+
+    @staticmethod
     def _row_order_status(row: Any) -> str:
         value = str(getattr(row, "order_status", None) or "").strip().lower()
         if value:
@@ -957,6 +1194,65 @@ class CryptoBacktestEngine:
         if getattr(row, "simulated_exit_reason", None) == "fill_quality_gate_rejected":
             return "rejected"
         return "not_triggered"
+
+    @staticmethod
+    def _price_trajectory_metrics(
+        *,
+        direction: str,
+        reference_price: float,
+        trade_bars: Sequence[CryptoBarLike],
+    ) -> dict[str, Any]:
+        """Calculate cost-free favorable/adverse price excursions."""
+        if reference_price <= 0 or not trade_bars:
+            return {"mfe_pct": None, "mae_pct": None, "direction_correct": None}
+        highs = [CryptoBacktestEngine._execution_price(bar, "high") for bar in trade_bars]
+        lows = [CryptoBacktestEngine._execution_price(bar, "low") for bar in trade_bars]
+        highs = [float(value) for value in highs if value is not None]
+        lows = [float(value) for value in lows if value is not None]
+        if not highs or not lows:
+            return {"mfe_pct": None, "mae_pct": None, "direction_correct": None}
+        if direction == "short":
+            mfe = max((reference_price - low) / reference_price * 100 for low in lows)
+            mae = max((high - reference_price) / reference_price * 100 for high in highs)
+        else:
+            mfe = max((high - reference_price) / reference_price * 100 for high in highs)
+            mae = max((reference_price - low) / reference_price * 100 for low in lows)
+        return {
+            "mfe_pct": round(max(mfe, 0.0), 4),
+            "mae_pct": round(max(mae, 0.0), 4),
+            "direction_correct": bool(mfe > mae),
+        }
+
+    @classmethod
+    def _price_trajectory(cls, row: Any) -> dict[str, Any]:
+        diagnostics = cls._diagnostics(row)
+        value = diagnostics.get("price_trajectory")
+        if isinstance(value, dict) and value.get("direction_correct") is not None:
+            return value
+        direction = str(getattr(row, "direction", "") or "").strip().lower()
+        reference = getattr(row, "simulated_entry_price", None) or getattr(row, "start_price", None)
+        high = getattr(row, "max_high", None)
+        low = getattr(row, "min_low", None)
+        try:
+            reference = float(reference)
+            high = float(high)
+            low = float(low)
+        except (TypeError, ValueError):
+            return value if isinstance(value, dict) else {}
+        if reference <= 0 or direction not in {"long", "short"}:
+            return value if isinstance(value, dict) else {}
+        if direction == "short":
+            mfe = max((reference - low) / reference * 100, 0.0)
+            mae = max((high - reference) / reference * 100, 0.0)
+        else:
+            mfe = max((high - reference) / reference * 100, 0.0)
+            mae = max((reference - low) / reference * 100, 0.0)
+        return {
+            "mfe_pct": round(mfe, 4),
+            "mae_pct": round(mae, 4),
+            "direction_correct": bool(mfe > mae),
+            "source": "legacy_result_extrema",
+        }
 
     @staticmethod
     def _independent_triggered_rows(rows: Sequence[Any]) -> tuple[list[Any], list[Any]]:
@@ -1108,21 +1404,23 @@ class CryptoBacktestEngine:
         stop_loss: Optional[float],
         config: CryptoPlanBacktestConfig,
         position_multiplier_cap: float = 1.0,
+        equity: Optional[float] = None,
     ) -> dict[str, Any]:
         try:
             multiplier = float(position_multiplier_cap)
         except (TypeError, ValueError):
             multiplier = 1.0
         multiplier = max(0.0, min(multiplier, 1.0))
-        initial_equity = max(float(config.initial_equity), 0.0)
+        configured_initial_equity = max(float(config.initial_equity), 0.0)
+        equity_before = max(float(configured_initial_equity if equity is None else equity), 0.0)
         risk_budget = (
-            initial_equity
+            equity_before
             * max(float(config.risk_per_trade_pct), 0.0)
             / 100.0
             * multiplier
         )
         max_notional = (
-            initial_equity
+            equity_before
             * max(float(config.max_notional_pct), 0.0)
             / 100.0
             * max(float(config.leverage), 0.0)
@@ -1138,7 +1436,8 @@ class CryptoBacktestEngine:
         max_qty = max_notional / entry_price if entry_price > 0 else 0.0
         quantity = max(0.0, min(risk_sized_qty, max_qty))
         return {
-            "initial_equity": initial_equity,
+            "initial_equity": configured_initial_equity,
+            "equity_before": equity_before,
             "risk_budget": risk_budget,
             "max_notional": max_notional,
             "quantity": quantity,
@@ -1280,14 +1579,17 @@ class CryptoBacktestEngine:
         entry_order_type: str = "market",
         exit_order_type: str = "market",
         position_multiplier_cap: float = 1.0,
+        equity: Optional[float] = None,
     ) -> dict[str, Any]:
         sizing = sizing or cls._position_sizing(
             entry_price=entry_price,
             stop_loss=stop_loss,
             config=config,
             position_multiplier_cap=position_multiplier_cap,
+            equity=equity if config.dynamic_equity_sizing else None,
         )
         initial_equity = float(sizing["initial_equity"])
+        equity_before = float(sizing.get("equity_before", initial_equity))
         risk_budget = float(sizing["risk_budget"])
         quantity = float(sizing["quantity"])
         notional = float(sizing["position_notional"])
@@ -1319,6 +1621,7 @@ class CryptoBacktestEngine:
         r_multiple = round(net_pnl / risk_budget, 4) if risk_budget > 0 else None
         return {
             "initial_equity": round(initial_equity, 4),
+            "equity_before": round(equity_before, 4),
             "risk_budget": round(risk_budget, 4),
             "position_notional": round(notional, 4),
             "quantity": round(quantity, 8),
@@ -1333,7 +1636,7 @@ class CryptoBacktestEngine:
             "funding_cost": round(float(funding_cost), 4),
             "net_pnl": round(net_pnl, 4),
             "r_multiple": r_multiple,
-            "net_return_pct": round(net_pnl / initial_equity * 100, 4) if initial_equity else 0.0,
+            "net_return_pct": round(net_pnl / equity_before * 100, 4) if equity_before else 0.0,
             "gross_trade_return_pct": cls._directional_return_pct(
                 direction=direction,
                 entry_price=entry_price,
@@ -1353,6 +1656,10 @@ class CryptoBacktestEngine:
             "maker_fee_rate_bps": float(config.maker_fee_rate_bps),
             "taker_fee_rate_bps": float(config.taker_fee_rate_bps),
             "maintenance_margin_rate": float(config.maintenance_margin_rate),
+            "dynamic_equity_sizing": bool(config.dynamic_equity_sizing),
+            "max_portfolio_risk_pct": float(config.max_portfolio_risk_pct),
+            "consecutive_loss_cooldown": int(config.consecutive_loss_cooldown),
+            "daily_loss_limit_pct": float(config.daily_loss_limit_pct),
         }
 
     @staticmethod
@@ -1491,6 +1798,224 @@ class CryptoBacktestEngine:
             "worst_r_multiple": round(min(r_multiples), 4) if r_multiples else None,
             "max_drawdown_pct": cls._max_drawdown_pct(equity_curve),
             "expectancy_pct": cls._average(returns),
+        }
+
+    @classmethod
+    def _plan_quality_summary(cls, rows: Sequence[Any]) -> dict[str, Any]:
+        values: dict[str, list[float]] = {
+            "direction_score": [],
+            "location_score": [],
+            "risk_reward_score": [],
+            "execution_score": [],
+        }
+        for row in rows:
+            quality = cls._row_plan_quality(row)
+            scores = quality.get("scores") if isinstance(quality, dict) else None
+            if not isinstance(scores, dict):
+                continue
+            for key in values:
+                try:
+                    value = float(scores.get(key))
+                except (TypeError, ValueError):
+                    continue
+                if value == value:
+                    values[key].append(value)
+        averages = {
+            key: round(sum(items) / len(items), 2) if items else None
+            for key, items in values.items()
+        }
+        return {
+            "version": "btc-plan-quality-v1",
+            "sample_count": max((len(items) for items in values.values()), default=0),
+            "average_scores": averages,
+        }
+
+    @classmethod
+    def _row_plan_quality(cls, row: Any) -> Optional[dict[str, Any]]:
+        diagnostics = cls._diagnostics(row)
+        quality = diagnostics.get("plan_quality")
+        if isinstance(quality, dict) and isinstance(quality.get("scores"), dict):
+            return quality
+        raw_plan = getattr(row, "raw_plan_json", None)
+        if isinstance(raw_plan, str):
+            try:
+                import json
+
+                raw_plan = json.loads(raw_plan)
+            except Exception:
+                raw_plan = {}
+        if not isinstance(raw_plan, dict):
+            raw_plan = {}
+        direction = str(getattr(row, "direction", None) or raw_plan.get("direction") or "wait")
+        try:
+            plan = CryptoPlan(
+                plan_type=str(getattr(row, "plan_type", None) or "unknown"),
+                horizon=str(getattr(row, "horizon", None) or "daily"),
+                direction=direction,
+                entry_price=float(getattr(row, "entry_price", None) or raw_plan.get("entry_price")),
+                stop_loss=float(getattr(row, "stop_loss", None) or raw_plan.get("stop_loss")),
+                take_profit=float(getattr(row, "take_profit", None) or raw_plan.get("take_profit")),
+                raw_plan=raw_plan,
+                execution_contract=raw_plan.get("execution_contract") if isinstance(raw_plan.get("execution_contract"), dict) else None,
+                position_multiplier_cap=float(raw_plan.get("position_multiplier_cap") or 1.0),
+            )
+        except (TypeError, ValueError):
+            return None
+        return cls.score_plan_quality(
+            plan=plan,
+            config=CryptoPlanBacktestConfig(engine_version=str(getattr(row, "engine_version", "btc-plan-v5") or "btc-plan-v5")),
+            indicator_tags=diagnostics.get("indicator_tags") if isinstance(diagnostics.get("indicator_tags"), dict) else None,
+            evaluation={"diagnostics": diagnostics, "signal_triggered": getattr(row, "signal_triggered", None), "entry_triggered": getattr(row, "entry_triggered", None), "order_status": getattr(row, "order_status", None)},
+        )
+
+    @classmethod
+    def _cost_sensitivity(
+        cls,
+        rows: Sequence[Any],
+        *,
+        neutral_band_pct: float,
+    ) -> dict[str, Any]:
+        """Re-price filled trades across conservative fee/slippage scenarios."""
+        scenarios: list[dict[str, Any]] = []
+        fee_grid = (5.0, 10.0, 15.0)
+        slippage_grid = (2.0, 5.0, 10.0)
+        for fee_bps in fee_grid:
+            for slippage_bps in slippage_grid:
+                pnl_values: list[float] = []
+                returns: list[float] = []
+                wins = losses = 0
+                for row in rows:
+                    diagnostics = cls._diagnostics(row)
+                    trade = diagnostics.get("trade") if isinstance(diagnostics, dict) else None
+                    if not isinstance(trade, dict):
+                        continue
+                    try:
+                        entry = float(getattr(row, "simulated_entry_price", None))
+                        exit_price = float(getattr(row, "simulated_exit_price", None))
+                        quantity = float(trade.get("quantity"))
+                        equity = float(trade.get("equity_before") or trade.get("initial_equity"))
+                    except (TypeError, ValueError):
+                        continue
+                    if entry <= 0 or exit_price <= 0 or quantity <= 0 or equity <= 0:
+                        continue
+                    direction = str(getattr(row, "direction", "long") or "long").lower()
+                    slip = max(slippage_bps, 0.0) / 10000.0
+                    if direction == "short":
+                        executed_entry = entry * (1 - slip)
+                        executed_exit = exit_price * (1 + slip)
+                        gross_pnl = (executed_entry - executed_exit) * quantity
+                    else:
+                        executed_entry = entry * (1 + slip)
+                        executed_exit = exit_price * (1 - slip)
+                        gross_pnl = (executed_exit - executed_entry) * quantity
+                    fee_rate = max(fee_bps, 0.0) / 10000.0
+                    fees = (abs(executed_entry * quantity) + abs(executed_exit * quantity)) * fee_rate
+                    funding = float(trade.get("funding_cost") or 0.0)
+                    net_pnl = gross_pnl - fees - funding
+                    net_return = net_pnl / equity * 100.0
+                    pnl_values.append(net_pnl)
+                    returns.append(net_return)
+                    if net_return >= abs(float(neutral_band_pct)):
+                        wins += 1
+                    elif net_return <= -abs(float(neutral_band_pct)):
+                        losses += 1
+                gross_profit = sum(value for value in pnl_values if value > 0)
+                gross_loss = abs(sum(value for value in pnl_values if value < 0))
+                scenarios.append(
+                    {
+                        "fee_bps": fee_bps,
+                        "slippage_bps": slippage_bps,
+                        "sample_count": len(returns),
+                        "total_net_pnl": round(sum(pnl_values), 4),
+                        "avg_net_return_pct": round(sum(returns) / len(returns), 4) if returns else None,
+                        "win_rate_pct": round(wins / (wins + losses) * 100.0, 2) if wins + losses else None,
+                        "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss else None,
+                    }
+                )
+        return {
+            "fee_bps": list(fee_grid),
+            "slippage_bps": list(slippage_grid),
+            "scenarios": scenarios,
+        }
+
+    @classmethod
+    def _risk_control_diagnostics(
+        cls,
+        rows: Sequence[Any],
+        *,
+        initial_equity: float,
+    ) -> dict[str, Any]:
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                getattr(row, "entry_triggered_at", None) or getattr(row, "analysis_created_at", None) or datetime.min,
+                getattr(row, "analysis_history_id", 0) or 0,
+            ),
+        )
+        execution_config = cls._diagnostics(ordered[0]).get("execution") if ordered else {}
+        execution_config = execution_config if isinstance(execution_config, dict) else {}
+        cooldown = max(int(execution_config.get("consecutive_loss_cooldown", 3)), 1)
+        daily_limit = max(float(execution_config.get("daily_loss_limit_pct", 3.0)), 0.0)
+        portfolio_cap = max(float(execution_config.get("max_portfolio_risk_pct", 2.0)), 0.0)
+        max_consecutive_losses = 0
+        consecutive = 0
+        daily_pnl: dict[str, float] = {}
+        max_risk_pct = 0.0
+        risk_intervals: list[tuple[datetime, datetime, float]] = []
+        for row in ordered:
+            outcome = str(getattr(row, "outcome", "") or "").lower()
+            if outcome == "loss":
+                consecutive += 1
+                max_consecutive_losses = max(max_consecutive_losses, consecutive)
+            else:
+                consecutive = 0
+            trade = cls._diagnostics(row).get("trade")
+            if isinstance(trade, dict):
+                try:
+                    risk_budget = float(trade.get("risk_budget"))
+                    equity = float(trade.get("equity_before") or trade.get("initial_equity")) or initial_equity
+                    risk_pct = risk_budget / equity * 100.0 if equity else 0.0
+                    max_risk_pct = max(max_risk_pct, risk_pct)
+                    entry_at = getattr(row, "entry_triggered_at", None)
+                    exit_at = getattr(row, "first_hit_at", None) or getattr(row, "evaluation_end", None)
+                    if entry_at is not None and exit_at is not None and exit_at > entry_at:
+                        risk_intervals.append((entry_at, exit_at, risk_pct))
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    pnl = float(trade.get("net_pnl"))
+                except (TypeError, ValueError):
+                    pnl = 0.0
+                timestamp = getattr(row, "entry_triggered_at", None) or getattr(row, "analysis_created_at", None)
+                day_key = timestamp.date().isoformat() if hasattr(timestamp, "date") else "unknown"
+                daily_pnl[day_key] = daily_pnl.get(day_key, 0.0) + pnl
+        worst_daily_loss_pct = (
+            max(0.0, -min(daily_pnl.values(), default=0.0) / initial_equity * 100.0)
+            if initial_equity else 0.0
+        )
+        max_concurrent_risk_pct = 0.0
+        for point in sorted({point for start, end, _risk in risk_intervals for point in (start, end)}):
+            active_risk = sum(risk for start, end, risk in risk_intervals if start <= point < end)
+            max_concurrent_risk_pct = max(max_concurrent_risk_pct, active_risk)
+        triggered = {
+            "consecutive_loss_cooldown": max_consecutive_losses >= cooldown,
+            "daily_loss_limit": worst_daily_loss_pct >= daily_limit,
+            "portfolio_risk_cap": max_concurrent_risk_pct > portfolio_cap,
+        }
+        return {
+            "mode": "diagnostic_guard",
+            "thresholds": {
+                "max_portfolio_risk_pct": portfolio_cap,
+                "consecutive_loss_cooldown": cooldown,
+                "daily_loss_limit_pct": daily_limit,
+            },
+            "max_consecutive_losses": max_consecutive_losses,
+            "worst_daily_loss_pct": round(worst_daily_loss_pct, 4),
+            "max_single_trade_risk_pct": round(max_risk_pct, 4),
+            "max_concurrent_risk_pct": round(max_concurrent_risk_pct, 4),
+            "triggered": triggered,
+            "would_block_new_trade": any(triggered.values()),
+            "note": "仅用于回测审计；不会改写历史成交结果。",
         }
 
     @staticmethod

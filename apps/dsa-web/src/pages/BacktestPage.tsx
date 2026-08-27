@@ -50,6 +50,63 @@ function directionLabel(value: string): string {
   return labels[value] ?? value;
 }
 
+const LOSS_INDICATOR_DIMENSION_LABELS: Record<string, string> = {
+  price_action: '价格行为',
+  ema: 'EMA',
+  vwap: 'VWAP',
+  volume: '成交量',
+  volatility_forecast: '波动状态',
+  order_flow: '订单流',
+  intraday: '多周期方向',
+  event: '行情事件',
+};
+
+const LOSS_INDICATOR_VALUE_LABELS: Record<string, string> = {
+  above: '价格在上方',
+  below: '价格在下方',
+  near: '价格在附近',
+  bullish: '多头排列',
+  bearish: '空头排列',
+  mixed: '方向混合',
+  low: '低量',
+  normal: '正常量能',
+  high: '放量',
+  compressed: '波动收缩',
+  elevated: '波动升高',
+  extreme: '极端波动',
+  balanced: '买卖均衡',
+  buy_dominant: '主动买方占优',
+  sell_dominant: '主动卖方占优',
+  aligned_buying: '价格与主动买盘一致',
+  aligned_selling: '价格与主动卖盘一致',
+  bearish_price_cvd_divergence: '价格与 CVD 看跌背离',
+  breakout: '向上突破',
+  breakdown: '向下跌破',
+  bullish_push: '短线上推',
+  bearish_push: '短线下压',
+  liquidity_sweep_high: '扫高回落',
+  liquidity_sweep_low: '扫低回升',
+  range: '区间震荡',
+  aligned_long: '多周期同向做多',
+  aligned_short: '多周期同向做空',
+  countertrend_long: '逆势做多',
+  countertrend_short: '逆势做空',
+  hourly_only_wait_daily_confirmation: '小时线信号等待日线确认',
+  neutral: '多周期中性',
+  wait_for_long_trigger: '等待做多触发',
+  wait_for_short_trigger: '等待做空触发',
+  liquidity_sweep_low_reversal_candidate: '扫低反转候选',
+  selloff_rebound_candidate: '急跌反弹候选',
+  selloff_rebound_confirmed: '急跌反弹已确认',
+  sharp_selloff_wait_reclaim: '急跌后等待收复',
+};
+
+function lossIndicatorLabel(dimension: string, key: string): string {
+  const dimensionLabel = LOSS_INDICATOR_DIMENSION_LABELS[dimension] ?? dimension;
+  const keyLabel = LOSS_INDICATOR_VALUE_LABELS[key] ?? key.replaceAll('_', ' ');
+  return `${dimensionLabel}：${keyLabel}`;
+}
+
 function formatAnalysisTime(value?: string): string {
   if (!value) return '--';
   return value.replace('T', ' ').slice(0, 16);
@@ -152,6 +209,16 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
   const rejectedOrderCount = metrics.diagnostics?.rejectedOrderCount;
   const orderFillRatePct = metrics.diagnostics?.orderFillRatePct;
   const avgMissedFavorableMovePct = metrics.diagnostics?.avgMissedFavorableMovePct;
+  const degradedEvaluationCount = metrics.diagnostics?.degradedEvaluationCount;
+  const missingDataLayerCounts = metrics.diagnostics?.missingDataLayerCounts;
+  const planQualitySummary = metrics.diagnostics?.planQualitySummary as
+    | { sampleCount?: number; averageScores?: Record<string, number | null> }
+    | undefined;
+  const costSensitivity = metrics.diagnostics?.costSensitivity as
+    | { scenarios?: Array<{ feeBps?: number; slippageBps?: number; avgNetReturnPct?: number | null }> }
+    | undefined;
+  const baselineCost = costSensitivity?.scenarios?.find((item) => item.feeBps === 5 && item.slippageBps === 2);
+  const conservativeCost = costSensitivity?.scenarios?.find((item) => item.feeBps === 15 && item.slippageBps === 10);
 
   return (
     <Card variant="gradient" padding="md">
@@ -160,7 +227,33 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
         {sampleConfidence?.isLowConfidence ? <Badge variant="warning">低样本</Badge> : null}
       </div>
       <MetricRow label={contractMetrics ? '策略契约胜率' : '触价代理胜率'} value={pct(metrics.winRatePct)} />
-      <MetricRow label="方向准确率" value={pct(metrics.directionAccuracyPct)} />
+      <MetricRow label="成交后非中性净结果命中率" value={pct(metrics.directionAccuracyPct)} />
+      <MetricRow label="原始方向命中率（MFE/MAE）" value={pct(metrics.directionAccuracyRawPct)} />
+      <MetricRow label="信号质量率" value={pct(metrics.signalQualityRatePct)} />
+      <MetricRow label="执行成交率" value={pct(metrics.executionFillRatePct)} />
+      {planQualitySummary?.averageScores ? (
+        <MetricRow
+          label="计划质量（方向/位置/盈亏比/执行）"
+          value={[
+            planQualitySummary.averageScores.directionScore,
+            planQualitySummary.averageScores.locationScore,
+            planQualitySummary.averageScores.riskRewardScore,
+            planQualitySummary.averageScores.executionScore,
+          ].map((value) => (typeof value === 'number' ? value.toFixed(0) : '--')).join(' / ')}
+        />
+      ) : null}
+      {baselineCost || conservativeCost ? (
+        <MetricRow
+          label="成本敏感性净收益（5/2 · 15/10 bps）"
+          value={`${pct(baselineCost?.avgNetReturnPct)} · ${pct(conservativeCost?.avgNetReturnPct)}`}
+        />
+      ) : null}
+      {typeof degradedEvaluationCount === 'number' ? (
+        <MetricRow
+          label="缺失数据降级评估"
+          value={`${degradedEvaluationCount} · ${missingDataLayerCounts && typeof missingDataLayerCounts === 'object' ? Object.entries(missingDataLayerCounts as Record<string, number>).map(([key, count]) => `${key} ${count}`).join('，') || '无' : '无'}`}
+        />
+      ) : null}
       <MetricRow label="平均净收益" value={pct(metrics.avgSimulatedReturnPct)} />
       {typeof signalTriggeredCount === 'number' && typeof rawTriggeredCount === 'number' ? (
         <MetricRow label="信号 / 实际成交 / 拒单" value={`${signalTriggeredCount} / ${rawTriggeredCount} / ${typeof rejectedOrderCount === 'number' ? rejectedOrderCount : 0}`} />
@@ -279,7 +372,12 @@ const LossReviewCard: React.FC<{ review: CryptoBacktestLossReviewResponse | null
       )}
       {review.indicatorPatterns.length ? (
         <div className="mt-3 border-t border-border/60 pt-3 text-xs text-muted-text">
-          共同特征：{review.indicatorPatterns.map((item) => `${item.dimension}.${item.key} (${item.lossCount})`).join(' · ')}
+          <p>
+            共同特征：{review.indicatorPatterns.map((item) => (
+              `${lossIndicatorLabel(item.dimension, item.key)}（${item.lossCount}/${review.lossCount} 笔）`
+            )).join(' · ')}
+          </p>
+          <p className="mt-1">仅表示亏损样本中的共现频率，不代表该特征导致亏损。</p>
         </div>
       ) : null}
       {review.improvementSuggestions.length ? (
@@ -298,6 +396,7 @@ const PlanSummary: React.FC<{
 }> = ({ plan, runningKey, onRun }) => {
   const latest = plan.latestResult;
   const trade = latest?.trade ?? {};
+  const quality = plan.planQuality?.scores as Record<string, number | null> | undefined;
   const key = plan.planType;
   return (
     <div className="rounded-lg border border-white/10 bg-elevated/40 p-3">
@@ -310,6 +409,9 @@ const PlanSummary: React.FC<{
           {directionLabel(plan.direction)}
         </Badge>
         {statusBadge(plan.backtestStatus)}
+        {plan.tradeabilityStatus === 'degraded_missing_context' ? <Badge variant="warning">数据缺失降级</Badge> : null}
+        {plan.tradeabilityStatus === 'blocked' ? <Badge variant="danger">不可交易</Badge> : null}
+        {plan.tradeabilityStatus === 'countertrend_limited' ? <Badge variant="warning">逆势限仓</Badge> : null}
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-secondary-text sm:grid-cols-4">
         <span>入场 {plan.entryPrice ?? '--'}</span>
@@ -323,6 +425,7 @@ const PlanSummary: React.FC<{
       {(plan.positionHint || plan.confidence || plan.invalidCondition) ? (
         <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-muted-text">
           {plan.positionHint ? <span>仓位 {plan.positionHint}</span> : null}
+          {typeof plan.positionMultiplierCap === 'number' ? <span>仓位乘数上限 {pct(plan.positionMultiplierCap * 100)}</span> : null}
           {plan.confidence ? <span>置信 {plan.confidence}</span> : null}
           {plan.invalidCondition ? <span>失效 {plan.invalidCondition}</span> : null}
         </div>
@@ -338,6 +441,14 @@ const PlanSummary: React.FC<{
           <span>错失有利波动 {pct(latest.missedFavorableMovePct)}</span>
           <span>拒单后不利波动 {pct(latest.missedAdverseMovePct)}</span>
         </div>
+      ) : null}
+      {quality ? (
+        <p className="mt-2 text-xs text-muted-text">
+          计划质量 方向 {typeof quality.directionScore === 'number' ? quality.directionScore.toFixed(0) : '--'} ·
+          位置 {typeof quality.locationScore === 'number' ? quality.locationScore.toFixed(0) : '--'} ·
+          盈亏比 {typeof quality.riskRewardScore === 'number' ? quality.riskRewardScore.toFixed(0) : '--'} ·
+          执行 {typeof quality.executionScore === 'number' ? quality.executionScore.toFixed(0) : '--'}
+        </p>
       ) : null}
       {latest?.orderStatus === 'rejected' ? (
         <p className="mt-2 text-xs text-warning">
@@ -827,6 +938,7 @@ const BacktestPage: React.FC = () => {
                 <div><dt className="text-muted-text">分析周期</dt><dd className="mt-1 text-foreground">{detailItem.analysisTimeframe || detailItem.analysisMode || '日线'}</dd></div>
                 <div><dt className="text-muted-text">计划结果</dt><dd className="mt-1 text-foreground">{planResultSummary(detailItem.plans)}</dd></div>
                 <div><dt className="text-muted-text">可回测计划</dt><dd className="mt-1 text-foreground">{detailItem.plans.filter((plan) => plan.backtestable).length} / {detailItem.plans.length}</dd></div>
+                <div><dt className="text-muted-text">未处理原因</dt><dd className="mt-1 text-foreground">{typeof detailItem.diagnostics?.backtestStatusReason === 'string' ? detailItem.diagnostics.backtestStatusReason : '--'}</dd></div>
               </dl>
             </section>
 

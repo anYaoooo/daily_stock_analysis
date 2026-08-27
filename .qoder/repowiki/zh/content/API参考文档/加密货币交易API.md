@@ -16,15 +16,17 @@
 - [server.py](file://server.py)
 - [src/services/btc_shadow_forecast_service.py](file://src/services/btc_shadow_forecast_service.py)
 - [src/core/pipeline.py](file://src/core/pipeline.py)
+- [src/config.py](file://src/config.py)
+- [tests/test_btc_shadow_forecast_service.py](file://tests/test_btc_shadow_forecast_service.py)
 </cite>
 
 ## 更新摘要
 **所做更改**
-- 新增BTC影子预测服务集成到主分析管道，支持条件执行、上下文注入和错误处理机制
-- 增强CryptoOhlcvBar模型支持现货和永续合约的执行价格、标记价格和资金费率
-- 改进管道集成，使用CryptoMarketDataService替代直接调用CryptoFetcher
-- 更新数据持久化和缓存机制以支持更丰富的市场数据结构
-- 改进永续合约数据处理，包括执行价格与标记价格的分离处理
+- 增强了BTC影子预测服务，新增曲线预测小时数、主预测小时数和置信度阈值配置
+- 实现了基于现有加密回测费用和滑点设置的往返成本计算功能
+- 改进了主分析管道中的影子预测服务集成，支持条件执行和错误处理
+- 新增了完整的配置管理，支持环境变量动态配置
+- 增强了成本感知的交易模拟能力，用于评估预测性能
 
 ## 目录
 1. [简介](#简介)
@@ -41,7 +43,7 @@
 ## 简介
 本文件为加密货币交易相关API的完整文档，覆盖行情获取、技术指标计算、交易信号生成、WebSocket实时数据推送、订单管理与风险控制等能力。面向开发者与集成方提供清晰的接口规范、数据模型说明、调用示例与最佳实践，帮助快速构建稳定高效的加密交易系统。
 
-**更新** 新增了BTC影子预测服务集成到主分析管道，支持条件执行、上下文注入和错误处理机制，同时增强了现货和永续合约的数据处理能力。
+**更新** BTC影子预测服务现已全面增强，支持传递曲线预测小时数、主预测小时数、置信度阈值和基于现有加密回测费用和滑点设置的往返成本计算，使服务能够执行成本感知的交易模拟来评估预测性能。
 
 ## 项目结构
 本项目采用前后端分离与模块化设计：
@@ -62,6 +64,7 @@ CMD["crypto_market_data_service.py<br/>市场数据服务"]
 BT["crypto_backtest_engine.py<br/>回测引擎"]
 TECH["crypto_technical.py<br/>技术指标"]
 SHADOW["btc_shadow_forecast_service.py<br/>影子预测服务"]
+CONFIG["config.py<br/>配置管理"]
 end
 subgraph "数据层"
 DF["crypto_fetcher.py<br/>历史/聚合数据"]
@@ -81,6 +84,7 @@ CMD --> DB
 SVC --> TECH
 SVC --> BT
 SVC --> SHADOW
+SHADOW --> CONFIG
 PIPELINE --> SHADOW
 A --> WS
 FE_API --> A
@@ -96,6 +100,7 @@ FE_TYPES --> A
 - [data_provider/crypto_ws_quote.py](file://data_provider/crypto_ws_quote.py)
 - [src/services/btc_shadow_forecast_service.py](file://src/services/btc_shadow_forecast_service.py)
 - [src/core/pipeline.py](file://src/core/pipeline.py)
+- [src/config.py](file://src/config.py)
 
 章节来源
 - [server.py](file://server.py)
@@ -104,12 +109,12 @@ FE_TYPES --> A
 - **增强型行情获取**：支持多交易所历史K线与实时报价，具备本地缓存与降级策略，支持现货和永续合约的不同价格类型。
 - **高级技术指标**：内置常用指标（如MA、RSI、MACD、布林带等），支持自定义参数和多时间框架分析。
 - **智能交易信号**：基于规则或策略组合生成买卖信号，附带置信度与风险提示，支持永续合约的资金费率考虑。
-- **BTC影子预测服务**：独立的观察型预测服务，提供小时线级别的BTC收益预测，不影响实际交易决策。
+- **增强的BTC影子预测服务**：独立的观察型预测服务，提供小时线级别的BTC收益预测，支持曲线预测、主预测时距、置信度阈值和成本感知交易模拟。
 - **WebSocket推送**：低延迟行情流，支持频道订阅与断线重连。
 - **订单管理**：下单、撤单、查询订单状态与成交回报。
 - **风险控制**：仓位控制、止损止盈、波动率监控与熔断机制。
 
-**更新** 现在支持区分执行价格和标记价格，特别适用于永续合约交易场景，并集成了BTC影子预测服务用于离线校准和历史诊断。
+**更新** BTC影子预测服务现已支持传递曲线预测小时数、主预测小时数、置信度阈值和基于现有加密回测费用和滑点设置的往返成本计算，使服务能够执行成本感知的交易模拟来评估预测性能。
 
 章节来源
 - [api/v1/endpoints/crypto_trading.py](file://api/v1/endpoints/crypto_trading.py)
@@ -117,6 +122,7 @@ FE_TYPES --> A
 - [src/services/crypto_market_data_service.py](file://src/services/crypto_market_data_service.py)
 - [src/storage.py](file://src/storage.py)
 - [src/services/btc_shadow_forecast_service.py](file://src/services/btc_shadow_forecast_service.py)
+- [src/config.py](file://src/config.py)
 
 ## 架构总览
 系统分层清晰，职责单一，便于扩展与维护。API层负责协议与校验；服务层编排业务；数据层屏蔽底层差异；前端通过TS客户端调用。
@@ -129,6 +135,7 @@ participant Service as "交易服务"
 participant Pipeline as "主分析管道"
 participant MarketSvc as "市场数据服务"
 participant ShadowSvc as "影子预测服务"
+participant Config as "配置管理器"
 participant Fetcher as "数据获取器"
 participant Cache as "本地缓存"
 participant WS as "WebSocket行情"
@@ -144,8 +151,13 @@ MarketSvc->>Fetcher : "拉取历史/聚合数据"
 Fetcher-->>MarketSvc : "包含执行价/标记价的数据"
 MarketSvc->>Cache : "持久化到数据库"
 alt BTC影子预测启用
+Pipeline->>Config : "读取配置参数"
+Config-->>Pipeline : "曲线预测小时数/主预测小时数/置信度阈值"
 Pipeline->>ShadowSvc : "构建影子预测上下文"
+ShadowSvc->>ShadowSvc : "执行成本感知交易模拟"
 ShadowSvc-->>Pipeline : "预测结果(不参与决策)"
+else 禁用影子预测
+Pipeline->>Tech : "计算技术指标"
 end
 Pipeline->>Tech : "计算技术指标"
 Pipeline->>Engine : "可选：回测验证"
@@ -162,6 +174,7 @@ WS-->>Client : "实时行情推送"
 - [data_provider/crypto_ws_quote.py](file://data_provider/crypto_ws_quote.py)
 - [src/services/btc_shadow_forecast_service.py](file://src/services/btc_shadow_forecast_service.py)
 - [src/core/pipeline.py](file://src/core/pipeline.py)
+- [src/config.py](file://src/config.py)
 
 ## 详细组件分析
 
@@ -207,13 +220,13 @@ Save --> Return["返回数据"]
 - [src/services/crypto_market_data_service.py](file://src/services/crypto_market_data_service.py)
 - [data_provider/crypto_fetcher.py](file://data_provider/crypto_fetcher.py)
 
-### BTC影子预测服务 - BtcShadowForecastService
+### 增强的BTC影子预测服务 - BtcShadowForecastService
 - **功能**：提供BTC小时线级别的收益预测，仅用于离线校准和历史诊断，不参与实际交易决策。
 - **特性**：使用扩展式滚动窗口验证、训练集独立缩放、严格的泄漏防护。
 - **配置**：支持最小训练数据量、折叠数量、验证数据量的灵活配置。
 - **输出**：包含预期收益率、上涨概率、方向预测和交叉验证结果。
 
-**更新** 现已集成到主分析管道中，支持条件执行、上下文注入和完善的错误处理机制。
+**更新** 现已支持传递曲线预测小时数、主预测小时数、置信度阈值和基于现有加密回测费用和滑点设置的往返成本计算，使服务能够执行成本感知的交易模拟来评估预测性能。
 
 ```mermaid
 classDiagram
@@ -221,11 +234,17 @@ class BtcShadowForecastService {
 +int min_train_bars
 +int folds
 +int validation_bars
++int curve_horizon_hours
++float confidence_threshold
++float round_trip_cost_bps
++int primary_horizon_hours
 +build(hourly_bars) Dict
 +_walk_forward(labeled, feature_columns) list
 +_fit_predict(x_train, y_return, y_direction, x_predict) tuple
 +_feature_frame(bars) tuple
 +_logistic_probability(design_train, labels, design_predict) ndarray
++_cost_aware_labels(returns) ndarray
++_trade_walk_forward(labeled, feature_columns, horizon) list
 }
 class _FoldPrediction {
 +float actual_return
@@ -234,7 +253,20 @@ class _FoldPrediction {
 +string train_end_at
 +string validation_start_at
 }
+class _TradeFoldPrediction {
++float actual_return
++int actual_class
++int predicted_action
++float down_probability
++float neutral_probability
++float up_probability
++string selected_model
++float calibration_weight
++string train_end_at
++string validation_start_at
+}
 BtcShadowForecastService --> _FoldPrediction : "创建"
+BtcShadowForecastService --> _TradeFoldPrediction : "创建"
 ```
 
 **图表来源**
@@ -249,7 +281,7 @@ BtcShadowForecastService --> _FoldPrediction : "创建"
 - **上下文注入**：将影子预测结果注入到分析上下文中，但不影响实际决策。
 - **错误处理**：预测失败时记录警告日志，继续使用现有技术面上下文。
 
-**更新** 现在在BTC分析流程中自动检测并执行影子预测，确保数据质量和预测准确性。
+**更新** 现在在BTC分析流程中自动检测并执行影子预测，支持传递曲线预测小时数、主预测小时数、置信度阈值和往返成本计算，确保数据质量和预测准确性。
 
 ```mermaid
 sequenceDiagram
@@ -263,7 +295,10 @@ alt 启用影子预测
 Config-->>Pipeline : "true"
 Pipeline->>MarketSvc : "获取BTC小时线数据"
 MarketSvc-->>Pipeline : "小时线数据帧"
+Pipeline->>Config : "读取配置参数"
+Config-->>Pipeline : "曲线预测小时数/主预测小时数/置信度阈值"
 Pipeline->>ShadowSvc : "构建影子预测上下文"
+ShadowSvc->>ShadowSvc : "执行成本感知交易模拟"
 ShadowSvc-->>Pipeline : "预测结果(不参与决策)"
 else 禁用影子预测
 Config-->>Pipeline : "false"
@@ -275,10 +310,48 @@ Pipeline->>Logger : "记录执行状态"
 **图表来源**
 - [src/core/pipeline.py](file://src/core/pipeline.py)
 - [src/services/btc_shadow_forecast_service.py](file://src/services/btc_shadow_forecast_service.py)
+- [src/config.py](file://src/config.py)
 
 章节来源
 - [src/core/pipeline.py](file://src/core/pipeline.py)
 - [src/services/btc_shadow_forecast_service.py](file://src/services/btc_shadow_forecast_service.py)
+- [src/config.py](file://src/config.py)
+
+### 配置管理 - BTC影子预测配置
+- **功能**：管理BTC影子预测服务的各种配置参数，支持环境变量动态配置。
+- **配置项**：包括曲线预测小时数、主预测小时数、置信度阈值、往返成本等。
+- **默认值**：提供合理的默认配置，确保服务正常运行。
+- **验证**：对配置参数进行范围验证和类型转换。
+
+**更新** 新增了完整的配置管理，支持环境变量动态配置，包括曲线预测小时数、主预测小时数、置信度阈值等关键参数。
+
+```mermaid
+classDiagram
+class Config {
++bool btc_shadow_forecast_enabled
++int btc_shadow_forecast_curve_horizon_hours
++int btc_shadow_forecast_primary_horizon_hours
++float btc_shadow_forecast_confidence_threshold
++int btc_shadow_forecast_lookback_days
++int btc_shadow_forecast_min_train_bars
++int btc_shadow_forecast_folds
++int btc_shadow_forecast_validation_bars
++float crypto_backtest_fee_rate_bps
++float crypto_backtest_slippage_bps
+}
+class EnvironmentConfig {
++parse_env_float(value) float
++parse_env_int(value) int
++parse_env_bool(value) bool
+}
+Config --> EnvironmentConfig : "解析环境变量"
+```
+
+**图表来源**
+- [src/config.py](file://src/config.py)
+
+章节来源
+- [src/config.py](file://src/config.py)
 
 ### 增强型数据模型 - CryptoOhlcvBar
 - **功能**：存储加密货币OHLCV数据的数据库模型，支持现货和永续合约的完整价格信息。
@@ -549,7 +622,7 @@ API-->>Client : "报告与指标"
 - API层依赖服务层进行业务编排，服务层依赖数据层与工具库。
 - 前端通过TS客户端调用API，类型定义与服务端Schema保持一致。
 - WebSocket独立于HTTP，提供低延迟通道。
-- **更新** 市场数据服务作为中间层，统一管理本地缓存和远程数据源，影子预测服务作为可选组件集成到主分析管道。
+- **更新** 市场数据服务作为中间层，统一管理本地缓存和远程数据源，影子预测服务作为可选组件集成到主分析管道，配置管理提供动态参数支持。
 
 ```mermaid
 graph LR
@@ -563,6 +636,7 @@ SVC --> BT["crypto_backtest_engine.py"]
 API --> WS["crypto_ws_quote.py"]
 SVC --> PIPELINE["pipeline.py"]
 PIPELINE --> SHADOW["btc_shadow_forecast_service.py"]
+SHADOW --> CONFIG["config.py"]
 ```
 
 **图表来源**
@@ -576,6 +650,7 @@ PIPELINE --> SHADOW["btc_shadow_forecast_service.py"]
 - [data_provider/crypto_ws_quote.py](file://data_provider/crypto_ws_quote.py)
 - [src/core/pipeline.py](file://src/core/pipeline.py)
 - [src/services/btc_shadow_forecast_service.py](file://src/services/btc_shadow_forecast_service.py)
+- [src/config.py](file://src/config.py)
 
 章节来源
 - [apps/dsa-web/src/api/cryptoTrading.ts](file://apps/dsa-web/src/api/cryptoTrading.ts)
@@ -586,29 +661,30 @@ PIPELINE --> SHADOW["btc_shadow_forecast_service.py"]
 - **计算层**：向量化指标计算、避免重复计算、使用内存映射大数组。
 - **并发**：异步IO、连接池、限流与熔断保护。
 - **存储**：冷热数据分层、压缩归档、索引优化。
-- **更新** 新的市场数据服务提供了更智能的缓存策略和数据完整性检查，影子预测服务采用轻量级numpy模型确保高性能。
+- **更新** 新的市场数据服务提供了更智能的缓存策略和数据完整性检查，影子预测服务采用轻量级numpy模型确保高性能，配置管理支持环境变量动态加载。
 
 ## 故障排查指南
 - **常见错误**：参数校验失败、数据源不可用、签名错误、超时与重试。
 - **诊断步骤**：检查日志、验证配置、模拟请求、逐步隔离组件。
 - **恢复策略**：切换数据源、降级模式、人工干预开关。
-- **更新** 现在可以检查本地缓存状态和数据完整性，影子预测服务的错误会被记录但不会中断主分析流程。
+- **更新** 现在可以检查本地缓存状态和数据完整性，影子预测服务的错误会被记录但不会中断主分析流程，配置验证确保参数有效性。
 
 章节来源
 - [api/v1/endpoints/crypto_trading.py](file://api/v1/endpoints/crypto_trading.py)
 - [src/services/crypto_market_data_service.py](file://src/services/crypto_market_data_service.py)
 - [src/core/pipeline.py](file://src/core/pipeline.py)
+- [src/config.py](file://src/config.py)
 
 ## 结论
 本API体系以模块化与高内聚低耦合为原则，覆盖从数据到信号的完整链条，并提供WebSocket实时能力与完善的风控机制。通过标准化Schema与类型定义，确保前后端一致性与可维护性。
 
-**更新** 新的增强型数据模型和市场数据服务提供了更强大的加密货币交易支持，特别是对于永续合约交易的执行价格与标记价格分离处理，以及资金费率的考虑。BTC影子预测服务的集成为主分析管道提供了额外的观察型预测能力，可用于离线校准和历史诊断，而不影响实际交易决策。建议在生产环境启用缓存、监控与告警，持续优化性能与稳定性。
+**更新** BTC影子预测服务的增强功能显著提升了系统的预测能力和成本控制能力。通过支持传递曲线预测小时数、主预测小时数、置信度阈值和基于现有加密回测费用和滑点设置的往返成本计算，服务现在能够执行成本感知的交易模拟来评估预测性能。新的配置管理系统提供了灵活的参数调节能力，而主分析管道的集成确保了预测结果的安全性和可靠性。建议在生产环境启用缓存、监控与告警，持续优化性能与稳定性。
 
 ## 附录
 - **集成指南**：前端使用TS客户端封装HTTP调用，遵循类型定义进行开发。
 - **数据处理示例**：参考历史数据拉取与指标计算流程，结合缓存与降级策略。
 - **最佳实践**：合理设置超时与重试、使用幂等键、记录关键决策日志。
-- **更新** 建议使用CryptoMarketDataService而非直接调用CryptoFetcher，以获得更好的缓存管理和数据一致性保证。影子预测服务可通过配置项灵活启用或禁用。
+- **更新** 建议使用CryptoMarketDataService而非直接调用CryptoFetcher，以获得更好的缓存管理和数据一致性保证。影子预测服务可通过配置项灵活启用或禁用，支持环境变量动态配置。
 
 章节来源
 - [apps/dsa-web/src/api/cryptoTrading.ts](file://apps/dsa-web/src/api/cryptoTrading.ts)
@@ -616,3 +692,5 @@ PIPELINE --> SHADOW["btc_shadow_forecast_service.py"]
 - [src/services/crypto_market_data_service.py](file://src/services/crypto_market_data_service.py)
 - [src/services/btc_shadow_forecast_service.py](file://src/services/btc_shadow_forecast_service.py)
 - [src/core/pipeline.py](file://src/core/pipeline.py)
+- [src/config.py](file://src/config.py)
+- [tests/test_btc_shadow_forecast_service.py](file://tests/test_btc_shadow_forecast_service.py)

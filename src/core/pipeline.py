@@ -253,6 +253,41 @@ class StockAnalysisPipeline:
                 },
             )
 
+    def _load_btc_hourly_frames(
+        self,
+        code: str,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Load execution bars independently from optional model history."""
+        from src.services.crypto_market_data_service import CryptoMarketDataService
+
+        market_data = CryptoMarketDataService(db_manager=self.db)
+        instrument = {
+            "type": "perpetual",
+            "venue": "okx",
+            "margin_mode": "isolated",
+        }
+        hourly_df = market_data.get_bars(
+            code,
+            period="hourly",
+            days=7,
+            instrument=instrument,
+        )
+        shadow_hourly_df = hourly_df
+        if bool(getattr(self.config, "btc_shadow_forecast_enabled", True)):
+            shadow_lookback_days = max(
+                7,
+                int(getattr(self.config, "btc_shadow_forecast_lookback_days", 2500)),
+            )
+            cached_history = market_data.get_cached_contiguous_bars(
+                code,
+                period="hourly",
+                days=shadow_lookback_days,
+                instrument=instrument,
+            )
+            if not cached_history.empty:
+                shadow_hourly_df = cached_history
+        return hourly_df, shadow_hourly_df
+
     def fetch_and_save_stock_data(
         self, 
         code: str,
@@ -479,30 +514,10 @@ class StockAnalysisPipeline:
                         df = self._augment_historical_with_realtime(df, realtime_quote, code)
                     trend_result = self.trend_analyzer.analyze(df, code)
                     hourly_df = None
+                    shadow_hourly_df = None
                     if is_crypto_code(code):
                         try:
-                            from src.services.crypto_market_data_service import CryptoMarketDataService
-
-                            shadow_enabled = bool(
-                                getattr(self.config, "btc_shadow_forecast_enabled", True)
-                            )
-                            shadow_lookback_days = int(
-                                getattr(self.config, "btc_shadow_forecast_lookback_days", 2500)
-                            )
-                            hourly_df = CryptoMarketDataService(db_manager=self.db).get_bars(
-                                code,
-                                period="hourly",
-                                days=max(7, shadow_lookback_days) if shadow_enabled else 7,
-                                # BTC analysis and the volatility monitor use the same
-                                # OKX perpetual trade/mark series.  Passing the contract
-                                # explicitly is required because a bare BTC alias defaults
-                                # to spot and would miss the locally cached bars.
-                                instrument={
-                                    "type": "perpetual",
-                                    "venue": "okx",
-                                    "margin_mode": "isolated",
-                                },
-                            )
+                            hourly_df, shadow_hourly_df = self._load_btc_hourly_frames(code)
                         except Exception as exc:
                             logger.warning("%s(%s) BTC 小时线数据获取失败，仅使用日线分析: %s", stock_name, code, exc)
                     crypto_technical_context = build_crypto_multi_timeframe_context(df, hourly_df, code)
@@ -544,7 +559,7 @@ class StockAnalysisPipeline:
                                             getattr(self.config, "crypto_backtest_slippage_bps", 2.0)
                                         )
                                     ),
-                                ).build(hourly_df)
+                                ).build(shadow_hourly_df)
                             except Exception as exc:
                                 logger.warning(
                                     "%s(%s) BTC 小时线影子预测失败，继续使用现有技术面上下文: %s",

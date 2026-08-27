@@ -928,6 +928,10 @@ class Config:
     crypto_backtest_maintenance_margin_rate: float = 0.005
     crypto_backtest_minimum_risk_reward: float = 1.2
     crypto_backtest_minimum_volume_ratio: float = 1.0
+    crypto_backtest_dynamic_equity_sizing: bool = True
+    crypto_backtest_max_portfolio_risk_pct: float = 2.0
+    crypto_backtest_consecutive_loss_cooldown: int = 3
+    crypto_backtest_daily_loss_limit_pct: float = 3.0
     crypto_market_fetch_budget_seconds: float = 60.0
     crypto_market_fetch_max_pages: int = 200
     crypto_market_fetch_retry_count: int = 2
@@ -2024,6 +2028,28 @@ class Config:
                 os.getenv('CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO'),
                 1.0,
                 field_name='CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO',
+                minimum=0.0,
+            ),
+            crypto_backtest_dynamic_equity_sizing=parse_env_bool(
+                os.getenv('CRYPTO_BACKTEST_DYNAMIC_EQUITY_SIZING'),
+                True,
+            ),
+            crypto_backtest_max_portfolio_risk_pct=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_MAX_PORTFOLIO_RISK_PCT'),
+                2.0,
+                field_name='CRYPTO_BACKTEST_MAX_PORTFOLIO_RISK_PCT',
+                minimum=0.0,
+            ),
+            crypto_backtest_consecutive_loss_cooldown=parse_env_int(
+                os.getenv('CRYPTO_BACKTEST_CONSECUTIVE_LOSS_COOLDOWN'),
+                3,
+                field_name='CRYPTO_BACKTEST_CONSECUTIVE_LOSS_COOLDOWN',
+                minimum=1,
+            ),
+            crypto_backtest_daily_loss_limit_pct=parse_env_float(
+                os.getenv('CRYPTO_BACKTEST_DAILY_LOSS_LIMIT_PCT'),
+                3.0,
+                field_name='CRYPTO_BACKTEST_DAILY_LOSS_LIMIT_PCT',
                 minimum=0.0,
             ),
             crypto_market_fetch_budget_seconds=parse_env_float(

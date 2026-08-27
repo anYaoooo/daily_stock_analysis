@@ -1235,6 +1235,10 @@ Set the following variables in `.env` (all optional, have defaults):
 | `CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE` | `0.005` | Maintenance margin rate used by v4/v5 liquidation estimates |
 | `CRYPTO_BACKTEST_MINIMUM_RISK_REWARD` | `1.2` | Minimum risk/reward required by v5 at both planned and actual fill prices |
 | `CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO` | `1.0` | Minimum `volume_ratio_gte` confirmation threshold required by v5 |
+| `CRYPTO_BACKTEST_DYNAMIC_EQUITY_SIZING` | `true` | Recalculate the next trade's risk budget from the previous completed equity |
+| `CRYPTO_BACKTEST_MAX_PORTFOLIO_RISK_PCT` | `2.0` | Portfolio risk audit threshold (diagnostic only) |
+| `CRYPTO_BACKTEST_CONSECUTIVE_LOSS_COOLDOWN` | `3` | Consecutive-loss cooldown audit threshold (diagnostic only) |
+| `CRYPTO_BACKTEST_DAILY_LOSS_LIMIT_PCT` | `3.0` | Daily loss protection audit threshold (diagnostic only) |
 
 ### BTC Historical Training Data
 
@@ -1244,7 +1248,7 @@ The backfill does not fabricate unavailable full-history funding rates. Historic
 
 ### Auto-run
 
-Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v5` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, then checks price geometry, minimum risk/reward, cost coverage, and volume confirmation at both the planned price and the next-candle fill. A gap beyond the target or below the quality threshold is recorded as a rejected fill rather than a trade. Qualified plans then apply SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Perpetual plans also require complete mark-price and funding histories to estimate liquidation, funding cost, and maker/taker fees. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing v2/v3/v4 results remain auditable but are never mixed with v5 metrics.
+Backtesting triggers automatically after the BTC analysis flow completes (non-blocking; failures do not affect notifications). In schedule mode, the BTC daily main analysis runs at 08:00 Beijing time, the hourly intraday analysis runs at minute 05 of each hour to fetch the previous complete hourly K-line, and a background worker checks eligible BTC history every hour. `btc-plan-v5` requires each `daily_long`, `daily_short`, or `intraday` plan to carry a `btc-execution-v1` structured execution contract. The engine evaluates close, volume-ratio, and rolling-VWAP conditions on closed candles only, then checks price geometry, minimum risk/reward, cost coverage, and volume confirmation at both the planned price and the next-candle fill. A gap beyond the target or below the quality threshold is recorded as a rejected fill rather than a trade. Qualified plans then apply SL/TP, maximum holding bars, fees, slippage, risk budget, and notional caps. Counter-trend hourly plans are tagged `countertrend_limited`, capped at 50% of their original position multiplier, and limited to six hourly entry-wait bars. Plans missing derivatives, order-flow, EWMA, or macro context are tagged `degraded_missing_context` and size-capped. Perpetual plans also require complete mark-price and funding histories to estimate liquidation, funding cost, and maker/taker fees. Open evaluation windows remain `insufficient_data/provisional` and can be recomputed later; invalid or unsupported contracts are not downgraded to touch-price entries. Summaries exclude overlapping BTC positions and calculate contract win rate from independent triggered trades, with fewer than 100 independent triggers marked low confidence. Existing v2/v3/v4 results remain auditable but are never mixed with v5 metrics.
 
 ### BTC Loss Review
 
@@ -1252,22 +1256,29 @@ The Backtest page calls `GET /api/v1/backtest/crypto/loss-review` and reads only
 
 After a single-symbol BTC analysis completes, full report notifications use the BTC-specific template instead of the generic stock decision dashboard. Each plan renders direction, entry, stop, and target as separate numeric lines, followed by a dedicated execution-conditions section for zones, triggers, invalidation, risk/reward, sizing, confidence, and no-trade reasons. This avoids broken mobile tables and keeps critical prices out of prose.
 
-The daily and hourly BTC contexts now calculate a `btc-ewma-vol-v1` next-bar sigma, historical percentile, and volatility regime from closed returns. This model controls risk rather than direction: after the LLM returns a plan, a deterministic overlay caps position-size multipliers at 50% in `elevated` volatility and 25% in `extreme` volatility without changing direction, entry, stop, or the real-trading switch. Backtest sizing consumes the cap directly; when a plan already has a stricter limit, the system keeps the smaller value and never increases exposure during risk overlay or repeated alignment. The derivatives context also aggregates the latest 36 Binance Futures 5-minute candles into taker-buy share, CVD, and price/CVD divergence. These order-flow fields remain shadow validation factors: they can demand stronger execution confirmation and enter backtest groupings, but cannot independently reverse the daily or hourly view. Missing data is reported explicitly and does not stop the existing technical-analysis path.
+The daily and hourly BTC contexts now calculate a `btc-ewma-vol-v1` next-bar sigma, historical percentile, and volatility regime from closed returns. This model controls risk rather than direction: after the LLM returns a plan, a deterministic overlay caps position-size multipliers at 50% in `elevated` volatility and 25% in `extreme` volatility without changing direction, entry, stop, or the real-trading switch. Backtest sizing consumes the cap directly; when a plan already has a stricter limit, the system keeps the smaller value and never increases exposure during risk overlay or repeated alignment. Counter-trend controls are persisted in the execution contract so the shorter validity and size cap are auditable in backtests and the Web UI. The derivatives context also aggregates the latest 36 Binance Futures 5-minute candles into taker-buy share, CVD, and price/CVD divergence. These order-flow fields remain shadow validation factors: they can demand stronger execution confirmation and enter backtest groupings, but cannot independently reverse the daily or hourly view. Missing data is reported explicitly and does not stop the existing technical-analysis path.
 
 ### Evaluation Metrics
 
 | Metric | Description |
 |--------|-------------|
-| `direction_accuracy_pct` | Direction prediction accuracy (expected direction matches actual) |
+| `direction_accuracy_pct` | Post-fill non-neutral net-result hit rate (independent fills, after costs) |
+| `direction_accuracy_raw_pct` | Raw direction hit rate from cost-free price MFE/MAE after signal trigger |
+| `signal_quality_rate_pct` | Signal quality rate (triggered signals / completed evaluations) |
+| `execution_fill_rate_pct` | Execution fill rate (filled orders / triggered signals) |
 | `win_rate_pct` | Contract win rate for independent triggered trades (wins / (wins + losses), excludes neutral; v2 is proxy-only) |
 | `avg_stock_return_pct` | Average stock return percentage |
 | `avg_simulated_return_pct` | Average simulated execution return (including SL/TP exits) |
 | `risk_metrics.total_return_pct` | Account total return for BTC trading backtests |
+| `trade.equity_before` | Equity available before entry when dynamic sizing is enabled |
 | `risk_metrics.max_drawdown_pct` | Maximum drawdown of the equity curve |
 | `risk_metrics.profit_factor` | Gross profit / absolute gross loss |
 | `risk_metrics.total_net_pnl` | Cumulative net PnL after fees and slippage |
 | `risk_metrics.avg_r_multiple` | Average R multiple for BTC backtests |
 | `equity_curve` | Account equity curve ordered by simulated trades |
+| `diagnostics.plan_quality_summary` | Average four-dimensional plan quality scores: direction, location, risk/reward, and execution |
+| `diagnostics.cost_sensitivity` | Sensitivity matrix for 5/10/15 bps fees and 2/5/10 bps slippage |
+| `diagnostics.risk_controls` | Audit state for portfolio risk, consecutive-loss cooldown, and daily-loss protection |
 | `stop_loss_trigger_rate` | Stop-loss trigger rate (only counts records with SL configured) |
 | `take_profit_trigger_rate` | Take-profit trigger rate (only counts records with TP configured) |
 

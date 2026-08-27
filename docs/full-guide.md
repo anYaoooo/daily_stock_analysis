@@ -1405,6 +1405,10 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 | `CRYPTO_BACKTEST_MAINTENANCE_MARGIN_RATE` | `0.005` | v4/v5 永续合约强平估算使用的维持保证金率 |
 | `CRYPTO_BACKTEST_MINIMUM_RISK_REWARD` | `1.2` | v5 在计划价和实际成交价阶段要求的最低风险收益比 |
 | `CRYPTO_BACKTEST_MINIMUM_VOLUME_RATIO` | `1.0` | v5 可交易计划要求的最低量比确认阈值 |
+| `CRYPTO_BACKTEST_DYNAMIC_EQUITY_SIZING` | `true` | 是否按上一笔完成后的权益计算下一笔风险预算；关闭后使用固定初始权益 |
+| `CRYPTO_BACKTEST_MAX_PORTFOLIO_RISK_PCT` | `2.0` | 组合风险审计阈值（仅诊断） |
+| `CRYPTO_BACKTEST_CONSECUTIVE_LOSS_COOLDOWN` | `3` | 连续亏损冷却审计阈值（仅诊断） |
+| `CRYPTO_BACKTEST_DAILY_LOSS_LIMIT_PCT` | `3.0` | 单日亏损保护审计阈值（仅诊断） |
 
 ### BTC 历史训练数据
 
@@ -1414,7 +1418,7 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 
 ### 自动运行
 
-回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析会在每小时 05 分执行以获取上一根完整小时 K 线，后台回测仍会每小时检查一次够龄的 BTC 历史报告。`btc-plan-v5` 从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，并要求计划携带 `btc-execution-v1` 结构化执行契约。引擎只使用已闭合 K 线验证收盘、量比和 rolling VWAP 条件，在全部条件连续满足后于下一根 K 线开盘成交。v5 会在计划价和实际开盘成交价两阶段检查多空点位关系、最低风险收益比、目标覆盖成本能力与量能门槛；若跳空越过目标或使计划质量跌破门槛，则记录为条件触发但放弃成交。合格交易再按止盈止损、最长持有 bars、手续费、滑点、风险预算和名义仓位模拟，永续合约同时要求完整标记价格与资金费率历史。未闭合窗口保持 `insufficient_data/provisional`，后续可重算，不进入胜率；缺少或含不支持条件的契约标记为不可回测，不会降级成触价成交。汇总排除同一 BTC 持仓期间的重叠信号，仅以独立触发交易计算策略契约胜率，并在独立触发样本少于 100 时标记低置信度。旧 v2/v3/v4 结果保留审计，但不与 v5 指标混合。
+回测在 BTC 分析流程完成后自动触发（非阻塞，失败不影响通知推送）。schedule 模式下，BTC 日线主分析会在北京时间 08:00 执行，小时线日内分析会在每小时 05 分执行以获取上一根完整小时 K 线，后台回测仍会每小时检查一次够龄的 BTC 历史报告。`btc-plan-v5` 从 `analysis_history.raw_result` 提取 `daily_long`、`daily_short` 与 `intraday` 三类计划，并要求计划携带 `btc-execution-v1` 结构化执行契约。引擎只使用已闭合 K 线验证收盘、量比和 rolling VWAP 条件，在全部条件连续满足后于下一根 K 线开盘成交。v5 会在计划价和实际开盘成交价两阶段检查多空点位关系、最低风险收益比、目标覆盖成本能力与量能门槛；若跳空越过目标或使计划质量跌破门槛，则记录为条件触发但放弃成交。合格交易再按止盈止损、最长持有 bars、手续费、滑点、风险预算和名义仓位模拟，永续合约同时要求完整标记价格与资金费率历史。逆日线小时计划单独标记为 `countertrend_limited`，仓位乘数最多为 50%，入场等待窗口最多 6 根小时线；缺失衍生品、订单流、EWMA 或宏观上下文的计划标记为 `degraded_missing_context` 并限制仓位。未闭合窗口保持 `insufficient_data/provisional`，后续可重算，不进入胜率；缺少或含不支持条件的契约标记为不可回测，不会降级成触价成交。汇总排除同一 BTC 持仓期间的重叠信号，仅以独立触发交易计算策略契约胜率，并在独立触发样本少于 100 时标记低置信度。旧 v2/v3/v4 结果保留审计，但不与 v5 指标混合。
 
 ### BTC 亏损复盘
 
@@ -1422,24 +1426,31 @@ P3 开始，生命周期由 `DecisionSignalService` 统一补齐：显式传入�
 
 BTC 单标的分析完成后的完整报告推送使用 BTC 专用模板，不再发送通用股票决策仪表盘；正文只保留多空建议、日线多单计划、日线空单计划、小时线日内计划和技术分析。每个计划先逐行展示纯数值方向、入场、止损和止盈，再单独展示入场区间、触发、失效、风险收益比、仓位、置信度与等待原因，避免移动端表格错列或把关键点位埋在说明文字中。
 
-BTC 日线与小时线技术上下文会基于闭合收益率计算 `btc-ewma-vol-v1` 下一根波动 sigma、历史分位和波动状态。该模型只控制风险，不预测方向：`elevated` 与 `extreme` 状态会在 LLM 输出后由确定性覆盖层把计划仓位乘数上限分别限制为 50% 和 25%，不会自动修改方向、入场价、止损价或启用真实交易。该上限会被回测仓位计算实际消费；若计划已有更严格的仓位限制，系统取两者较小值，绝不因风险覆盖或重复对齐放大仓位。衍生品上下文还会聚合 Binance Futures 最近 36 根 5 分钟 K 线的主动买卖量，计算主动买入占比、CVD 和价格/CVD 背离；这些字段当前属于影子验证因子，只用于要求更强执行确认和回测分组，不能单独反转日线或小时线结论。数据获取失败时明确标记为缺失，原技术分析继续运行。
+BTC 日线与小时线技术上下文会基于闭合收益率计算 `btc-ewma-vol-v1` 下一根波动 sigma、历史分位和波动状态。该模型只控制风险，不预测方向：`elevated` 与 `extreme` 状态会在 LLM 输出后由确定性覆盖层把计划仓位乘数上限分别限制为 50% 和 25%，不会自动修改方向、入场价、止损价或启用真实交易。该上限会被回测仓位计算实际消费；若计划已有更严格的仓位限制，系统取两者较小值，绝不因风险覆盖或重复对齐放大仓位。逆势计划的限仓和有效期也会写入执行契约，供回测与 Web 页面复核。衍生品上下文还会聚合 Binance Futures 最近 36 根 5 分钟 K 线的主动买卖量，计算主动买入占比、CVD 和价格/CVD 背离；这些字段当前属于影子验证因子，只用于要求更强执行确认和回测分组，不能单独反转日线或小时线结论。数据获取失败时明确标记为缺失，原技术分析继续运行。
 
 ### 评估指标
 
 | 指标 | 说明 |
 |------|------|
-| `direction_accuracy_pct` | 方向预测准确率（预期方向与实际一致） |
+| `direction_accuracy_pct` | 成交后非中性净结果命中率（独立成交，已含交易成本） |
+| `direction_accuracy_raw_pct` | 原始方向命中率（信号触发后的纯价格 MFE/MAE，不含交易成本） |
+| `signal_quality_rate_pct` | 信号质量率（已形成信号 / 已完成评估） |
+| `execution_fill_rate_pct` | 执行成交率（实际成交 / 已形成信号） |
 | `win_rate_pct` | 策略契约胜率（独立触发交易中的胜 / (胜+负)，不含中性；v2 仅为触价代理胜率） |
 | `avg_stock_return_pct` | 平均股票收益率 |
 | `avg_simulated_return_pct` | 平均模拟执行收益率（含止盈止损退出） |
 | `stop_loss_trigger_rate` | 止损触发率（仅统计配置了止损的记录） |
 | `take_profit_trigger_rate` | 止盈触发率（仅统计配置了止盈的记录） |
 | `risk_metrics.total_return_pct` | BTC 正式交易回测账户总收益率 |
+| `trade.equity_before` | 动态 sizing 时本笔交易入场前权益 |
 | `risk_metrics.max_drawdown_pct` | 资金曲线最大回撤 |
 | `risk_metrics.profit_factor` | 总盈利 / 总亏损绝对值 |
 | `risk_metrics.total_net_pnl` | 扣除手续费和滑点后的累计净盈亏 |
 | `risk_metrics.avg_r_multiple` | BTC 回测平均 R 倍数 |
 | `equity_curve` | 按回测交易顺序生成的账户权益曲线 |
+| `diagnostics.plan_quality_summary` | 计划质量四维分数均值：方向、位置、风险收益、执行 |
+| `diagnostics.cost_sensitivity` | 手续费 5/10/15 bps 与滑点 2/5/10 bps 的敏感性矩阵 |
+| `diagnostics.risk_controls` | 组合风险、连续亏损和单日亏损护栏的审计状态 |
 
 ---
 

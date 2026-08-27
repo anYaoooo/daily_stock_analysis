@@ -5,13 +5,74 @@ import unittest
 import json
 from datetime import datetime, timedelta, timezone
 
-from src.core.crypto_backtest_engine import CryptoPlan
+from src.core.crypto_backtest_engine import CryptoPlan, CryptoPlanBacktestConfig
 from src.repositories.crypto_backtest_repo import CryptoBacktestRepository
 from src.services.crypto_backtest_service import CryptoBacktestService, _Bar
 from src.storage import AnalysisHistory, CryptoBacktestResult, DatabaseManager
 
 
 class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
+    def test_summary_requires_metric_migration_when_denominators_are_missing(self):
+        from src.storage import CryptoBacktestSummary
+
+        legacy = CryptoBacktestSummary(
+            scope="overall",
+            engine_version="btc-plan-v5",
+            diagnostics_json=json.dumps({"metric_semantics": "structured_execution_contract"}),
+        )
+        current = CryptoBacktestSummary(
+            scope="overall",
+            engine_version="btc-plan-v5",
+            diagnostics_json=json.dumps({
+                "summary_contract_version": "btc-backtest-summary-v2",
+                "metric_denominators": {"signal_quality": "completed evaluations"},
+            }),
+        )
+
+        self.assertTrue(CryptoBacktestService._summary_requires_metric_migration(legacy))
+        self.assertFalse(CryptoBacktestService._summary_requires_metric_migration(current))
+
+    def test_get_summary_recomputes_legacy_summary_before_returning_metrics(self):
+        from src.storage import CryptoBacktestSummary
+
+        legacy = CryptoBacktestSummary(
+            scope="overall",
+            engine_version="btc-plan-v5",
+            diagnostics_json="{}",
+        )
+        current = CryptoBacktestSummary(
+            scope="overall",
+            engine_version="btc-plan-v5",
+            direction_accuracy_raw_pct=42.0,
+            signal_quality_rate_pct=25.0,
+            execution_fill_rate_pct=50.0,
+            diagnostics_json=json.dumps({
+                "summary_contract_version": "btc-backtest-summary-v2",
+                "metric_denominators": {"signal_quality": "completed evaluations"},
+            }),
+        )
+
+        class Repo:
+            def __init__(self):
+                self.calls = 0
+
+            def get_summary(self, **kwargs):
+                self.calls += 1
+                return legacy if self.calls == 1 else current
+
+        service = CryptoBacktestService.__new__(CryptoBacktestService)
+        service.repo = Repo()
+        service._engine_version = lambda: "btc-plan-v5"
+        recomputed = []
+        service._recompute_summaries = lambda *, engine_version: recomputed.append(engine_version)
+
+        result = service.get_summary()
+
+        self.assertEqual(result["direction_accuracy_raw_pct"], 42.0)
+        self.assertEqual(result["signal_quality_rate_pct"], 25.0)
+        self.assertEqual(result["execution_fill_rate_pct"], 50.0)
+        self.assertEqual(recomputed, ["btc-plan-v5"])
+
     def test_bars_from_dataframe_keeps_execution_fields_and_indicators(self):
         import pandas as pd
 
@@ -609,6 +670,56 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         )
 
         self.assertEqual(plan.position_multiplier_cap, 0.25)
+
+    def test_attach_plan_quality_persists_four_score_dimensions(self):
+        analysis = AnalysisHistory(code="BTCUSDT")
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            entry_price=100,
+            stop_loss=95,
+            take_profit=110,
+            raw_plan={},
+            execution_contract={
+                "version": "btc-execution-v1",
+                "entry": {
+                    "setup_type": "breakout",
+                    "logic": "all",
+                    "conditions": [{"type": "close_above", "value": 100}],
+                    "confirmation_bars": 1,
+                    "fill": "next_bar_open",
+                    "max_wait_bars": 8,
+                },
+                "exit": {"max_holding_bars": 12},
+            },
+        )
+        evaluation = {
+            "eval_status": "completed",
+            "signal_triggered": True,
+            "entry_triggered": True,
+            "order_status": "filled",
+            "diagnostics": {
+                "indicator_tags": {
+                    "price_action": {"state": "breakout"},
+                    "ema": {"structure": "bullish"},
+                    "vwap": {"price_position": "above"},
+                    "intraday": {"alignment": "aligned_long"},
+                }
+            },
+        }
+
+        enriched = CryptoBacktestService._attach_plan_quality(
+            evaluation=evaluation,
+            analysis=analysis,
+            plan=plan,
+            eval_config=CryptoPlanBacktestConfig(engine_version="btc-plan-v5"),
+        )
+
+        scores = enriched["diagnostics"]["plan_quality"]["scores"]
+        self.assertEqual(set(scores), {
+            "direction_score", "location_score", "risk_reward_score", "execution_score",
+        })
 
     def test_indicator_group_breakdown_groups_by_existing_tags(self):
         rows = [

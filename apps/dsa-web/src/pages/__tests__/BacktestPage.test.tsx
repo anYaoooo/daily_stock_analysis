@@ -85,15 +85,41 @@ const basePerformance = {
 
 const baseLossReview = {
   engineVersion: 'btc-plan-v5',
-  reviewedResults: 1,
-  lossCount: 1,
-  causeBreakdown: { direction_mismatch: 1 },
-  indicatorPatterns: [{
-    dimension: 'volume',
-    key: 'low',
-    lossCount: 1,
-    note: '仅表示亏损样本中的共同特征，不代表已证明的因果关系。',
-  }],
+  reviewedResults: 6,
+  lossCount: 6,
+  causeBreakdown: { direction_mismatch: 6 },
+  indicatorPatterns: [
+    {
+      dimension: 'price_action',
+      key: 'bearish_push',
+      lossCount: 4,
+      note: '仅表示亏损样本中的共同特征，不代表已证明的因果关系。',
+    },
+    {
+      dimension: 'volume',
+      key: 'low',
+      lossCount: 4,
+      note: '仅表示亏损样本中的共同特征，不代表已证明的因果关系。',
+    },
+    {
+      dimension: 'ema',
+      key: 'bullish',
+      lossCount: 3,
+      note: '仅表示亏损样本中的共同特征，不代表已证明的因果关系。',
+    },
+    {
+      dimension: 'event',
+      key: 'sharp_selloff_wait_reclaim',
+      lossCount: 3,
+      note: '仅表示亏损样本中的共同特征，不代表已证明的因果关系。',
+    },
+    {
+      dimension: 'vwap',
+      key: 'above',
+      lossCount: 3,
+      note: '仅表示亏损样本中的共同特征，不代表已证明的因果关系。',
+    },
+  ],
   improvementSuggestions: ['按指标组合与周期拆分亏损样本，验证量能、多周期方向和关键位确认是否需要收紧。'],
   items: [{
     analysisHistoryId: 7,
@@ -218,6 +244,13 @@ describe('BacktestPage', () => {
     expect(screen.getByText('策略契约胜率')).toBeInTheDocument();
     expect(screen.getByText('亏损复盘')).toBeInTheDocument();
     expect(screen.getByText('方向判断与后续走势不一致')).toBeInTheDocument();
+    expect(screen.getByText(/价格行为：短线下压（4\/6 笔）/)).toBeInTheDocument();
+    expect(screen.getByText(/成交量：低量（4\/6 笔）/)).toBeInTheDocument();
+    expect(screen.getByText(/EMA：多头排列（3\/6 笔）/)).toBeInTheDocument();
+    expect(screen.getByText(/行情事件：急跌后等待收复（3\/6 笔）/)).toBeInTheDocument();
+    expect(screen.getByText(/VWAP：价格在上方（3\/6 笔）/)).toBeInTheDocument();
+    expect(screen.getByText('仅表示亏损样本中的共现频率，不代表该特征导致亏损。')).toBeInTheDocument();
+    expect(screen.queryByText(/price_action\.bearish_push/)).not.toBeInTheDocument();
     expect(screen.getByText('独立成交（收益统计）/ 已完成评估')).toBeInTheDocument();
     expect(screen.getByText('信号 / 实际成交 / 拒单')).toBeInTheDocument();
     expect(screen.getByText('信号成交率')).toBeInTheDocument();

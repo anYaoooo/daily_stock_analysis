@@ -58,6 +58,52 @@ def test_hourly_days_is_calendar_day_lookback() -> None:
     assert start == datetime(2026, 8, 3, 0, tzinfo=timezone.utc)
 
 
+def test_cached_contiguous_bars_accepts_partial_long_training_window() -> None:
+    DatabaseManager.reset_instance()
+    db = DatabaseManager(db_url="sqlite:///:memory:")
+    fetcher = Mock()
+    timestamps = pd.date_range("2026-08-09 00:00", periods=24, freq="h")
+    fetcher.get_perpetual_kline_data.return_value = _frame(
+        {
+            "date": timestamps,
+            "open": [100.0 + index for index in range(24)],
+            "high": [101.0 + index for index in range(24)],
+            "low": [99.0 + index for index in range(24)],
+            "close": [100.5 + index for index in range(24)],
+            "volume": [10.0 + index for index in range(24)],
+            "execution_open": [100.0 + index for index in range(24)],
+            "execution_high": [101.0 + index for index in range(24)],
+            "execution_low": [99.0 + index for index in range(24)],
+            "execution_close": [100.5 + index for index in range(24)],
+            "mark_open": [100.0 + index for index in range(24)],
+            "mark_high": [101.0 + index for index in range(24)],
+            "mark_low": [99.0 + index for index in range(24)],
+            "mark_close": [100.5 + index for index in range(24)],
+        },
+        source="okx_ccxt",
+    )
+    service = CryptoMarketDataService(
+        db_manager=db,
+        fetcher=fetcher,
+        now_provider=lambda: datetime(2026, 8, 10, 0, 10, tzinfo=timezone.utc),
+    )
+    instrument = {"type": "perpetual", "venue": "okx", "margin_mode": "isolated"}
+
+    core = service.get_bars("BTC", period="hourly", days=1, instrument=instrument)
+    cached = service.get_cached_contiguous_bars(
+        "BTC",
+        period="hourly",
+        days=2,
+        instrument=instrument,
+    )
+
+    assert len(core) == 24
+    assert len(cached) == 24
+    assert cached.attrs["requested_window_complete"] is False
+    assert fetcher.get_perpetual_kline_data.call_count == 1
+    DatabaseManager.reset_instance()
+
+
 def test_cache_excludes_current_partial_bar() -> None:
     DatabaseManager.reset_instance()
     db = DatabaseManager(db_url="sqlite:///:memory:")

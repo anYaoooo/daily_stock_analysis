@@ -178,6 +178,40 @@ class TestComputeMaStatus(unittest.TestCase):
 class TestCryptoTechnicalPrompt(unittest.TestCase):
     """BTC 专项交易框架 prompt 注入测试。"""
 
+    def test_hourly_execution_window_is_independent_from_shadow_history(self) -> None:
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.db = MagicMock()
+        pipeline.config = MagicMock(
+            btc_shadow_forecast_enabled=True,
+            btc_shadow_forecast_lookback_days=2500,
+        )
+        core = pd.DataFrame({"close": [100.0]})
+        shadow = pd.DataFrame({"close": [90.0, 100.0]})
+
+        with patch(
+            "src.services.crypto_market_data_service.CryptoMarketDataService"
+        ) as service_cls:
+            service = service_cls.return_value
+            service.get_bars.return_value = core
+            service.get_cached_contiguous_bars.return_value = shadow
+
+            hourly_df, shadow_hourly_df = pipeline._load_btc_hourly_frames("BTC")
+
+        self.assertIs(hourly_df, core)
+        self.assertIs(shadow_hourly_df, shadow)
+        service.get_bars.assert_called_once_with(
+            "BTC",
+            period="hourly",
+            days=7,
+            instrument={"type": "perpetual", "venue": "okx", "margin_mode": "isolated"},
+        )
+        service.get_cached_contiguous_bars.assert_called_once_with(
+            "BTC",
+            period="hourly",
+            days=2500,
+            instrument={"type": "perpetual", "venue": "okx", "margin_mode": "isolated"},
+        )
+
     def test_prompt_includes_crypto_framework_when_context_present(self) -> None:
         analyzer = GeminiAnalyzer()
         analyzer._get_skill_prompt_sections = lambda: ("", "", False)

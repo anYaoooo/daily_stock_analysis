@@ -79,6 +79,53 @@ class CryptoMarketDataService:
 
         return self._filter_window(closed, start_at=start_at, end_at=latest_closed_at, period=period)
 
+    def get_cached_contiguous_bars(
+        self,
+        code: str,
+        *,
+        period: str,
+        days: int,
+        instrument: Optional[dict[str, Any]] = None,
+    ) -> pd.DataFrame:
+        """Return the latest contiguous cached suffix without remote refresh.
+
+        Optional consumers such as shadow models can use a long local history
+        without turning an incomplete training window into a failure of the
+        short-window trading context.
+        """
+        if period not in _SUPPORTED_PERIODS:
+            raise ValueError(f"unsupported local crypto cache period: {period}")
+        if days < 1:
+            raise ValueError("days must be at least 1")
+
+        identity = self._identity(code, instrument)
+        fetched_at = self._utc_naive(self._now_provider())
+        start_at, latest_closed_at = self._requested_window(fetched_at, period=period, days=days)
+        rows = self.db.get_crypto_ohlcv_bars(
+            **identity,
+            period=period,
+            start_at=start_at,
+            end_at=latest_closed_at,
+        )
+        contiguous_rows = self._latest_contiguous_suffix(
+            rows,
+            end_at=latest_closed_at,
+            period=period,
+        )
+        result = self._rows_to_dataframe(
+            contiguous_rows,
+            identity=identity,
+            period=period,
+            cache_hit=True,
+        )
+        result.attrs["requested_window_complete"] = self._covers_window(
+            contiguous_rows,
+            start_at=start_at,
+            end_at=latest_closed_at,
+            period=period,
+        )
+        return result
+
     def backfill_perpetual_history(
         self,
         code: str = "BTC",
@@ -463,6 +510,23 @@ class CryptoMarketDataService:
                 return False
             expected += duration
         return True
+
+    @staticmethod
+    def _latest_contiguous_suffix(
+        rows: list[CryptoOhlcvBar],
+        *,
+        end_at: datetime,
+        period: str,
+    ) -> list[CryptoOhlcvBar]:
+        if not rows or rows[-1].open_time != end_at:
+            return []
+        duration = _SUPPORTED_PERIODS[period]
+        start_index = len(rows) - 1
+        expected = end_at
+        while start_index >= 0 and rows[start_index].open_time == expected:
+            start_index -= 1
+            expected -= duration
+        return rows[start_index + 1:]
 
     @staticmethod
     def _dataframe_covers_window(

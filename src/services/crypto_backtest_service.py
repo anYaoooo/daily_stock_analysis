@@ -108,8 +108,22 @@ class CryptoBacktestService:
         errors = 0
         results: list[CryptoBacktestResult] = []
 
-        bars_cache: dict[tuple[str, str, str, str, int], _BarBatch] = {}
         eval_config = self._eval_config(config, engine_version)
+        # Dynamic sizing requires chronological evaluation. The state is kept
+        # per symbol for this run so independent symbols do not share equity.
+        if eval_config.dynamic_equity_sizing:
+            candidates = sorted(
+                candidates,
+                key=lambda row: (getattr(row, "created_at", None) or datetime.min, int(row.id or 0)),
+            )
+        bars_cache: dict[tuple[str, str, str, str, int], _BarBatch] = {}
+        account_trades: dict[str, list[tuple[datetime, datetime, float]]] = {}
+        if eval_config.dynamic_equity_sizing:
+            self._seed_account_trades(
+                account_trades,
+                engine_version,
+                exclude_analysis_ids={int(row.id) for row in candidates if force and row.id is not None},
+            )
         existing_keys = {
             (int(row.analysis_history_id), str(row.plan_type))
             for row in self.repo.get_results_for_history_ids(
@@ -128,6 +142,7 @@ class CryptoBacktestService:
                     eval_config=eval_config,
                     bars_cache=bars_cache,
                     existing_keys=existing_keys,
+                    account_trades=account_trades,
                 )
                 if not evaluated:
                     skipped += 1
@@ -167,10 +182,14 @@ class CryptoBacktestService:
 
         engine_version = self._engine_version()
         records, _total = self.repo.get_history_records(ids=ids, offset=0, limit=len(ids))
-        by_id = {int(record.id): record for record in records if record.id is not None}
         selected_plan_types = {str(item).strip() for item in (plan_types or []) if str(item).strip()}
         config = get_config()
         eval_config = self._eval_config(config, engine_version)
+        if eval_config.dynamic_equity_sizing:
+            records = sorted(
+                records,
+                key=lambda row: (getattr(row, "created_at", None) or datetime.min, int(row.id or 0)),
+            )
         existing_keys: set[tuple[int, str]] = set()
         if not force:
             existing_keys = {
@@ -189,12 +208,15 @@ class CryptoBacktestService:
         errors = 0
         results: list[CryptoBacktestResult] = []
         bars_cache: dict[tuple[str, str, str, str, int], _BarBatch] = {}
+        account_trades: dict[str, list[tuple[datetime, datetime, float]]] = {}
+        if eval_config.dynamic_equity_sizing:
+            self._seed_account_trades(
+                account_trades,
+                engine_version,
+                exclude_analysis_ids=set(ids) if force else set(),
+            )
 
-        for record_id in ids:
-            analysis = by_id.get(record_id)
-            if analysis is None:
-                skipped += 1
-                continue
+        for analysis in records:
             processed += 1
             try:
                 evaluated, counts = self._evaluate_analysis_record(
@@ -204,6 +226,7 @@ class CryptoBacktestService:
                     bars_cache=bars_cache,
                     plan_types=selected_plan_types or None,
                     existing_keys=existing_keys,
+                    account_trades=account_trades,
                 )
                 if not evaluated:
                     skipped += 1
@@ -216,6 +239,8 @@ class CryptoBacktestService:
             except Exception as exc:
                 errors += 1
                 logger.warning("指定 BTC 回测失败: %s#%s: %s", analysis.code, analysis.id, exc)
+
+        skipped += max(0, len(ids) - len(records))
 
         saved = 0
         if results:
@@ -410,7 +435,32 @@ class CryptoBacktestService:
             )
         if summary is None:
             return None
+        # Existing databases can contain a summary created before the P0
+        # metric contract was added. Rebuild it once so the API never exposes
+        # a stale summary with missing denominators for the new metrics.
+        if self._summary_requires_metric_migration(summary):
+            self._recompute_summaries(engine_version=engine_version)
+            summary = self.repo.get_summary(
+                scope=scope,
+                code=normalize_crypto_symbol(code) if code else None,
+                horizon=horizon,
+                plan_type=plan_type,
+                engine_version=engine_version,
+            )
+        if summary is None:
+            return None
         return self._summary_to_dict(summary)
+
+    @staticmethod
+    def _summary_requires_metric_migration(summary: CryptoBacktestSummary) -> bool:
+        """Detect summaries persisted before the P0 metric contract."""
+        diagnostics = parse_json_field(getattr(summary, "diagnostics_json", None))
+        if not isinstance(diagnostics, dict):
+            return True
+        return (
+            not isinstance(diagnostics.get("metric_denominators"), dict)
+            or diagnostics.get("summary_contract_version") != "btc-backtest-summary-v2"
+        )
 
     @classmethod
     def _loss_review_item(cls, row: CryptoBacktestResult) -> dict[str, Any]:
@@ -592,7 +642,44 @@ class CryptoBacktestService:
             maintenance_margin_rate=float(getattr(config, "crypto_backtest_maintenance_margin_rate", 0.005)),
             minimum_risk_reward=float(getattr(config, "crypto_backtest_minimum_risk_reward", 1.2)),
             minimum_volume_ratio=float(getattr(config, "crypto_backtest_minimum_volume_ratio", 1.0)),
+            dynamic_equity_sizing=bool(getattr(config, "crypto_backtest_dynamic_equity_sizing", True)),
+            max_portfolio_risk_pct=float(getattr(config, "crypto_backtest_max_portfolio_risk_pct", 2.0)),
+            consecutive_loss_cooldown=int(getattr(config, "crypto_backtest_consecutive_loss_cooldown", 3)),
+            daily_loss_limit_pct=float(getattr(config, "crypto_backtest_daily_loss_limit_pct", 3.0)),
         )
+
+    def _seed_account_trades(
+        self,
+        account_trades: dict[str, list[tuple[datetime, datetime, float]]],
+        engine_version: str,
+        exclude_analysis_ids: set[int],
+    ) -> None:
+        """Seed independent persisted trades without leaking future PnL."""
+        try:
+            rows = self.repo.list_results(engine_version=engine_version)
+        except Exception:
+            return
+        by_code: dict[str, list[CryptoBacktestResult]] = {}
+        for row in rows:
+            if int(row.analysis_history_id) in exclude_analysis_ids:
+                continue
+            if row.eval_status != "completed" or not CryptoBacktestEngine._row_entry_triggered(row):
+                continue
+            key = normalize_crypto_symbol(row.code) or row.code
+            by_code.setdefault(key, []).append(row)
+        for key, code_rows in by_code.items():
+            independent, _excluded = CryptoBacktestEngine._independent_triggered_rows(code_rows)
+            accepted: list[tuple[datetime, datetime, float]] = []
+            for row in independent:
+                entry_at = getattr(row, "entry_triggered_at", None)
+                exit_at = getattr(row, "first_hit_at", None) or getattr(row, "evaluation_end", None)
+                trade = CryptoBacktestEngine._diagnostics(row).get("trade")
+                if entry_at is not None and exit_at is not None and isinstance(trade, dict):
+                    try:
+                        accepted.append((entry_at, max(entry_at, exit_at), float(trade.get("net_pnl") or 0.0)))
+                    except (TypeError, ValueError):
+                        continue
+            account_trades[key] = accepted
 
     def _evaluate_analysis_record(
         self,
@@ -603,6 +690,7 @@ class CryptoBacktestService:
         bars_cache: dict[tuple[str, str, str, str, int], _BarBatch],
         plan_types: Optional[set[str]] = None,
         existing_keys: Optional[set[tuple[int, str]]] = None,
+        account_trades: Optional[dict[str, list[tuple[datetime, datetime, float]]]] = None,
     ) -> tuple[list[CryptoBacktestResult], dict[str, int]]:
         plans = self._extract_plans(analysis)
         if plan_types:
@@ -621,6 +709,19 @@ class CryptoBacktestService:
         fetch_days = max(30, (datetime.now() - analysis_at).days + 30)
         results: list[CryptoBacktestResult] = []
         counts = {"completed": 0, "insufficient": 0, "skipped": 0, "errors": 0}
+        equity_key = normalize_crypto_symbol(analysis.code) or analysis.code
+        equity_before = (
+            max(
+                0.0,
+                float(eval_config.initial_equity) + sum(
+                    pnl
+                    for _entry_at, exit_at, pnl in (account_trades or {}).get(equity_key, [])
+                    if exit_at <= market_analysis_at
+                ),
+            )
+            if eval_config.dynamic_equity_sizing
+            else None
+        )
 
         for plan in plans:
             contract_window_bars = self._contract_window_bars(plan)
@@ -671,6 +772,7 @@ class CryptoBacktestService:
                     plan=plan,
                     forward_bars=forward_bars,
                     config=eval_config,
+                    equity_before=equity_before,
                     evaluation_complete=self._evaluation_window_complete(
                         window_end=window_end,
                         data_snapshot=batch.metadata,
@@ -687,6 +789,12 @@ class CryptoBacktestService:
                 evaluation=evaluation,
                 analysis=analysis,
                 plan=plan,
+            )
+            evaluation = self._attach_plan_quality(
+                evaluation=evaluation,
+                analysis=analysis,
+                plan=plan,
+                eval_config=eval_config,
             )
             status = evaluation.get("eval_status")
             if status == "completed":
@@ -708,6 +816,32 @@ class CryptoBacktestService:
                     evaluation_end=window_end,
                 )
             )
+
+        if account_trades is not None and eval_config.dynamic_equity_sizing:
+            accepted = account_trades.setdefault(equity_key, [])
+            for row in sorted(
+                results,
+                key=lambda item: getattr(item, "entry_triggered_at", None) or datetime.max,
+            ):
+                entry_at = getattr(row, "entry_triggered_at", None)
+                exit_at = getattr(row, "first_hit_at", None) or getattr(row, "evaluation_end", None)
+                trade = CryptoBacktestEngine._diagnostics(row).get("trade")
+                if entry_at is None or exit_at is None or not isinstance(trade, dict):
+                    continue
+                exit_at = max(entry_at, exit_at)
+                overlapping = [
+                    item
+                    for item in accepted
+                    if entry_at < item[1] and exit_at > item[0]
+                ]
+                if any(existing_entry <= entry_at for existing_entry, _existing_exit, _pnl in overlapping):
+                    continue
+                for item in overlapping:
+                    accepted.remove(item)
+                try:
+                    accepted.append((entry_at, exit_at, float(trade.get("net_pnl") or 0.0)))
+                except (TypeError, ValueError):
+                    continue
 
         return results, counts
 
@@ -1092,7 +1226,38 @@ class CryptoBacktestService:
     ) -> dict[str, Any]:
         enriched = dict(evaluation)
         diagnostics = dict(enriched.get("diagnostics") or {})
-        diagnostics["indicator_tags"] = cls._indicator_tags_from_snapshot(analysis, plan)
+        indicator_tags = cls._indicator_tags_from_snapshot(analysis, plan)
+        diagnostics["indicator_tags"] = indicator_tags
+        missing_layers = [
+            layer
+            for layer in ("derivatives", "order_flow", "volatility_forecast", "macro_correlation")
+            if (indicator_tags.get(layer) or {}).get("data_quality") == "missing"
+        ]
+        diagnostics["data_quality"] = {
+            "missing_layers": missing_layers,
+            "tradeability": "degraded" if missing_layers else "normal",
+        }
+        enriched["diagnostics"] = diagnostics
+        return enriched
+
+    @classmethod
+    def _attach_plan_quality(
+        cls,
+        *,
+        evaluation: dict[str, Any],
+        analysis: AnalysisHistory,
+        plan: CryptoPlan,
+        eval_config: CryptoPlanBacktestConfig,
+    ) -> dict[str, Any]:
+        enriched = dict(evaluation)
+        diagnostics = dict(enriched.get("diagnostics") or {})
+        indicator_tags = diagnostics.get("indicator_tags")
+        diagnostics["plan_quality"] = CryptoBacktestEngine.score_plan_quality(
+            plan=plan,
+            config=eval_config,
+            indicator_tags=indicator_tags if isinstance(indicator_tags, dict) else None,
+            evaluation=enriched,
+        )
         enriched["diagnostics"] = diagnostics
         return enriched
 
@@ -1147,7 +1312,7 @@ class CryptoBacktestService:
                 "atr14_pct": cls._safe_float(volatility.get("atr14_pct")),
             },
             "volatility_forecast": {
-                "data_quality": cls._clean_tag_value(volatility_forecast.get("data_quality")),
+                "data_quality": cls._clean_tag_value(volatility_forecast.get("data_quality")) or "missing",
                 "model_version": cls._clean_tag_value(volatility_forecast.get("model_version")),
                 "regime": cls._clean_tag_value(volatility_forecast.get("regime")),
                 "forecast_sigma_pct": cls._safe_float(volatility_forecast.get("forecast_sigma_pct")),
@@ -1163,7 +1328,7 @@ class CryptoBacktestService:
                 "type": cls._clean_tag_value(event.get("type")),
             },
             "derivatives": {
-                "data_quality": cls._clean_tag_value(derivatives.get("data_quality")),
+                "data_quality": cls._clean_tag_value(derivatives.get("data_quality")) or "missing",
                 "funding_state": cls._clean_tag_value(funding.get("state")),
                 "funding_rate_pct": cls._safe_float(funding.get("rate_pct")),
                 "funding_7d_trend": cls._clean_tag_value(funding_history.get("trend")),
@@ -1178,7 +1343,7 @@ class CryptoBacktestService:
                 "leverage_pressure": cls._clean_tag_value(derivatives.get("leverage_pressure")),
             },
             "order_flow": {
-                "data_quality": cls._clean_tag_value(order_flow.get("data_quality")),
+                "data_quality": cls._clean_tag_value(order_flow.get("data_quality")) or "missing",
                 "state": cls._clean_tag_value(order_flow.get("state")),
                 "divergence": cls._clean_tag_value(order_flow.get("divergence")),
                 "taker_buy_ratio_pct": cls._safe_float(order_flow.get("taker_buy_ratio_pct")),
@@ -1186,7 +1351,7 @@ class CryptoBacktestService:
                 "price_change_pct": cls._safe_float(order_flow.get("price_change_pct")),
             },
             "macro_correlation": {
-                "data_quality": cls._clean_tag_value(macro_correlation.get("data_quality")),
+                "data_quality": cls._clean_tag_value(macro_correlation.get("data_quality")) or "missing",
                 "nasdaq_state": cls._clean_tag_value(nasdaq_macro.get("state")),
                 "nasdaq_30d": cls._safe_float(nasdaq_macro.get("correlation_30d")),
                 "dxy_state": cls._clean_tag_value(dxy_macro.get("state")),
@@ -1258,6 +1423,9 @@ class CryptoBacktestService:
             order_rejection_reason=evaluation.get("order_rejection_reason"),
             entry_triggered=evaluation.get("entry_triggered"),
             entry_triggered_at=evaluation.get("entry_triggered_at"),
+            mfe_pct=(evaluation.get("diagnostics") or {}).get("price_trajectory", {}).get("mfe_pct"),
+            mae_pct=(evaluation.get("diagnostics") or {}).get("price_trajectory", {}).get("mae_pct"),
+            direction_correct_raw=(evaluation.get("diagnostics") or {}).get("price_trajectory", {}).get("direction_correct"),
             start_price=evaluation.get("start_price"),
             end_close=evaluation.get("end_close"),
             max_high=evaluation.get("max_high"),
@@ -1309,6 +1477,7 @@ class CryptoBacktestService:
                 scope=scope,
                 code=code,
                 engine_version=engine_version,
+                neutral_band_pct=float(getattr(get_config(), "crypto_backtest_neutral_band_pct", 0.2)),
             )
             diagnostics = {
                 **(data.get("diagnostics") or {}),
@@ -1335,6 +1504,9 @@ class CryptoBacktestService:
                     loss_count=data.get("loss_count") or 0,
                     neutral_count=data.get("neutral_count") or 0,
                     direction_accuracy_pct=data.get("direction_accuracy_pct"),
+                    direction_accuracy_raw_pct=data.get("direction_accuracy_raw_pct"),
+                    signal_quality_rate_pct=(data.get("diagnostics") or {}).get("signal_quality_rate_pct"),
+                    execution_fill_rate_pct=(data.get("diagnostics") or {}).get("order_fill_rate_pct"),
                     win_rate_pct=data.get("win_rate_pct"),
                     avg_simulated_return_pct=data.get("avg_simulated_return_pct"),
                     plan_type_breakdown_json=json.dumps(
@@ -1382,6 +1554,9 @@ class CryptoBacktestService:
             "order_rejection_reason": order_rejection_reason,
             "entry_triggered": row.entry_triggered,
             "entry_triggered_at": row.entry_triggered_at.isoformat() if row.entry_triggered_at else None,
+            "mfe_pct": row.mfe_pct,
+            "mae_pct": row.mae_pct,
+            "direction_correct_raw": row.direction_correct_raw,
             "direction_correct": row.direction_correct,
             "outcome": row.outcome,
             "hit_stop_loss": row.hit_stop_loss,
@@ -1420,6 +1595,9 @@ class CryptoBacktestService:
             "loss_count": row.loss_count,
             "neutral_count": row.neutral_count,
             "direction_accuracy_pct": row.direction_accuracy_pct,
+            "direction_accuracy_raw_pct": row.direction_accuracy_raw_pct,
+            "signal_quality_rate_pct": row.signal_quality_rate_pct,
+            "execution_fill_rate_pct": row.execution_fill_rate_pct,
             "win_rate_pct": row.win_rate_pct,
             "avg_simulated_return_pct": row.avg_simulated_return_pct,
             "plan_type_breakdown": parse_json_field(row.plan_type_breakdown_json) or {},
@@ -1575,6 +1753,15 @@ class CryptoBacktestService:
         else:
             backtest_status = "invalid_plan"
 
+        if not plan_items:
+            status_reason = "解析失败" if raw is not None and not isinstance(raw, dict) else "无计划"
+        elif any(item["backtest_status"] == "pending" for item in plan_items):
+            status_reason = "尚未处理"
+        elif all(item["backtest_status"] == "invalid_plan" for item in plan_items):
+            status_reason = "不可回测"
+        else:
+            status_reason = None
+
         return {
             "analysis_history_id": int(row.id),
             "query_id": row.query_id,
@@ -1591,6 +1778,7 @@ class CryptoBacktestService:
             "plans": plan_items,
             "diagnostics": {
                 "context_snapshot_available": isinstance(snapshot, dict),
+                "backtest_status_reason": status_reason,
             },
         }
 
@@ -1636,6 +1824,14 @@ class CryptoBacktestService:
         if isinstance(contract_entry, dict):
             setup_value = contract_entry.get("setup_type") or setup_value
         setup_type = str(setup_value).strip().lower() if setup_value else None
+        plan_quality = (latest_result or {}).get("diagnostics", {}).get("plan_quality") if latest_result else None
+        if not isinstance(plan_quality, dict):
+            plan_quality = CryptoBacktestEngine.score_plan_quality(
+                plan=plan,
+                config=self._eval_config(get_config(), self._engine_version()),
+                indicator_tags=(latest_result or {}).get("diagnostics", {}).get("indicator_tags") if latest_result else None,
+                evaluation=latest_result or {},
+            )
         return {
             "plan_type": plan.plan_type,
             "horizon": plan.horizon,
@@ -1651,6 +1847,17 @@ class CryptoBacktestService:
             "risk_reward": self._raw_plan_text(plan, "risk_reward"),
             "position_hint": self._raw_plan_text(plan, "position_hint"),
             "confidence": self._raw_plan_text(plan, "confidence"),
+            "tradeability_status": self._raw_plan_text(plan, "tradeability_status"),
+            "tradeability_reasons": [
+                str(reason)
+                for reason in (plan.raw_plan.get("tradeability_reasons") or [])
+                if str(reason).strip()
+            ],
+            "position_multiplier_cap": plan.position_multiplier_cap,
+            "countertrend_control": plan.raw_plan.get("countertrend_control")
+            if isinstance(plan.raw_plan.get("countertrend_control"), dict)
+            else None,
+            "plan_quality": plan_quality,
             "backtestable": backtestable,
             "quality_status": (
                 "executable_contract"

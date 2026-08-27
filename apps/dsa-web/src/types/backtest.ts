@@ -133,6 +133,9 @@ export interface CryptoBacktestResultItem {
   orderRejectionReason?: string;
   entryTriggered?: boolean;
   entryTriggeredAt?: string;
+  mfePct?: number;
+  maePct?: number;
+  directionCorrectRaw?: boolean;
   directionCorrect?: boolean;
   outcome?: string;
   hitStopLoss?: boolean;
@@ -163,6 +166,11 @@ export interface CryptoBacktestHistoryPlan {
   riskReward?: string | null;
   positionHint?: string | null;
   confidence?: string | null;
+  tradeabilityStatus?: string | null;
+  tradeabilityReasons?: string[];
+  positionMultiplierCap?: number | null;
+  countertrendControl?: Record<string, unknown> | null;
+  planQuality?: Record<string, unknown> | null;
   backtestable: boolean;
   qualityStatus: string;
   missingFields: string[];
@@ -186,7 +194,7 @@ export interface CryptoBacktestHistoryItem {
   trendPrediction?: string;
   backtestStatus: string;
   plans: CryptoBacktestHistoryPlan[];
-  diagnostics?: Record<string, unknown>;
+  diagnostics?: Record<string, unknown> & { backtestStatusReason?: string | null };
 }
 
 export interface BacktestResultsResponse {
@@ -264,6 +272,9 @@ export interface PerformanceMetrics {
   neutralCount: number;
 
   directionAccuracyPct?: number;
+  directionAccuracyRawPct?: number;
+  signalQualityRatePct?: number;
+  executionFillRatePct?: number;
   winRatePct?: number;
   neutralRatePct?: number;
   avgStockReturnPct?: number;
@@ -300,6 +311,9 @@ export interface CryptoBacktestMetrics {
   lossCount: number;
   neutralCount: number;
   directionAccuracyPct?: number;
+  directionAccuracyRawPct?: number;
+  signalQualityRatePct?: number;
+  executionFillRatePct?: number;
   winRatePct?: number;
   avgSimulatedReturnPct?: number;
   planTypeBreakdown: Record<string, unknown>;

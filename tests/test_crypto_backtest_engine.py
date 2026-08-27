@@ -4,6 +4,7 @@
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from src.core.crypto_backtest_engine import (
     CryptoBacktestEngine,
@@ -178,6 +179,66 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
         self.assertAlmostEqual(capped["max_notional"], full["max_notional"] * 0.25)
         self.assertAlmostEqual(capped["quantity"], full["quantity"] * 0.25)
 
+    def test_dynamic_equity_sizing_uses_previous_completed_equity(self):
+        sizing = CryptoBacktestEngine._position_sizing(
+            entry_price=100,
+            stop_loss=95,
+            config=CryptoPlanBacktestConfig(initial_equity=10000, risk_per_trade_pct=1),
+            equity=8000,
+        )
+
+        self.assertEqual(sizing["initial_equity"], 10000)
+        self.assertEqual(sizing["equity_before"], 8000)
+        self.assertEqual(sizing["risk_budget"], 80)
+        self.assertEqual(sizing["max_notional"], 8000)
+
+    def test_plan_quality_scores_are_deterministic_and_independent_of_confidence_text(self):
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            entry_price=100,
+            stop_loss=95,
+            take_profit=112,
+            raw_plan={"confidence": "极高"},
+            execution_contract=self._contract(
+                {"type": "close_above", "value": 100},
+                {"type": "volume_ratio_gte", "value": 1.0},
+            ),
+        )
+        quality = CryptoBacktestEngine.score_plan_quality(
+            plan=plan,
+            config=CryptoPlanBacktestConfig(engine_version="btc-plan-v5"),
+            indicator_tags={
+                "price_action": {"state": "breakout"},
+                "ema": {"structure": "bullish"},
+                "vwap": {"price_position": "above"},
+                "intraday": {"alignment": "aligned_long"},
+            },
+        )
+
+        self.assertEqual(set(quality["scores"]), {
+            "direction_score", "location_score", "risk_reward_score", "execution_score",
+        })
+        self.assertGreater(quality["scores"]["direction_score"], 80)
+        self.assertGreaterEqual(quality["total_score"], 0)
+        self.assertLessEqual(quality["total_score"], 100)
+
+    def test_cost_sensitivity_covers_required_fee_and_slippage_grid(self):
+        row = SimpleNamespace(
+            direction="long",
+            simulated_entry_price=100.0,
+            simulated_exit_price=110.0,
+            diagnostics_json='{"trade":{"quantity":10,"initial_equity":10000,"funding_cost":0}}',
+        )
+
+        sensitivity = CryptoBacktestEngine._cost_sensitivity([row], neutral_band_pct=0.2)
+
+        self.assertEqual(sensitivity["fee_bps"], [5.0, 10.0, 15.0])
+        self.assertEqual(sensitivity["slippage_bps"], [2.0, 5.0, 10.0])
+        self.assertEqual(len(sensitivity["scenarios"]), 9)
+        self.assertEqual(sensitivity["scenarios"][0]["sample_count"], 1)
+
     def test_summary_includes_portfolio_risk_metrics(self):
         plan = CryptoPlan(
             plan_type="daily_long",
@@ -206,6 +267,7 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
                 self.analysis_history_id = analysis_history_id
                 self.analysis_created_at = datetime(2026, 1, analysis_history_id)
                 self.plan_type = payload["plan_type"]
+                self.direction = "long"
                 self.eval_status = payload["eval_status"]
                 self.entry_triggered = payload["entry_triggered"]
                 self.outcome = payload["outcome"]
@@ -221,6 +283,9 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
         )
 
         self.assertEqual(summary["triggered_count"], 2)
+        self.assertIsNotNone(summary["direction_accuracy_raw_pct"])
+        self.assertEqual(summary["diagnostics"]["direction_accuracy_raw_denominator"], 2)
+        self.assertIn("metric_denominators", summary["diagnostics"])
         self.assertEqual(len(summary["equity_curve"]), 2)
         self.assertIn("max_drawdown_pct", summary["risk_metrics"])
         self.assertIn("profit_factor", summary["risk_metrics"])
@@ -249,6 +314,27 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
         self.assertFalse(result["entry_triggered"])
         self.assertEqual(result["outcome"], "no_entry")
         self.assertIsNone(result["direction_correct"])
+
+    def test_price_trajectory_is_cost_free_and_exposed_for_raw_direction_metric(self):
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            entry_price=100,
+            stop_loss=95,
+            take_profit=110,
+            raw_plan={},
+        )
+        result = CryptoBacktestEngine.evaluate_plan(
+            plan=plan,
+            forward_bars=self._bars([101, 108], [99, 102], [100, 107]),
+            config=CryptoPlanBacktestConfig(neutral_band_pct=0.2),
+        )
+
+        trajectory = result["diagnostics"]["price_trajectory"]
+        self.assertAlmostEqual(trajectory["mfe_pct"], 8.0)
+        self.assertAlmostEqual(trajectory["mae_pct"], 1.0)
+        self.assertTrue(trajectory["direction_correct"])
 
     def test_v3_requires_close_confirmation_instead_of_high_touch(self):
         plan = CryptoPlan(
