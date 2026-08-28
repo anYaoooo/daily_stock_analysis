@@ -163,6 +163,7 @@ class CryptoBacktestHistoryPlan(BaseModel):
     confidence: Optional[str] = None
     tradeability_status: Optional[str] = None
     tradeability_reasons: List[str] = Field(default_factory=list)
+    tradeability_audit: Optional[Dict[str, Any]] = None
     position_multiplier_cap: Optional[float] = None
     countertrend_control: Optional[Dict[str, Any]] = None
     plan_quality: Optional[Dict[str, Any]] = None

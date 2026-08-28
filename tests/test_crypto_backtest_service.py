@@ -26,6 +26,7 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
             diagnostics_json=json.dumps({
                 "summary_contract_version": "btc-backtest-summary-v2",
                 "metric_denominators": {"signal_quality": "completed evaluations"},
+                "guard_forward_comparison": {},
             }),
         )
 
@@ -960,6 +961,122 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
         self.assertEqual(stats["processed"], 1)
         self.assertEqual(stats["saved"], 0)
         self.assertEqual(stats["skipped"], 1)
+
+    def test_guard_counterfactual_plan_restores_blocked_plan_without_mutating_primary(self):
+        original_contract = {
+            "version": "btc-execution-v1",
+            "entry": {
+                "logic": "all",
+                "conditions": [{"type": "close_above", "value": 100}],
+                "confirmation_bars": 1,
+                "fill": "next_bar_open",
+                "max_wait_bars": 3,
+            },
+            "exit": {"max_holding_bars": 5},
+        }
+        plan = CryptoPlan(
+            plan_type="intraday",
+            horizon="intraday",
+            direction="wait",
+            entry_price=100,
+            stop_loss=95,
+            take_profit=110,
+            raw_plan={
+                "tradeability_audit": {
+                    "version": "btc-tradeability-v1",
+                    "applied": True,
+                    "decision": "blocked",
+                    "original_plan": {
+                        "enabled": True,
+                        "direction": "long",
+                        "entry_price": 100,
+                        "stop_loss": 95,
+                        "take_profit": 110,
+                        "execution_contract": original_contract,
+                    },
+                }
+            },
+        )
+
+        shadow = CryptoBacktestService._guard_counterfactual_plan(plan)
+
+        self.assertIsNotNone(shadow)
+        self.assertEqual(shadow.direction, "long")
+        self.assertEqual(shadow.execution_contract, original_contract)
+        self.assertEqual(plan.direction, "wait")
+
+    def test_guard_forward_comparison_separates_actual_shadow_and_legacy_rows(self):
+        released = CryptoBacktestResult(
+            analysis_history_id=1,
+            code="BTC",
+            plan_type="intraday",
+            horizon="intraday",
+            direction="long",
+            engine_version="btc-plan-v5",
+            eval_status="completed",
+            signal_triggered=True,
+            order_status="filled",
+            entry_triggered=True,
+            outcome="win",
+            simulated_return_pct=1.25,
+            direction_correct_raw=True,
+            raw_plan_json=json.dumps({
+                "tradeability_audit": {
+                    "version": "btc-tradeability-v1",
+                    "applied": True,
+                    "decision": "passed",
+                    "reasons": [],
+                }
+            }),
+        )
+        blocked = CryptoBacktestResult(
+            analysis_history_id=2,
+            code="BTC",
+            plan_type="intraday",
+            horizon="intraday",
+            direction="wait",
+            engine_version="btc-plan-v5",
+            eval_status="skipped",
+            raw_plan_json=json.dumps({
+                "tradeability_audit": {
+                    "version": "btc-tradeability-v1",
+                    "applied": True,
+                    "decision": "blocked",
+                    "reasons": ["long_low_volume_without_close_breakout"],
+                }
+            }),
+            diagnostics_json=json.dumps({
+                "guard_counterfactual": {
+                    "eval_status": "completed",
+                    "signal_triggered": True,
+                    "entry_triggered": True,
+                    "outcome": "loss",
+                    "simulated_return_pct": -0.75,
+                    "direction_correct_raw": False,
+                }
+            }),
+        )
+        legacy = CryptoBacktestResult(
+            analysis_history_id=3,
+            code="BTC",
+            plan_type="daily_long",
+            horizon="daily",
+            direction="long",
+            engine_version="btc-plan-v5",
+            eval_status="completed",
+            raw_plan_json="{}",
+        )
+
+        comparison = CryptoBacktestService._guard_forward_comparison([released, blocked, legacy])
+
+        self.assertEqual(comparison["legacy_unclassified_count"], 1)
+        self.assertEqual(comparison["decision_counts"], {"passed": 1, "blocked": 1})
+        self.assertEqual(comparison["released_actual"]["fill_count"], 1)
+        self.assertEqual(comparison["released_actual"]["net_result_hit_rate_pct"], 100.0)
+        self.assertEqual(comparison["blocked_counterfactual"]["fill_count"], 1)
+        self.assertEqual(comparison["blocked_counterfactual"]["result_available_count"], 1)
+        self.assertEqual(comparison["blocked_counterfactual"]["avg_simulated_return_pct"], -0.75)
+        self.assertEqual(comparison["reason_counts"], {"long_low_volume_without_close_breakout": 1})
 
 
 class CryptoBacktestRepositoryTestCase(unittest.TestCase):

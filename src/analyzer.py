@@ -10,6 +10,7 @@ A股自选股智能分析系统 - AI分析层
 3. 解析 LLM 响应为结构化 AnalysisResult
 """
 
+import copy
 import json
 import logging
 import math
@@ -408,6 +409,7 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
 
 _CHIP_KEYS: tuple = ("profit_ratio", "avg_cost", "concentration", "chip_health")
 _BTC_MFE_MIN_SAMPLE_COUNT = 10
+_BTC_TRADEABILITY_GUARD_VERSION = "btc-tradeability-v1"
 
 
 def _is_value_placeholder(v: Any) -> bool:
@@ -2014,7 +2016,45 @@ def _apply_btc_tradeability_guard(
     language: str,
 ) -> None:
     """Translate high-risk indicator conflicts and missing context into executable state."""
+    plan_directions = {
+        "long_plan": "long",
+        "short_plan": "short",
+        "intraday_plan": "wait",
+    }
+    plan_keys = tuple(plan_directions)
+    for plan_key, default_direction in plan_directions.items():
+        payload = battle_plan.get(plan_key)
+        if not isinstance(payload, dict):
+            continue
+        existing_audit = payload.get("tradeability_audit")
+        if (
+            isinstance(existing_audit, dict)
+            and existing_audit.get("version") == _BTC_TRADEABILITY_GUARD_VERSION
+            and isinstance(existing_audit.get("original_plan"), dict)
+        ):
+            continue
+        payload["tradeability_audit"] = {
+            "version": _BTC_TRADEABILITY_GUARD_VERSION,
+            "applied": False,
+            "decision": "not_evaluated",
+            "reasons": [],
+            "original_plan": {
+                "enabled": payload.get("enabled"),
+                "direction": payload.get("direction") or default_direction,
+                "entry_price": payload.get("entry_price"),
+                "stop_loss": payload.get("stop_loss"),
+                "take_profit": payload.get("take_profit"),
+                "execution_contract": copy.deepcopy(payload.get("execution_contract")),
+                "position_multiplier_cap": payload.get("position_multiplier_cap"),
+            },
+        }
+
     if not isinstance(technical_context, dict):
+        for plan_key in plan_keys:
+            payload = battle_plan.get(plan_key)
+            audit = payload.get("tradeability_audit") if isinstance(payload, dict) else None
+            if isinstance(audit, dict):
+                audit["reasons"] = ["technical_context_missing"]
         return
     timeframes = technical_context.get("timeframes")
     timeframes = timeframes if isinstance(timeframes, dict) else {}
@@ -2168,6 +2208,32 @@ def _apply_btc_tradeability_guard(
         trial_entry = ladder.get("trial_entry") if isinstance(ladder, dict) else None
         if isinstance(trial_entry, dict):
             trial_entry["position_multiplier_cap"] = position_cap
+
+    for plan_key in plan_keys:
+        payload = battle_plan.get(plan_key)
+        audit = payload.get("tradeability_audit") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict) or not isinstance(audit, dict):
+            continue
+        status = str(payload.get("tradeability_status") or "").strip().lower()
+        original = audit.get("original_plan") if isinstance(audit.get("original_plan"), dict) else {}
+        original_direction = str(original.get("direction") or "").strip().lower()
+        if status == "blocked":
+            decision = "blocked"
+        elif status == "countertrend_limited":
+            decision = "limited"
+        elif status == "degraded_missing_context":
+            decision = "degraded"
+        elif original_direction in {"long", "short"}:
+            decision = "passed"
+        else:
+            decision = "not_applicable"
+        audit["applied"] = True
+        audit["decision"] = decision
+        audit["reasons"] = [
+            str(reason)
+            for reason in (payload.get("tradeability_reasons") or [])
+            if str(reason).strip()
+        ]
 
 
 def _apply_btc_volatility_risk_overlay(

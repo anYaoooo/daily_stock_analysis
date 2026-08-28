@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 BTC_PLAN_ENGINE_VERSION = "btc-plan-v5"
 BTC_MFE_CALIBRATION_LIMIT = 2000
+BTC_TRADEABILITY_GUARD_VERSION = "btc-tradeability-v1"
 
 
 def build_btc_mfe_calibration(rows: list[Any]) -> dict[str, dict[str, Any]]:
@@ -506,6 +507,10 @@ class CryptoBacktestService:
         return (
             not isinstance(diagnostics.get("metric_denominators"), dict)
             or diagnostics.get("summary_contract_version") != "btc-backtest-summary-v2"
+            or (
+                getattr(summary, "scope", None) == "overall"
+                and not isinstance(diagnostics.get("guard_forward_comparison"), dict)
+            )
         )
 
     @classmethod
@@ -770,10 +775,12 @@ class CryptoBacktestService:
         )
 
         for plan in plans:
-            contract_window_bars = self._contract_window_bars(plan)
+            guard_counterfactual_plan = self._guard_counterfactual_plan(plan)
+            window_plan = guard_counterfactual_plan or plan
+            contract_window_bars = self._contract_window_bars(window_plan)
             normalized_contract, _contract_errors = CryptoBacktestEngine._validated_contract(
-                plan.execution_contract,
-                direction=plan.direction,
+                window_plan.execution_contract,
+                direction=window_plan.direction,
             )
             instrument_contract = normalized_contract.get("instrument") or resolve_crypto_instrument(
                 "BTC-USDT-PERP",
@@ -826,6 +833,18 @@ class CryptoBacktestService:
                 )
             else:
                 evaluation = self._skipped_evaluation(plan, "lookahead_bias_detected")
+            if lookahead_guard["passed"] and guard_counterfactual_plan is not None:
+                evaluation = self._attach_guard_counterfactual(
+                    evaluation=evaluation,
+                    shadow_plan=guard_counterfactual_plan,
+                    forward_bars=forward_bars,
+                    config=eval_config,
+                    equity_before=equity_before,
+                    evaluation_complete=self._evaluation_window_complete(
+                        window_end=window_end,
+                        data_snapshot=batch.metadata,
+                    ),
+                )
             evaluation = self._attach_run_diagnostics(
                 evaluation=evaluation,
                 data_snapshot=batch.metadata,
@@ -890,6 +909,62 @@ class CryptoBacktestService:
                     continue
 
         return results, counts
+
+    @classmethod
+    def _guard_counterfactual_plan(cls, plan: CryptoPlan) -> Optional[CryptoPlan]:
+        audit = plan.raw_plan.get("tradeability_audit") if isinstance(plan.raw_plan, dict) else None
+        if not isinstance(audit, dict):
+            return None
+        if audit.get("applied") is not True or audit.get("decision") != "blocked":
+            return None
+        original = audit.get("original_plan")
+        if not isinstance(original, dict):
+            return None
+        direction = cls._normalize_direction(original.get("direction"))
+        if direction not in {"long", "short"}:
+            return None
+        return cls._plan_from_payload(plan.plan_type, plan.horizon, direction, original)
+
+    @staticmethod
+    def _attach_guard_counterfactual(
+        *,
+        evaluation: dict[str, Any],
+        shadow_plan: CryptoPlan,
+        forward_bars: list[_Bar],
+        config: CryptoPlanBacktestConfig,
+        equity_before: Optional[float],
+        evaluation_complete: bool,
+    ) -> dict[str, Any]:
+        shadow = CryptoBacktestEngine.evaluate_plan(
+            plan=shadow_plan,
+            forward_bars=forward_bars,
+            config=config,
+            equity_before=equity_before,
+            evaluation_complete=evaluation_complete,
+        )
+        diagnostics = dict(evaluation.get("diagnostics") or {})
+        shadow_diagnostics = shadow.get("diagnostics") or {}
+        trajectory = shadow_diagnostics.get("price_trajectory") or {}
+        trade = shadow_diagnostics.get("trade") or {}
+        diagnostics["guard_counterfactual"] = {
+            "contract_version": "btc-guard-counterfactual-v1",
+            "guard_version": BTC_TRADEABILITY_GUARD_VERSION,
+            "direction": shadow_plan.direction,
+            "eval_status": shadow.get("eval_status"),
+            "signal_triggered": shadow.get("signal_triggered"),
+            "order_status": shadow.get("order_status"),
+            "order_rejection_reason": shadow.get("order_rejection_reason"),
+            "entry_triggered": shadow.get("entry_triggered"),
+            "outcome": shadow.get("outcome"),
+            "simulated_return_pct": shadow.get("simulated_return_pct"),
+            "mfe_pct": trajectory.get("mfe_pct"),
+            "mae_pct": trajectory.get("mae_pct"),
+            "direction_correct_raw": trajectory.get("direction_correct"),
+            "net_pnl": trade.get("net_pnl"),
+            "note": "Shadow audit only; excluded from primary backtest and account metrics.",
+        }
+        evaluation["diagnostics"] = diagnostics
+        return evaluation
 
     @staticmethod
     def _contract_window_bars(plan: CryptoPlan) -> Optional[int]:
@@ -1532,6 +1607,7 @@ class CryptoBacktestService:
             }
             if scope == "overall":
                 diagnostics["indicator_group_breakdown"] = indicator_group_breakdown
+                diagnostics["guard_forward_comparison"] = self._guard_forward_comparison(rows)
             self.repo.upsert_summary(
                 CryptoBacktestSummary(
                     scope=scope,
@@ -1701,6 +1777,92 @@ class CryptoBacktestService:
         return {
             "minimum_sample_count": 100,
             "groups": grouped,
+        }
+
+    @classmethod
+    def _guard_forward_comparison(cls, rows: list[CryptoBacktestResult]) -> dict[str, Any]:
+        """Compare post-guard released results with blocked-plan shadow outcomes."""
+        decision_counts: dict[str, int] = {}
+        reason_counts: dict[str, int] = {}
+        released: list[dict[str, Any]] = []
+        blocked: list[dict[str, Any]] = []
+        legacy_unclassified = 0
+
+        for row in rows:
+            raw_plan = parse_json_field(getattr(row, "raw_plan_json", None)) or {}
+            audit = raw_plan.get("tradeability_audit") if isinstance(raw_plan, dict) else None
+            if not isinstance(audit, dict) or not audit.get("version"):
+                legacy_unclassified += 1
+                continue
+            decision = str(audit.get("decision") or "not_evaluated")
+            decision_counts[decision] = decision_counts.get(decision, 0) + 1
+            for reason in audit.get("reasons") or []:
+                reason_key = str(reason).strip()
+                if reason_key:
+                    reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
+            if audit.get("applied") is not True:
+                continue
+            if decision == "blocked":
+                diagnostics = parse_json_field(getattr(row, "diagnostics_json", None)) or {}
+                counterfactual = diagnostics.get("guard_counterfactual")
+                blocked.append(counterfactual if isinstance(counterfactual, dict) else {})
+                continue
+            if decision in {"passed", "limited", "degraded"}:
+                released.append({
+                    "eval_status": row.eval_status,
+                    "signal_triggered": row.signal_triggered,
+                    "order_status": row.order_status,
+                    "entry_triggered": row.entry_triggered,
+                    "outcome": row.outcome,
+                    "simulated_return_pct": row.simulated_return_pct,
+                    "direction_correct_raw": row.direction_correct_raw,
+                })
+
+        return {
+            "contract_version": "btc-guard-forward-comparison-v1",
+            "guard_version": BTC_TRADEABILITY_GUARD_VERSION,
+            "decision_counts": decision_counts,
+            "reason_counts": reason_counts,
+            "legacy_unclassified_count": legacy_unclassified,
+            "released_actual": cls._guard_queue_metrics(released),
+            "blocked_counterfactual": cls._guard_queue_metrics(blocked),
+            "measurement_note": (
+                "Blocked counterfactuals are shadow audits and remain excluded from primary strategy, "
+                "equity, and risk metrics."
+            ),
+        }
+
+    @staticmethod
+    def _guard_queue_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
+        completed = [item for item in items if item.get("eval_status") == "completed"]
+        signaled = [item for item in completed if item.get("signal_triggered") is True]
+        filled = [item for item in signaled if item.get("entry_triggered") is True]
+        returns = [
+            float(item["simulated_return_pct"])
+            for item in filled
+            if isinstance(item.get("simulated_return_pct"), (int, float))
+        ]
+        wins = sum(1 for item in filled if item.get("outcome") == "win")
+        losses = sum(1 for item in filled if item.get("outcome") == "loss")
+        neutral = sum(1 for item in filled if item.get("outcome") == "neutral")
+        raw_direction = [item for item in signaled if isinstance(item.get("direction_correct_raw"), bool)]
+        return {
+            "plan_count": len(items),
+            "result_available_count": sum(1 for item in items if item.get("eval_status")),
+            "completed_count": len(completed),
+            "signal_count": len(signaled),
+            "fill_count": len(filled),
+            "win_count": wins,
+            "loss_count": losses,
+            "neutral_count": neutral,
+            "signal_rate_pct": round(len(signaled) / len(completed) * 100.0, 4) if completed else None,
+            "fill_rate_pct": round(len(filled) / len(signaled) * 100.0, 4) if signaled else None,
+            "net_result_hit_rate_pct": round(wins / (wins + losses) * 100.0, 4) if wins + losses else None,
+            "raw_direction_hit_rate_pct": (
+                round(sum(1 for item in raw_direction if item["direction_correct_raw"]) / len(raw_direction) * 100.0, 4)
+                if raw_direction else None
+            ),
+            "avg_simulated_return_pct": round(sum(returns) / len(returns), 4) if returns else None,
         }
 
     @classmethod
@@ -1899,6 +2061,9 @@ class CryptoBacktestService:
                 for reason in (plan.raw_plan.get("tradeability_reasons") or [])
                 if str(reason).strip()
             ],
+            "tradeability_audit": plan.raw_plan.get("tradeability_audit")
+            if isinstance(plan.raw_plan.get("tradeability_audit"), dict)
+            else None,
             "position_multiplier_cap": plan.position_multiplier_cap,
             "countertrend_control": plan.raw_plan.get("countertrend_control")
             if isinstance(plan.raw_plan.get("countertrend_control"), dict)

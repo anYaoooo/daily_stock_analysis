@@ -168,6 +168,7 @@ export interface CryptoBacktestHistoryPlan {
   confidence?: string | null;
   tradeabilityStatus?: string | null;
   tradeabilityReasons?: string[];
+  tradeabilityAudit?: Record<string, unknown> | null;
   positionMultiplierCap?: number | null;
   countertrendControl?: Record<string, unknown> | null;
   planQuality?: Record<string, unknown> | null;

@@ -217,6 +217,14 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
   const costSensitivity = metrics.diagnostics?.costSensitivity as
     | { scenarios?: Array<{ feeBps?: number; slippageBps?: number; avgNetReturnPct?: number | null }> }
     | undefined;
+  const guardComparison = metrics.diagnostics?.guardForwardComparison as
+    | {
+        decisionCounts?: Record<string, number>;
+        legacyUnclassifiedCount?: number;
+        releasedActual?: { planCount?: number; fillCount?: number; netResultHitRatePct?: number | null; avgSimulatedReturnPct?: number | null };
+        blockedCounterfactual?: { planCount?: number; fillCount?: number; netResultHitRatePct?: number | null; avgSimulatedReturnPct?: number | null };
+      }
+    | undefined;
   const baselineCost = costSensitivity?.scenarios?.find((item) => item.feeBps === 5 && item.slippageBps === 2);
   const conservativeCost = costSensitivity?.scenarios?.find((item) => item.feeBps === 15 && item.slippageBps === 10);
 
@@ -253,6 +261,31 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
           label="缺失数据降级评估"
           value={`${degradedEvaluationCount} · ${missingDataLayerCounts && typeof missingDataLayerCounts === 'object' ? Object.entries(missingDataLayerCounts as Record<string, number>).map(([key, count]) => `${key} ${count}`).join('，') || '无' : '无'}`}
         />
+      ) : null}
+      {guardComparison ? (
+        <MetricRow
+          label="护栏前向队列（放行实际 / 拦截影子）"
+          value={`${guardComparison.releasedActual?.planCount ?? 0} / ${guardComparison.blockedCounterfactual?.planCount ?? 0}`}
+        />
+      ) : null}
+      {guardComparison && ((guardComparison.releasedActual?.fillCount ?? 0) > 0 || (guardComparison.blockedCounterfactual?.fillCount ?? 0) > 0) ? (
+        <>
+          <MetricRow
+            label="队列成交（放行 / 拦截影子）"
+            value={`${guardComparison.releasedActual?.fillCount ?? 0} / ${guardComparison.blockedCounterfactual?.fillCount ?? 0}`}
+          />
+          <MetricRow
+            label="队列净命中"
+            value={`${pct(guardComparison.releasedActual?.netResultHitRatePct)} / ${pct(guardComparison.blockedCounterfactual?.netResultHitRatePct)}`}
+          />
+          <MetricRow
+            label="队列平均收益"
+            value={`${pct(guardComparison.releasedActual?.avgSimulatedReturnPct)} / ${pct(guardComparison.blockedCounterfactual?.avgSimulatedReturnPct)}`}
+          />
+        </>
+      ) : null}
+      {guardComparison && typeof guardComparison.legacyUnclassifiedCount === 'number' && guardComparison.legacyUnclassifiedCount > 0 ? (
+        <MetricRow label="旧计划未分类" value={`${guardComparison.legacyUnclassifiedCount}`} />
       ) : null}
       <MetricRow label="平均净收益" value={pct(metrics.avgSimulatedReturnPct)} />
       {typeof signalTriggeredCount === 'number' && typeof rawTriggeredCount === 'number' ? (

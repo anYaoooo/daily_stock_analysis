@@ -391,6 +391,10 @@ def test_bearish_push_below_vwap_blocks_long_plan() -> None:
     assert plan["direction"] == "wait"
     assert plan["tradeability_status"] == "blocked"
     assert plan["tradeability_reasons"] == ["long_bearish_push_below_vwap"]
+    assert plan["tradeability_audit"]["version"] == "btc-tradeability-v1"
+    assert plan["tradeability_audit"]["decision"] == "blocked"
+    assert plan["tradeability_audit"]["original_plan"]["direction"] == "long"
+    assert plan["tradeability_audit"]["original_plan"]["execution_contract"] == _contract()
     assert plan["validation_status"] == "skipped"
 
 
@@ -433,6 +437,22 @@ def test_low_volume_without_breakout_blocks_long_plan() -> None:
     plan = aligned.dashboard["battle_plan"]["intraday_plan"]
     assert plan["direction"] == "wait"
     assert plan["tradeability_reasons"] == ["long_low_volume_without_close_breakout"]
+
+    realigned = align_btc_execution_plans(
+        aligned,
+        runtime_config=_runtime_config(),
+        technical_context={
+            "timeframes": {
+                "hourly": {
+                    "price_action": {"state": "range", "close_above_resistance": False},
+                    "vwap": {"price_position": "above"},
+                    "volume": {"confirmation": "low"},
+                }
+            }
+        },
+    )
+    realigned_plan = realigned.dashboard["battle_plan"]["intraday_plan"]
+    assert realigned_plan["tradeability_audit"]["original_plan"]["direction"] == "long"
 
 
 def test_countertrend_intraday_plan_is_capped_and_expires_early() -> None:
@@ -535,6 +555,7 @@ def test_missing_context_degrades_position_cap_without_changing_direction() -> N
     assert plan["tradeability_status"] == "degraded_missing_context"
     assert plan["position_multiplier_cap"] == 0.5
     assert "missing:volatility_forecast" in plan["tradeability_reasons"]
+    assert plan["tradeability_audit"]["decision"] == "degraded"
 
 
 def test_extreme_ewma_volatility_caps_plan_and_trial_position() -> None:
