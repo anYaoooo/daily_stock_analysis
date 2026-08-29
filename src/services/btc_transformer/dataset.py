@@ -86,24 +86,25 @@ def build_sequences(
         raise ValueError(f"not enough complete rows for sequence_length={length}")
 
     values = clean[columns].to_numpy(dtype=np.float32)
-    windows: list[np.ndarray] = []
-    timestamps: list[Any] = []
-    returns = {name: [] for name in horizon_names}
-    volatilities = {name: [] for name in horizon_names}
-    directions = {name: [] for name in horizon_names}
-    regimes = {name: [] for name in horizon_names}
-    for end in range(length - 1, len(clean)):
-        windows.append(values[end - length + 1 : end + 1])
-        timestamps.append(clean.iloc[end]["date"] if "date" in clean.columns else end)
-        for name in horizon_names:
-            returns[name].append(float(clean.iloc[end][f"target_return_{name}"]))
-            volatilities[name].append(float(clean.iloc[end][f"target_volatility_{name}"]))
-            direction = int(clean.iloc[end][f"target_direction_{name}"])
-            directions[name].append(direction + 1)  # -1/0/1 -> class 0/1/2
-            regime = str(clean.iloc[end][f"target_regime_{name}"])
-            if regime not in REGIME_TO_INDEX:
-                raise ValueError(f"unsupported regime label: {regime}")
-            regimes[name].append(REGIME_TO_INDEX[regime])
+    # Build the complete window tensor in one operation.  The previous
+    # row-by-row iloc loop dominated long-history training time without
+    # changing the leakage boundary or label alignment.
+    windows = np.lib.stride_tricks.sliding_window_view(values, length, axis=0)
+    windows = np.moveaxis(windows, -1, 1).copy()
+    timestamps = clean["date"].to_numpy()[length - 1 :] if "date" in clean.columns else np.arange(len(windows))
+    returns: dict[str, np.ndarray] = {}
+    volatilities: dict[str, np.ndarray] = {}
+    directions: dict[str, np.ndarray] = {}
+    regimes: dict[str, np.ndarray] = {}
+    for name in horizon_names:
+        returns[name] = clean[f"target_return_{name}"].to_numpy(dtype=np.float32)[length - 1 :]
+        volatilities[name] = clean[f"target_volatility_{name}"].to_numpy(dtype=np.float32)[length - 1 :]
+        directions[name] = clean[f"target_direction_{name}"].to_numpy(dtype=np.int64)[length - 1 :] + 1  # -1/0/1 -> 0/1/2
+        regime_values = clean[f"target_regime_{name}"].astype(str).to_numpy()[length - 1 :]
+        unknown = sorted(set(regime_values) - set(REGIME_TO_INDEX))
+        if unknown:
+            raise ValueError(f"unsupported regime label: {unknown[0]}")
+        regimes[name] = np.asarray([REGIME_TO_INDEX[value] for value in regime_values], dtype=np.int64)
     return SequenceData(
         features=np.asarray(windows, dtype=np.float32),
         returns={name: np.asarray(values, dtype=np.float32) for name, values in returns.items()},

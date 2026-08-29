@@ -22,6 +22,7 @@ from .models import (
 from .trainer import (
     TransformerTrainingConfig,
     WalkForwardTransformerTrainer,
+    derive_trade_signal,
     walk_forward_sequence_splits,
 )
 
@@ -39,6 +40,7 @@ __all__ = [
     "WalkForwardTransformerTrainer",
     "build_sequences",
     "build_transformer_feature_frame",
+    "derive_trade_signal",
     "ensemble_forecasts",
     "walk_forward_sequence_splits",
 ]

@@ -59,8 +59,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--purge-samples", type=int, default=48)
     parser.add_argument("--folds", type=int, default=3)
     parser.add_argument("--bar-hours", type=float, default=1.0, help="每根 K 线覆盖小时数，5m 数据为 0.0833333。")
+    parser.add_argument("--neutral-band-bps", type=float, default=20.0, help="方向标签的中性区间（基点），区间内不产生多空标签。")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="cpu", help="PyTorch 设备，例如 cpu、cuda 或 cuda:0；默认 cpu。")
+    parser.add_argument("--target-clip-sigma", type=float, default=5.0, help="回归目标按训练折稳健缩放后的裁剪范围，默认 ±5。")
+    parser.add_argument("--trading-cost-bps", type=float, default=10.0, help="交易成本（往返基点），仅用于交易信号过滤和评估。")
+    parser.add_argument("--min-signal-edge-bps", type=float, default=5.0, help="除交易成本外要求的最小预期收益缓冲（基点）。")
+    parser.add_argument("--signal-confidence-threshold", type=float, default=0.55, help="方向概率进入交易信号所需的最低置信度。")
+    parser.add_argument("--direction-consistency-weight", type=float, default=0.0, help="收益回归与方向概率一致性损失的权重；默认关闭，避免长周期噪声压制方向分类。")
     return parser
 
 
@@ -72,6 +78,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             horizons=args.horizons,
             sequence_length=args.sequence_length,
             bar_hours=args.bar_hours,
+            neutral_band=max(0.0, args.neutral_band_bps) / 10000.0,
         )
         config = TransformerTrainingConfig(
             feature=feature_config,
@@ -90,6 +97,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             folds=args.folds,
             seed=args.seed,
             device=args.device,
+            target_clip_sigma=args.target_clip_sigma,
+            trading_cost_bps=args.trading_cost_bps,
+            min_signal_edge_bps=args.min_signal_edge_bps,
+            signal_confidence_threshold=args.signal_confidence_threshold,
+            direction_consistency_weight=args.direction_consistency_weight,
         )
         result = WalkForwardTransformerTrainer(config).build(bars)
         payload = json.dumps(result, ensure_ascii=False, indent=2)

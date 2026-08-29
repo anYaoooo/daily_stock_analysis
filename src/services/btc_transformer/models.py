@@ -51,6 +51,11 @@ class PatchTSTBackbone(nn.Module if nn is not None else object):
         nn.init.trunc_normal_(self.position, std=0.02)
         layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads, dim_feedforward=d_model * 4, dropout=dropout, batch_first=True, norm_first=True)
         self.encoder = nn.TransformerEncoder(layer, num_layers=max(1, int(layers)))
+        self.pool_score = nn.Linear(d_model, 1)
+        # Start as mean pooling; a random attention scorer is unstable when
+        # research runs use only a few CPU epochs.
+        nn.init.zeros_(self.pool_score.weight)
+        nn.init.zeros_(self.pool_score.bias)
         self.norm = nn.LayerNorm(d_model)
 
     def forward(self, inputs: Any) -> Any:
@@ -63,7 +68,9 @@ class PatchTSTBackbone(nn.Module if nn is not None else object):
         patches = patches.transpose(-1, -2).contiguous().flatten(start_dim=2)
         tokens = self.projection(patches)
         tokens = tokens + self.position[:, : tokens.shape[1]]
-        return self.norm(self.encoder(tokens).mean(dim=1))
+        encoded = self.encoder(tokens)
+        weights = torch.softmax(self.pool_score(encoded).squeeze(-1), dim=1).unsqueeze(-1)
+        return self.norm((encoded * weights).sum(dim=1))
 
 
 class ITransformerBackbone(nn.Module if nn is not None else object):
@@ -90,6 +97,9 @@ class ITransformerBackbone(nn.Module if nn is not None else object):
         nn.init.trunc_normal_(self.variable_position, std=0.02)
         layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads, dim_feedforward=d_model * 4, dropout=dropout, batch_first=True, norm_first=True)
         self.encoder = nn.TransformerEncoder(layer, num_layers=max(1, int(layers)))
+        self.pool_score = nn.Linear(d_model, 1)
+        nn.init.zeros_(self.pool_score.weight)
+        nn.init.zeros_(self.pool_score.bias)
         self.norm = nn.LayerNorm(d_model)
 
     def forward(self, inputs: Any) -> Any:
@@ -99,7 +109,9 @@ class ITransformerBackbone(nn.Module if nn is not None else object):
             raise ValueError(f"expected sequence length {self.sequence_length}, got {inputs.shape[1]}")
         tokens = self.projection(inputs.transpose(1, 2))
         tokens = tokens + self.variable_position[:, : tokens.shape[1]]
-        return self.norm(self.encoder(tokens).mean(dim=1))
+        encoded = self.encoder(tokens)
+        weights = torch.softmax(self.pool_score(encoded).squeeze(-1), dim=1).unsqueeze(-1)
+        return self.norm((encoded * weights).sum(dim=1))
 
 
 class MultiTaskTransformer(nn.Module if nn is not None else object):

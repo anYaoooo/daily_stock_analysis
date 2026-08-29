@@ -1,0 +1,566 @@
+{
+  "mode": "offline_trained_online_holdout",
+  "source": "data\\btc_okx_perpetual_1h_training.csv",
+  "source_latest_closed": "2026-08-29 07:00:00+00:00",
+  "cutoff": "2026-08-28 07:00:00+00:00",
+  "holdout_hours": 24,
+  "architectures": [
+    "patchtst",
+    "itransformer",
+    "fusion"
+  ],
+  "results": {
+    "patchtst": {
+      "status": "available",
+      "training": {
+        "horizons": {
+          "1h": 1,
+          "4h": 4,
+          "24h": 24
+        },
+        "bar_hours": 1.0,
+        "neutral_band": 0.002,
+        "sequence_length": 64,
+        "patch_length": 16,
+        "stride": 8,
+        "d_model": 32,
+        "n_heads": 4,
+        "layers": 1,
+        "epochs": 5,
+        "batch_size": 512,
+        "learning_rate": 0.0001,
+        "folds": 1,
+        "min_train_samples": 336,
+        "validation_samples": 48,
+        "purge_samples": 48,
+        "seed": 7,
+        "device": "cpu",
+        "class_weighted_loss": true,
+        "target_clip_sigma": 5.0,
+        "return_loss_weight": 0.25,
+        "volatility_loss_weight": 0.1,
+        "direction_loss_weight": 1.0,
+        "regime_loss_weight": 0.25,
+        "direction_consistency_weight": 0.0,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "signal_confidence_threshold": 0.55
+      },
+      "source_sample_count": 57319,
+      "forecasts_at_cutoff": {
+        "1h": {
+          "return": -0.00046704804723258857,
+          "volatility": 0.0030945301987230778,
+          "direction_probabilities": [
+            0.3311050315148286,
+            0.3334765877448508,
+            0.3354183807403206
+          ],
+          "direction": "up",
+          "regime": "sideways",
+          "calibration_temperature": 3.0,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "up",
+            "confidence": 0.3354183807403206,
+            "expected_return": -0.00046704804723258857,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        },
+        "4h": {
+          "return": 0.001272973138092479,
+          "volatility": 0.004384469240903854,
+          "direction_probabilities": [
+            0.3199699036197543,
+            0.34201312602735956,
+            0.3380169703528861
+          ],
+          "direction": "neutral",
+          "regime": "trend_down",
+          "calibration_temperature": 1.4,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "neutral",
+            "confidence": 0.34201312602735956,
+            "expected_return": 0.001272973138092479,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        },
+        "24h": {
+          "return": -0.0023284094878494263,
+          "volatility": 0.004566068295389414,
+          "direction_probabilities": [
+            0.419919035486271,
+            0.25917517758845326,
+            0.32090578692527566
+          ],
+          "direction": "down",
+          "regime": "trend_down",
+          "calibration_temperature": 0.8,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "down",
+            "confidence": 0.419919035486271,
+            "expected_return": -0.0023284094878494263,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        }
+      },
+      "realized_targets": {
+        "1h": {
+          "as_of": "2026-08-28 08:00:00+00:00",
+          "return": -0.00197816542594418,
+          "direction": "neutral",
+          "start_close": 79647.4,
+          "future_close": 79490.0
+        },
+        "4h": {
+          "as_of": "2026-08-28 11:00:00+00:00",
+          "return": -0.0009709988672531863,
+          "direction": "neutral",
+          "start_close": 79647.4,
+          "future_close": 79570.1
+        },
+        "24h": {
+          "as_of": "2026-08-29 07:00:00+00:00",
+          "return": -0.02628297424343224,
+          "direction": "down",
+          "start_close": 79647.4,
+          "future_close": 77581.3
+        }
+      },
+      "scores": {
+        "1h": {
+          "available": true,
+          "predicted_direction": "up",
+          "actual_direction": "neutral",
+          "direction_correct": false,
+          "predicted_return": -0.00046704804723258857,
+          "actual_return": -0.00197816542594418,
+          "return_abs_error": 0.0015111173787115916,
+          "trade_action": "hold",
+          "net_return": -0.0
+        },
+        "4h": {
+          "available": true,
+          "predicted_direction": "neutral",
+          "actual_direction": "neutral",
+          "direction_correct": true,
+          "predicted_return": 0.001272973138092479,
+          "actual_return": -0.0009709988672531863,
+          "return_abs_error": 0.002243972005345665,
+          "trade_action": "hold",
+          "net_return": -0.0
+        },
+        "24h": {
+          "available": true,
+          "predicted_direction": "down",
+          "actual_direction": "down",
+          "direction_correct": true,
+          "predicted_return": -0.0023284094878494263,
+          "actual_return": -0.02628297424343224,
+          "return_abs_error": 0.023954564755582813,
+          "trade_action": "hold",
+          "net_return": -0.0
+        }
+      },
+      "walk_forward": {
+        "folds": [
+          {
+            "train_start": 0,
+            "train_end": 336,
+            "validation_start": 384,
+            "validation_end": 432,
+            "purge_samples": 48,
+            "fold": 1,
+            "train_samples": 336,
+            "validation_samples": 48
+          }
+        ]
+      }
+    },
+    "itransformer": {
+      "status": "available",
+      "training": {
+        "horizons": {
+          "1h": 1,
+          "4h": 4,
+          "24h": 24
+        },
+        "bar_hours": 1.0,
+        "neutral_band": 0.002,
+        "sequence_length": 64,
+        "patch_length": 16,
+        "stride": 8,
+        "d_model": 32,
+        "n_heads": 4,
+        "layers": 1,
+        "epochs": 5,
+        "batch_size": 512,
+        "learning_rate": 0.0001,
+        "folds": 1,
+        "min_train_samples": 336,
+        "validation_samples": 48,
+        "purge_samples": 48,
+        "seed": 7,
+        "device": "cpu",
+        "class_weighted_loss": true,
+        "target_clip_sigma": 5.0,
+        "return_loss_weight": 0.25,
+        "volatility_loss_weight": 0.1,
+        "direction_loss_weight": 1.0,
+        "regime_loss_weight": 0.25,
+        "direction_consistency_weight": 0.0,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "signal_confidence_threshold": 0.55
+      },
+      "source_sample_count": 57319,
+      "forecasts_at_cutoff": {
+        "1h": {
+          "return": -0.00019516272772879297,
+          "volatility": 0.0035749017260968685,
+          "direction_probabilities": [
+            0.3057105241872713,
+            0.3534837579964422,
+            0.3408057178162865
+          ],
+          "direction": "neutral",
+          "regime": "sideways",
+          "calibration_temperature": 1.9000000000000001,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "neutral",
+            "confidence": 0.3534837579964422,
+            "expected_return": -0.00019516272772879297,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        },
+        "4h": {
+          "return": 0.0011507354478985034,
+          "volatility": 0.003630036721006036,
+          "direction_probabilities": [
+            0.2721411611611386,
+            0.408705270739047,
+            0.31915356809981443
+          ],
+          "direction": "neutral",
+          "regime": "sideways",
+          "calibration_temperature": 0.7,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "neutral",
+            "confidence": 0.408705270739047,
+            "expected_return": 0.0011507354478985034,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        },
+        "24h": {
+          "return": -0.005424571679671499,
+          "volatility": 0.005160887725651264,
+          "direction_probabilities": [
+            0.33076815967492845,
+            0.350182237856088,
+            0.31904960246898356
+          ],
+          "direction": "neutral",
+          "regime": "sideways",
+          "calibration_temperature": 3.0,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "neutral",
+            "confidence": 0.350182237856088,
+            "expected_return": -0.005424571679671499,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        }
+      },
+      "realized_targets": {
+        "1h": {
+          "as_of": "2026-08-28 08:00:00+00:00",
+          "return": -0.00197816542594418,
+          "direction": "neutral",
+          "start_close": 79647.4,
+          "future_close": 79490.0
+        },
+        "4h": {
+          "as_of": "2026-08-28 11:00:00+00:00",
+          "return": -0.0009709988672531863,
+          "direction": "neutral",
+          "start_close": 79647.4,
+          "future_close": 79570.1
+        },
+        "24h": {
+          "as_of": "2026-08-29 07:00:00+00:00",
+          "return": -0.02628297424343224,
+          "direction": "down",
+          "start_close": 79647.4,
+          "future_close": 77581.3
+        }
+      },
+      "scores": {
+        "1h": {
+          "available": true,
+          "predicted_direction": "neutral",
+          "actual_direction": "neutral",
+          "direction_correct": true,
+          "predicted_return": -0.00019516272772879297,
+          "actual_return": -0.00197816542594418,
+          "return_abs_error": 0.001783002698215387,
+          "trade_action": "hold",
+          "net_return": -0.0
+        },
+        "4h": {
+          "available": true,
+          "predicted_direction": "neutral",
+          "actual_direction": "neutral",
+          "direction_correct": true,
+          "predicted_return": 0.0011507354478985034,
+          "actual_return": -0.0009709988672531863,
+          "return_abs_error": 0.0021217343151516896,
+          "trade_action": "hold",
+          "net_return": -0.0
+        },
+        "24h": {
+          "available": true,
+          "predicted_direction": "neutral",
+          "actual_direction": "down",
+          "direction_correct": false,
+          "predicted_return": -0.005424571679671499,
+          "actual_return": -0.02628297424343224,
+          "return_abs_error": 0.02085840256376074,
+          "trade_action": "hold",
+          "net_return": -0.0
+        }
+      },
+      "walk_forward": {
+        "folds": [
+          {
+            "train_start": 0,
+            "train_end": 336,
+            "validation_start": 384,
+            "validation_end": 432,
+            "purge_samples": 48,
+            "fold": 1,
+            "train_samples": 336,
+            "validation_samples": 48
+          }
+        ]
+      }
+    },
+    "fusion": {
+      "status": "available",
+      "training": {
+        "horizons": {
+          "1h": 1,
+          "4h": 4,
+          "24h": 24
+        },
+        "bar_hours": 1.0,
+        "neutral_band": 0.002,
+        "sequence_length": 64,
+        "patch_length": 16,
+        "stride": 8,
+        "d_model": 32,
+        "n_heads": 4,
+        "layers": 1,
+        "epochs": 5,
+        "batch_size": 512,
+        "learning_rate": 0.0001,
+        "folds": 1,
+        "min_train_samples": 336,
+        "validation_samples": 48,
+        "purge_samples": 48,
+        "seed": 7,
+        "device": "cpu",
+        "class_weighted_loss": true,
+        "target_clip_sigma": 5.0,
+        "return_loss_weight": 0.25,
+        "volatility_loss_weight": 0.1,
+        "direction_loss_weight": 1.0,
+        "regime_loss_weight": 0.25,
+        "direction_consistency_weight": 0.0,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "signal_confidence_threshold": 0.55
+      },
+      "source_sample_count": 57319,
+      "forecasts_at_cutoff": {
+        "1h": {
+          "return": -0.00019112418533051602,
+          "volatility": 0.002535840030759573,
+          "direction_probabilities": [
+            0.3247198212135648,
+            0.31443414210586307,
+            0.36084603668057214
+          ],
+          "direction": "up",
+          "regime": "trend_up",
+          "calibration_temperature": 0.8,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "up",
+            "confidence": 0.36084603668057214,
+            "expected_return": -0.00019112418533051602,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        },
+        "4h": {
+          "return": 0.000581197045083898,
+          "volatility": 0.004477279726415873,
+          "direction_probabilities": [
+            0.3416324112625295,
+            0.32364696164686474,
+            0.3347206270906057
+          ],
+          "direction": "down",
+          "regime": "trend_down",
+          "calibration_temperature": 3.0,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "down",
+            "confidence": 0.3416324112625296,
+            "expected_return": 0.000581197045083898,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        },
+        "24h": {
+          "return": -3.477974582073441e-05,
+          "volatility": 0.004287104122340679,
+          "direction_probabilities": [
+            0.46754663113570216,
+            0.22433711502710219,
+            0.3081162538371957
+          ],
+          "direction": "down",
+          "regime": "trend_down",
+          "calibration_temperature": 0.5,
+          "trade_signal": {
+            "action": "hold",
+            "direction": "down",
+            "confidence": 0.46754663113570216,
+            "expected_return": -3.477974582073441e-05,
+            "required_return": 0.0015,
+            "trading_cost_bps": 10.0,
+            "min_signal_edge_bps": 5.0,
+            "confidence_threshold": 0.55,
+            "reason": "low_confidence"
+          },
+          "as_of": "2026-08-28 07:00:00+00:00"
+        }
+      },
+      "realized_targets": {
+        "1h": {
+          "as_of": "2026-08-28 08:00:00+00:00",
+          "return": -0.00197816542594418,
+          "direction": "neutral",
+          "start_close": 79647.4,
+          "future_close": 79490.0
+        },
+        "4h": {
+          "as_of": "2026-08-28 11:00:00+00:00",
+          "return": -0.0009709988672531863,
+          "direction": "neutral",
+          "start_close": 79647.4,
+          "future_close": 79570.1
+        },
+        "24h": {
+          "as_of": "2026-08-29 07:00:00+00:00",
+          "return": -0.02628297424343224,
+          "direction": "down",
+          "start_close": 79647.4,
+          "future_close": 77581.3
+        }
+      },
+      "scores": {
+        "1h": {
+          "available": true,
+          "predicted_direction": "up",
+          "actual_direction": "neutral",
+          "direction_correct": false,
+          "predicted_return": -0.00019112418533051602,
+          "actual_return": -0.00197816542594418,
+          "return_abs_error": 0.001787041240613664,
+          "trade_action": "hold",
+          "net_return": -0.0
+        },
+        "4h": {
+          "available": true,
+          "predicted_direction": "down",
+          "actual_direction": "neutral",
+          "direction_correct": false,
+          "predicted_return": 0.000581197045083898,
+          "actual_return": -0.0009709988672531863,
+          "return_abs_error": 0.0015521959123370843,
+          "trade_action": "hold",
+          "net_return": -0.0
+        },
+        "24h": {
+          "available": true,
+          "predicted_direction": "down",
+          "actual_direction": "down",
+          "direction_correct": true,
+          "predicted_return": -3.477974582073441e-05,
+          "actual_return": -0.02628297424343224,
+          "return_abs_error": 0.026248194497611507,
+          "trade_action": "hold",
+          "net_return": -0.0
+        }
+      },
+      "walk_forward": {
+        "folds": [
+          {
+            "train_start": 0,
+            "train_end": 336,
+            "validation_start": 384,
+            "validation_end": 432,
+            "purge_samples": 48,
+            "fold": 1,
+            "train_samples": 336,
+            "validation_samples": 48
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,267 @@
+{
+  "model_version": "btc-transformer-multitask-wf-v2",
+  "architecture": "patchtst",
+  "mode": "offline_research",
+  "participates_in_decision": false,
+  "training_config": {
+    "horizons": {
+      "1h": 1,
+      "4h": 4,
+      "24h": 24
+    },
+    "bar_hours": 1.0,
+    "neutral_band": 0.002,
+    "sequence_length": 64,
+    "patch_length": 16,
+    "stride": 8,
+    "d_model": 32,
+    "n_heads": 4,
+    "layers": 1,
+    "epochs": 1,
+    "batch_size": 256,
+    "learning_rate": 0.0001,
+    "folds": 3,
+    "min_train_samples": 336,
+    "validation_samples": 48,
+    "purge_samples": 48,
+    "seed": 7,
+    "device": "cpu",
+    "class_weighted_loss": true,
+    "direction_consistency_weight": 0.25,
+    "trading_cost_bps": 10.0,
+    "min_signal_edge_bps": 5.0,
+    "signal_confidence_threshold": 0.55
+  },
+  "leakage_guard": {
+    "random_split": false,
+    "scaler_fit_scope": "train_only",
+    "scheme": "purged_expanding_walk_forward"
+  },
+  "trading_policy": {
+    "entry": "only when direction confidence, expected return and return/class agreement all pass",
+    "cost_model": "round_trip_bps",
+    "abstain_on_conflict": true
+  },
+  "data_quality": "available",
+  "source_sample_count": 57000,
+  "feature_count": 49,
+  "feature_columns": [
+    "feature_log_return_1",
+    "feature_open_close_return",
+    "feature_high_low_range",
+    "feature_upper_wick",
+    "feature_lower_wick",
+    "feature_volume_log1p",
+    "feature_volume_change",
+    "feature_rsi_14",
+    "feature_atr_pct_14",
+    "feature_macd",
+    "feature_macd_signal",
+    "feature_ema_slope_12",
+    "feature_return_mean_3",
+    "feature_return_std_3",
+    "feature_momentum_3",
+    "feature_volume_zscore_3",
+    "feature_range_position_3",
+    "feature_return_mean_6",
+    "feature_return_std_6",
+    "feature_momentum_6",
+    "feature_volume_zscore_6",
+    "feature_range_position_6",
+    "feature_return_mean_12",
+    "feature_return_std_12",
+    "feature_momentum_12",
+    "feature_volume_zscore_12",
+    "feature_range_position_12",
+    "feature_return_mean_24",
+    "feature_return_std_24",
+    "feature_momentum_24",
+    "feature_volume_zscore_24",
+    "feature_range_position_24",
+    "feature_return_mean_48",
+    "feature_return_std_48",
+    "feature_momentum_48",
+    "feature_volume_zscore_48",
+    "feature_range_position_48",
+    "feature_return_mean_96",
+    "feature_return_std_96",
+    "feature_momentum_96",
+    "feature_volume_zscore_96",
+    "feature_range_position_96",
+    "feature_return_mean_192",
+    "feature_return_std_192",
+    "feature_momentum_192",
+    "feature_volume_zscore_192",
+    "feature_range_position_192",
+    "feature_vwap_deviation_24",
+    "feature_bollinger_position_24"
+  ],
+  "forecasts": {
+    "1h": {
+      "return": -0.07617983967065811,
+      "volatility": 0.325314462184906,
+      "direction_probabilities": [
+        0.32913701693111447,
+        0.4460014892756722,
+        0.2248614937932133
+      ],
+      "direction": "neutral",
+      "regime": "sideways",
+      "calibration_temperature": 0.8,
+      "trade_signal": {
+        "action": "hold",
+        "direction": "neutral",
+        "confidence": 0.44600148927567224,
+        "expected_return": -0.07617983967065811,
+        "required_return": 0.0015,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "confidence_threshold": 0.55,
+        "reason": "low_confidence"
+      },
+      "as_of": "2026-08-15 00:00:00+00:00"
+    },
+    "4h": {
+      "return": 0.1405785232782364,
+      "volatility": 0.2543306052684784,
+      "direction_probabilities": [
+        0.34507899683266624,
+        0.347777220834308,
+        0.3071437823330258
+      ],
+      "direction": "neutral",
+      "regime": "sideways",
+      "calibration_temperature": 3.0,
+      "trade_signal": {
+        "action": "hold",
+        "direction": "neutral",
+        "confidence": 0.347777220834308,
+        "expected_return": 0.1405785232782364,
+        "required_return": 0.0015,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "confidence_threshold": 0.55,
+        "reason": "low_confidence"
+      },
+      "as_of": "2026-08-15 00:00:00+00:00"
+    },
+    "24h": {
+      "return": 0.08438336849212646,
+      "volatility": 0.29917076230049133,
+      "direction_probabilities": [
+        0.31160183437477385,
+        0.3535567306910782,
+        0.33484143493414803
+      ],
+      "direction": "neutral",
+      "regime": "sideways",
+      "calibration_temperature": 3.0,
+      "trade_signal": {
+        "action": "hold",
+        "direction": "neutral",
+        "confidence": 0.3535567306910782,
+        "expected_return": 0.08438336849212646,
+        "required_return": 0.0015,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "confidence_threshold": 0.55,
+        "reason": "low_confidence"
+      },
+      "as_of": "2026-08-15 00:00:00+00:00"
+    }
+  },
+  "evaluations": {
+    "1h": {
+      "fold_count": 3,
+      "samples": 144,
+      "return_mae": 0.12137904,
+      "volatility_mae": 0.57000296,
+      "direction_accuracy": 0.59722222,
+      "regime_accuracy": 0.59722222,
+      "majority_direction_accuracy": 0.51388889,
+      "direction_brier": 0.1942988,
+      "trading": {
+        "trades": 1,
+        "signal_rate": 0.00694444,
+        "net_return": -0.00392352,
+        "avg_net_return": -0.00392352,
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "max_drawdown": 0.00392352
+      }
+    },
+    "4h": {
+      "fold_count": 3,
+      "samples": 144,
+      "return_mae": 0.26237071,
+      "volatility_mae": 0.37367449,
+      "direction_accuracy": 0.3125,
+      "regime_accuracy": 0.36805556,
+      "majority_direction_accuracy": 0.30555556,
+      "direction_brier": 0.22449913,
+      "trading": {
+        "trades": 0,
+        "signal_rate": 0.0,
+        "net_return": 0.0,
+        "avg_net_return": null,
+        "win_rate": null,
+        "profit_factor": null,
+        "max_drawdown": 0.0
+      }
+    },
+    "24h": {
+      "fold_count": 3,
+      "samples": 144,
+      "return_mae": 0.07155987,
+      "volatility_mae": 0.4722218,
+      "direction_accuracy": 0.15972222,
+      "regime_accuracy": 0.15972222,
+      "majority_direction_accuracy": 0.48611111,
+      "direction_brier": 0.31667401,
+      "trading": {
+        "trades": 0,
+        "signal_rate": 0.0,
+        "net_return": 0.0,
+        "avg_net_return": null,
+        "win_rate": null,
+        "profit_factor": null,
+        "max_drawdown": 0.0
+      }
+    }
+  },
+  "walk_forward": {
+    "folds": [
+      {
+        "train_start": 0,
+        "train_end": 336,
+        "validation_start": 384,
+        "validation_end": 432,
+        "purge_samples": 48,
+        "fold": 1,
+        "train_samples": 336,
+        "validation_samples": 48
+      },
+      {
+        "train_start": 0,
+        "train_end": 28620,
+        "validation_start": 28668,
+        "validation_end": 28716,
+        "purge_samples": 48,
+        "fold": 2,
+        "train_samples": 28620,
+        "validation_samples": 48
+      },
+      {
+        "train_start": 0,
+        "train_end": 56904,
+        "validation_start": 56952,
+        "validation_end": 57000,
+        "purge_samples": 48,
+        "fold": 3,
+        "train_samples": 56904,
+        "validation_samples": 48
+      }
+    ]
+  },
+  "ensemble_note": "Use ensemble_forecasts with separately trained, calibrated model forecasts; horizons are not model names."
+}

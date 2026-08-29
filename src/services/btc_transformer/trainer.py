@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover
     DataLoader = None  # type: ignore[assignment]
 
 
-MODEL_VERSION = "btc-transformer-multitask-wf-v1"
+MODEL_VERSION = "btc-transformer-multitask-wf-v3"
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,16 @@ class TransformerTrainingConfig:
     purge_samples: int = 48
     seed: int = 7
     device: str = "cpu"
+    class_weighted_loss: bool = True
+    target_clip_sigma: float = 5.0
+    return_loss_weight: float = 0.25
+    volatility_loss_weight: float = 0.1
+    direction_loss_weight: float = 1.0
+    regime_loss_weight: float = 0.25
+    direction_consistency_weight: float = 0.0
+    trading_cost_bps: float = 10.0
+    min_signal_edge_bps: float = 5.0
+    signal_confidence_threshold: float = 0.55
 
     def __post_init__(self) -> None:
         if str(self.architecture).lower() not in {"patchtst", "itransformer", "fusion"}:
@@ -58,6 +68,23 @@ class TransformerTrainingConfig:
         object.__setattr__(self, "purge_samples", max(self.purge_samples, max(self.feature.horizons.values())))
         object.__setattr__(self, "learning_rate", max(1e-8, float(self.learning_rate)))
         object.__setattr__(self, "weight_decay", max(0.0, float(self.weight_decay)))
+        object.__setattr__(self, "class_weighted_loss", bool(self.class_weighted_loss))
+        object.__setattr__(self, "target_clip_sigma", max(1.0, float(self.target_clip_sigma)))
+        for name in ("return_loss_weight", "volatility_loss_weight", "direction_loss_weight", "regime_loss_weight"):
+            object.__setattr__(self, name, max(0.0, float(getattr(self, name))))
+        object.__setattr__(self, "direction_consistency_weight", max(0.0, float(self.direction_consistency_weight)))
+        if (
+            self.return_loss_weight
+            + self.volatility_loss_weight
+            + self.direction_loss_weight
+            + self.regime_loss_weight
+            + self.direction_consistency_weight
+            <= 0.0
+        ):
+            raise ValueError("at least one training loss weight must be positive")
+        object.__setattr__(self, "trading_cost_bps", max(0.0, float(self.trading_cost_bps)))
+        object.__setattr__(self, "min_signal_edge_bps", max(0.0, float(self.min_signal_edge_bps)))
+        object.__setattr__(self, "signal_confidence_threshold", min(1.0, max(1.0 / 3.0, float(self.signal_confidence_threshold))))
 
 
 def walk_forward_sequence_splits(
@@ -113,18 +140,219 @@ def _scale(values: np.ndarray, mean: np.ndarray, scale: np.ndarray) -> np.ndarra
     return ((values - mean) / scale).astype(np.float32)
 
 
-def _loss(outputs: Mapping[str, Any], targets: Mapping[str, Mapping[str, Any]], horizons: Sequence[str]) -> Any:
+def _fit_target_scales(data: SequenceData, indices: Sequence[int]) -> dict[str, dict[str, float]]:
+    """Fit robust target scales on the training fold only.
+
+    The 90th percentile of absolute values is deliberately used instead of
+    standard deviation: crypto returns contain genuine crash spikes that can
+    otherwise make the regression heads emit implausibly large values.
+    """
+
+    selected = np.asarray(indices, dtype=np.int64)
+    scales: dict[str, dict[str, float]] = {}
+    for horizon in data.horizons:
+        values: dict[str, float] = {}
+        for name, source in (("return", data.returns[horizon]), ("volatility", data.volatilities[horizon])):
+            sample = np.abs(np.asarray(source[selected], dtype=np.float64))
+            finite = sample[np.isfinite(sample)]
+            scale = float(np.nanpercentile(finite, 90)) if len(finite) else 0.0
+            values[name] = max(scale, 1e-4)
+        scales[horizon] = values
+    return scales
+
+
+def _scale_targets(
+    data: SequenceData,
+    scales: Mapping[str, Mapping[str, float]],
+    *,
+    clip_sigma: float,
+) -> SequenceData:
+    """Return a copy with robustly scaled and bounded regression targets."""
+
+    returns = {
+        horizon: np.clip(
+            data.returns[horizon] / float(scales[horizon]["return"]),
+            -float(clip_sigma),
+            float(clip_sigma),
+        ).astype(np.float32)
+        for horizon in data.horizons
+    }
+    volatilities = {
+        horizon: np.clip(
+            data.volatilities[horizon] / float(scales[horizon]["volatility"]),
+            0.0,
+            float(clip_sigma),
+        ).astype(np.float32)
+        for horizon in data.horizons
+    }
+    return SequenceData(
+        features=data.features,
+        returns=returns,
+        volatilities=volatilities,
+        directions=data.directions,
+        regimes=data.regimes,
+        timestamps=data.timestamps,
+        feature_names=data.feature_names,
+        horizons=data.horizons,
+    )
+
+
+def _inverse_target(values: np.ndarray, scale: float, *, clip_sigma: float) -> np.ndarray:
+    """Convert a bounded model target back to the original return unit."""
+
+    return np.clip(np.asarray(values, dtype=np.float64), -float(clip_sigma), float(clip_sigma)) * float(scale)
+
+
+def _class_weights(labels: np.ndarray, class_count: int) -> Any:
+    """Return bounded inverse-frequency weights fitted on a training fold only."""
+
+    counts = np.bincount(np.asarray(labels, dtype=np.int64), minlength=class_count).astype(np.float64)
+    present = counts > 0
+    weights = np.ones(class_count, dtype=np.float32)
+    if present.any():
+        weights[present] = counts[present].sum() / (float(present.sum()) * counts[present])
+        weights[present] = np.clip(weights[present], 0.25, 4.0)
+        weights[present] /= max(float(weights[present].mean()), 1e-8)
+    return torch.tensor(weights, dtype=torch.float32)
+
+
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    values = np.asarray(logits, dtype=np.float64)
+    values = values - values.max(axis=1, keepdims=True)
+    probabilities = np.exp(values)
+    return probabilities / np.clip(probabilities.sum(axis=1, keepdims=True), 1e-12, None)
+
+
+def derive_trade_signal(
+    direction_probabilities: Sequence[float],
+    predicted_return: float,
+    *,
+    trading_cost_bps: float = 10.0,
+    min_signal_edge_bps: float = 5.0,
+    confidence_threshold: float = 0.55,
+) -> dict[str, Any]:
+    """Convert independent model outputs into a cost-aware long/short/hold signal."""
+
+    probabilities = np.asarray(direction_probabilities, dtype=float)
+    if probabilities.shape != (3,) or not np.isfinite(probabilities).all() or probabilities.sum() <= 0:
+        return {"action": "hold", "reason": "invalid_direction_probabilities"}
+    probabilities = np.clip(probabilities, 0.0, None)
+    probabilities /= probabilities.sum()
+    predicted = float(predicted_return)
+    if not np.isfinite(predicted):
+        return {"action": "hold", "reason": "invalid_predicted_return"}
+    confidence = float(probabilities.max())
+    class_index = int(probabilities.argmax())
+    direction = ("down", "neutral", "up")[class_index]
+    required_return = (max(0.0, float(trading_cost_bps)) + max(0.0, float(min_signal_edge_bps))) / 10000.0
+    result: dict[str, Any] = {
+        "action": "hold",
+        "direction": direction,
+        "confidence": confidence,
+        "expected_return": predicted,
+        "required_return": required_return,
+        "trading_cost_bps": max(0.0, float(trading_cost_bps)),
+        "min_signal_edge_bps": max(0.0, float(min_signal_edge_bps)),
+        "confidence_threshold": min(1.0, max(1.0 / 3.0, float(confidence_threshold))),
+    }
+    if confidence < result["confidence_threshold"]:
+        result["reason"] = "low_confidence"
+    elif class_index == 1:
+        result["reason"] = "neutral_direction"
+    elif abs(predicted) < required_return:
+        result["reason"] = "expected_return_below_cost_buffer"
+    elif (class_index == 2 and predicted <= 0) or (class_index == 0 and predicted >= 0):
+        result["reason"] = "return_direction_conflict"
+    else:
+        result["action"] = "long" if class_index == 2 else "short"
+        result["reason"] = "cost_aware_signal"
+    return result
+
+
+def _trading_metrics(
+    actual_returns: np.ndarray,
+    predicted_returns: np.ndarray,
+    direction_logits: np.ndarray,
+    *,
+    trading_cost_bps: float,
+    min_signal_edge_bps: float,
+    confidence_threshold: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Score an abstaining, cost-aware strategy on one validation fold."""
+
+    probabilities = _softmax(direction_logits)
+    classes = probabilities.argmax(axis=1)
+    confidence = probabilities.max(axis=1)
+    required_return = (max(0.0, float(trading_cost_bps)) + max(0.0, float(min_signal_edge_bps))) / 10000.0
+    predicted_returns = np.asarray(predicted_returns, dtype=float)
+    actual_returns = np.asarray(actual_returns, dtype=float)
+    agreement = ((classes == 2) & (predicted_returns > 0)) | ((classes == 0) & (predicted_returns < 0))
+    signal_mask = (classes != 1) & (confidence >= confidence_threshold) & (np.abs(predicted_returns) >= required_return) & agreement
+    positions = np.where(classes == 2, 1.0, -1.0)
+    net_returns = np.where(signal_mask, positions * actual_returns - float(trading_cost_bps) / 10000.0, 0.0)
+    return net_returns.astype(float), signal_mask.astype(bool)
+
+
+def _summarize_trading(net_returns: Sequence[float], signal_mask: Sequence[bool]) -> dict[str, Any]:
+    returns = np.asarray(net_returns, dtype=float)
+    mask = np.asarray(signal_mask, dtype=bool)
+    selected = returns[mask]
+    trades = int(mask.sum())
+    positive = float(selected[selected > 0].sum()) if trades else 0.0
+    negative = float(selected[selected < 0].sum()) if trades else 0.0
+    equity = returns.cumsum()
+    peak = np.maximum.accumulate(np.concatenate(([0.0], equity)))
+    drawdown = peak[1:] - equity if len(equity) else np.asarray([], dtype=float)
+    return {
+        "trades": trades,
+        "signal_rate": round(float(trades / len(mask)), 8) if len(mask) else 0.0,
+        "net_return": round(float(returns.sum()), 8) if len(returns) else 0.0,
+        "avg_net_return": round(float(selected.mean()), 8) if trades else None,
+        "win_rate": round(float((selected > 0).mean()), 8) if trades else None,
+        "profit_factor": round(float(positive / abs(negative)), 8) if negative < 0 else (None if positive == 0 else None),
+        "max_drawdown": round(float(drawdown.max()), 8) if len(drawdown) else 0.0,
+    }
+
+
+def _loss(
+    outputs: Mapping[str, Any],
+    targets: Mapping[str, Mapping[str, Any]],
+    horizons: Sequence[str],
+    *,
+    direction_weights: Optional[Mapping[str, Any]] = None,
+    regime_weights: Optional[Mapping[str, Any]] = None,
+    return_loss_weight: float = 0.25,
+    volatility_loss_weight: float = 0.1,
+    direction_loss_weight: float = 1.0,
+    regime_loss_weight: float = 0.25,
+    direction_consistency_weight: float = 0.0,
+) -> Any:
     losses = []
+    normalizer = 0.0
     for horizon in horizons:
-        losses.extend(
-            [
-                nn.functional.smooth_l1_loss(outputs["return"][horizon], targets[horizon]["return"]),
-                nn.functional.smooth_l1_loss(outputs["volatility"][horizon], targets[horizon]["volatility"]),
-                nn.functional.cross_entropy(outputs["direction"][horizon], targets[horizon]["direction"]),
-                nn.functional.cross_entropy(outputs["regime"][horizon], targets[horizon]["regime"]),
-            ]
+        direction_weight = (direction_weights or {}).get(horizon)
+        regime_weight = (regime_weights or {}).get(horizon)
+        if direction_weight is not None:
+            direction_weight = direction_weight.to(outputs["direction"][horizon].device)
+        if regime_weight is not None:
+            regime_weight = regime_weight.to(outputs["regime"][horizon].device)
+        task_losses = (
+            (float(return_loss_weight), nn.functional.smooth_l1_loss(outputs["return"][horizon], targets[horizon]["return"])),
+            (float(volatility_loss_weight), nn.functional.smooth_l1_loss(outputs["volatility"][horizon], targets[horizon]["volatility"])),
+            (float(direction_loss_weight), nn.functional.cross_entropy(outputs["direction"][horizon], targets[horizon]["direction"], weight=direction_weight)),
+            (float(regime_loss_weight), nn.functional.cross_entropy(outputs["regime"][horizon], targets[horizon]["regime"], weight=regime_weight)),
         )
-    return torch.stack(losses).mean()
+        for weight, value in task_losses:
+            if weight > 0.0:
+                losses.append(weight * value)
+                normalizer += weight
+        direction_probabilities = nn.functional.softmax(outputs["direction"][horizon], dim=-1)
+        direction_score = direction_probabilities[:, 2] - direction_probabilities[:, 0]
+        consistency_weight = max(0.0, float(direction_consistency_weight))
+        if consistency_weight:
+            losses.append(consistency_weight * nn.functional.smooth_l1_loss(torch.tanh(outputs["return"][horizon]), direction_score))
+            normalizer += consistency_weight
+    return torch.stack(losses).sum() / max(normalizer, 1e-8)
 
 
 def _targets_to_device(targets: Mapping[str, Mapping[str, Any]], device: Any) -> dict[str, dict[str, Any]]:
@@ -140,6 +368,7 @@ class WalkForwardTransformerTrainer:
         self.feature_columns: tuple[str, ...] = ()
         self.scaler_mean: Optional[np.ndarray] = None
         self.scaler_scale: Optional[np.ndarray] = None
+        self.target_scales: Optional[dict[str, dict[str, float]]] = None
 
     def _new_model(self, feature_count: int, horizons: Sequence[str]) -> MultiTaskTransformer:
         return MultiTaskTransformer(
@@ -155,18 +384,37 @@ class WalkForwardTransformerTrainer:
             dropout=self.config.dropout,
         ).to(self.config.device)
 
-    def _fit_model(self, train_data: SequenceData, train_indices: Sequence[int], *, model: Optional[MultiTaskTransformer] = None) -> MultiTaskTransformer:
+    def _fit_model(
+        self,
+        train_data: SequenceData,
+        train_indices: Sequence[int],
+        *,
+        model: Optional[MultiTaskTransformer] = None,
+        direction_weights: Optional[Mapping[str, Any]] = None,
+        regime_weights: Optional[Mapping[str, Any]] = None,
+    ) -> MultiTaskTransformer:
         _require_torch()
         model = model or self._new_model(len(train_data.feature_names), train_data.horizons)
         model.train()
-        loader = DataLoader(SequenceDataset(train_data, train_indices), batch_size=self.config.batch_size, shuffle=False)
+        loader = DataLoader(SequenceDataset(train_data, train_indices), batch_size=self.config.batch_size, shuffle=True)
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
         for _ in range(self.config.epochs):
             for inputs, targets in loader:
                 inputs = inputs.to(self.config.device)
                 targets = _targets_to_device(targets, self.config.device)
                 optimizer.zero_grad(set_to_none=True)
-                loss = _loss(model(inputs), targets, train_data.horizons)
+                loss = _loss(
+                    model(inputs),
+                    targets,
+                    train_data.horizons,
+                    direction_weights=direction_weights,
+                    regime_weights=regime_weights,
+                    return_loss_weight=self.config.return_loss_weight,
+                    volatility_loss_weight=self.config.volatility_loss_weight,
+                    direction_loss_weight=self.config.direction_loss_weight,
+                    regime_loss_weight=self.config.regime_loss_weight,
+                    direction_consistency_weight=self.config.direction_consistency_weight,
+                )
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -199,7 +447,42 @@ class WalkForwardTransformerTrainer:
             "architecture": self.config.architecture,
             "mode": "offline_research",
             "participates_in_decision": False,
+            "training_config": {
+                "horizons": dict(self.config.feature.horizons),
+                "bar_hours": self.config.feature.bar_hours,
+                "neutral_band": self.config.feature.neutral_band,
+                "sequence_length": self.config.feature.sequence_length,
+                "patch_length": self.config.patch_length,
+                "stride": self.config.stride,
+                "d_model": self.config.d_model,
+                "n_heads": self.config.n_heads,
+                "layers": self.config.layers,
+                "epochs": self.config.epochs,
+                "batch_size": self.config.batch_size,
+                "learning_rate": self.config.learning_rate,
+                "folds": self.config.folds,
+                "min_train_samples": self.config.min_train_samples,
+                "validation_samples": self.config.validation_samples,
+                "purge_samples": self.config.purge_samples,
+                "seed": self.config.seed,
+                "device": self.config.device,
+                "class_weighted_loss": self.config.class_weighted_loss,
+                "target_clip_sigma": self.config.target_clip_sigma,
+                "return_loss_weight": self.config.return_loss_weight,
+                "volatility_loss_weight": self.config.volatility_loss_weight,
+                "direction_loss_weight": self.config.direction_loss_weight,
+                "regime_loss_weight": self.config.regime_loss_weight,
+                "direction_consistency_weight": self.config.direction_consistency_weight,
+                "trading_cost_bps": self.config.trading_cost_bps,
+                "min_signal_edge_bps": self.config.min_signal_edge_bps,
+                "signal_confidence_threshold": self.config.signal_confidence_threshold,
+            },
             "leakage_guard": {"random_split": False, "scaler_fit_scope": "train_only", "scheme": "purged_expanding_walk_forward"},
+            "trading_policy": {
+                "entry": "only when direction confidence, expected return and return/class agreement all pass",
+                "cost_model": "round_trip_bps",
+                "abstain_on_conflict": True,
+            },
         }
         if frame.empty:
             return {**base, "data_quality": "unavailable", "forecasts": {}, "evaluations": {}}
@@ -234,40 +517,107 @@ class WalkForwardTransformerTrainer:
             if not len(train_indices) or not len(validation_indices):
                 continue
             mean, scale = _fit_scaler(data.features[train_indices])
+            target_scales = _fit_target_scales(data, train_indices)
+            target_data = _scale_targets(data, target_scales, clip_sigma=self.config.target_clip_sigma)
             scaled_data = SequenceData(
-                features=_scale(data.features, mean, scale), returns=data.returns, volatilities=data.volatilities, directions=data.directions, regimes=data.regimes, timestamps=data.timestamps, feature_names=data.feature_names, horizons=data.horizons
+                features=_scale(data.features, mean, scale), returns=target_data.returns, volatilities=target_data.volatilities, directions=data.directions, regimes=data.regimes, timestamps=data.timestamps, feature_names=data.feature_names, horizons=data.horizons
             )
-            model = self._fit_model(scaled_data, train_indices)
+            direction_weights = {
+                horizon: _class_weights(data.directions[horizon][train_indices], 3)
+                for horizon in data.horizons
+            } if self.config.class_weighted_loss else None
+            regime_weights = {
+                horizon: _class_weights(data.regimes[horizon][train_indices], 4)
+                for horizon in data.horizons
+            } if self.config.class_weighted_loss else None
+            model = self._fit_model(
+                scaled_data,
+                train_indices,
+                direction_weights=direction_weights,
+                regime_weights=regime_weights,
+            )
             predictions = self._predict(model, scaled_data, validation_indices)
             fold_summaries.append({**split, "fold": fold_number + 1, "train_samples": int(len(train_indices)), "validation_samples": int(len(validation_indices))})
             for horizon in data.horizons:
                 actual_return = data.returns[horizon][validation_indices]
                 actual_vol = data.volatilities[horizon][validation_indices]
+                predicted_return = _inverse_target(
+                    predictions[horizon]["return"],
+                    target_scales[horizon]["return"],
+                    clip_sigma=self.config.target_clip_sigma,
+                )
+                predicted_vol = np.clip(
+                    predictions[horizon]["volatility"],
+                    0.0,
+                    self.config.target_clip_sigma,
+                ) * target_scales[horizon]["volatility"]
                 actual_direction = data.directions[horizon][validation_indices]
                 actual_regime = data.regimes[horizon][validation_indices]
                 direction = predictions[horizon]["direction"].argmax(axis=1)
                 regime = predictions[horizon]["regime"].argmax(axis=1)
+                probabilities = _softmax(predictions[horizon]["direction"])
+                majority_label = int(np.bincount(data.directions[horizon][train_indices], minlength=3).argmax())
+                net_returns, signal_mask = _trading_metrics(
+                    actual_return,
+                    predicted_return,
+                    predictions[horizon]["direction"],
+                    trading_cost_bps=self.config.trading_cost_bps,
+                    min_signal_edge_bps=self.config.min_signal_edge_bps,
+                    confidence_threshold=self.config.signal_confidence_threshold,
+                )
                 calibration_logits[horizon].append(predictions[horizon]["direction"])
                 calibration_labels[horizon].append(actual_direction)
                 current = evaluations[horizon]
                 current["fold_count"] += 1
                 current["samples"] += int(len(validation_indices))
-                current.setdefault("return_mae", []).extend(np.abs(predictions[horizon]["return"] - actual_return).tolist())
-                current.setdefault("volatility_mae", []).extend(np.abs(predictions[horizon]["volatility"] - actual_vol).tolist())
+                current.setdefault("return_mae", []).extend(np.abs(predicted_return - actual_return).tolist())
+                current.setdefault("volatility_mae", []).extend(np.abs(predicted_vol - actual_vol).tolist())
                 current.setdefault("direction_correct", []).extend((direction == actual_direction).tolist())
                 current.setdefault("regime_correct", []).extend((regime == actual_regime).tolist())
+                current.setdefault("majority_direction_correct", []).extend((majority_label == actual_direction).tolist())
+                current.setdefault("direction_brier", []).extend(
+                    np.mean(np.square(probabilities - np.eye(3, dtype=float)[actual_direction]), axis=1).tolist()
+                )
+                current.setdefault("trade_net_returns", []).extend(net_returns.tolist())
+                current.setdefault("trade_signal_mask", []).extend(signal_mask.tolist())
         for horizon, summary in evaluations.items():
-            for key, output_key in (("return_mae", "return_mae"), ("volatility_mae", "volatility_mae"), ("direction_correct", "direction_accuracy"), ("regime_correct", "regime_accuracy")):
+            for key, output_key in (
+                ("return_mae", "return_mae"),
+                ("volatility_mae", "volatility_mae"),
+                ("direction_correct", "direction_accuracy"),
+                ("regime_correct", "regime_accuracy"),
+                ("majority_direction_correct", "majority_direction_accuracy"),
+                ("direction_brier", "direction_brier"),
+            ):
                 values = summary.pop(key, [])
                 summary[output_key] = round(float(np.mean(values)), 8) if values else None
+            trade_returns = summary.pop("trade_net_returns", [])
+            trade_mask = summary.pop("trade_signal_mask", [])
+            summary["trading"] = _summarize_trading(trade_returns, trade_mask)
         if data.sample_count < self.config.min_train_samples:
             return {**base, "data_quality": "insufficient", "source_sample_count": data.sample_count, "feature_count": len(feature_columns), "feature_columns": list(feature_columns), "forecasts": {}, "evaluations": evaluations, "walk_forward": {"folds": fold_summaries}}
 
         # Fit final model on all complete samples. Scaling is fitted once here
         # for inference and is never reused to score a historical fold.
         self.scaler_mean, self.scaler_scale = _fit_scaler(data.features)
-        scaled_data = SequenceData(features=_scale(data.features, self.scaler_mean, self.scaler_scale), returns=data.returns, volatilities=data.volatilities, directions=data.directions, regimes=data.regimes, timestamps=data.timestamps, feature_names=data.feature_names, horizons=data.horizons)
-        self.model = self._fit_model(scaled_data, np.arange(data.sample_count))
+        target_scales = _fit_target_scales(data, np.arange(data.sample_count))
+        self.target_scales = target_scales
+        target_data = _scale_targets(data, target_scales, clip_sigma=self.config.target_clip_sigma)
+        scaled_data = SequenceData(features=_scale(data.features, self.scaler_mean, self.scaler_scale), returns=target_data.returns, volatilities=target_data.volatilities, directions=data.directions, regimes=data.regimes, timestamps=data.timestamps, feature_names=data.feature_names, horizons=data.horizons)
+        direction_weights = {
+            horizon: _class_weights(data.directions[horizon], 3)
+            for horizon in data.horizons
+        } if self.config.class_weighted_loss else None
+        regime_weights = {
+            horizon: _class_weights(data.regimes[horizon], 4)
+            for horizon in data.horizons
+        } if self.config.class_weighted_loss else None
+        self.model = self._fit_model(
+            scaled_data,
+            np.arange(data.sample_count),
+            direction_weights=direction_weights,
+            regime_weights=regime_weights,
+        )
         latest_window, latest_at = latest_sequence(frame, sequence_length=self.config.feature.sequence_length, feature_columns=feature_columns)
         latest_scaled = _scale(latest_window[None, ...], self.scaler_mean, self.scaler_scale)
         latest_data = SequenceData(features=latest_scaled, returns={h: np.zeros(1, dtype=np.float32) for h in data.horizons}, volatilities={h: np.zeros(1, dtype=np.float32) for h in data.horizons}, directions={h: np.zeros(1, dtype=np.int64) for h in data.horizons}, regimes={h: np.zeros(1, dtype=np.int64) for h in data.horizons}, timestamps=np.asarray([latest_at]), feature_names=data.feature_names, horizons=data.horizons)
@@ -282,13 +632,31 @@ class WalkForwardTransformerTrainer:
                     np.concatenate(calibration_labels[horizon], axis=0),
                 )
             probabilities = calibrator.transform(logits)[0]
+            predicted_return = float(
+                _inverse_target(
+                    predicted[horizon]["return"][0:1],
+                    target_scales[horizon]["return"],
+                    clip_sigma=self.config.target_clip_sigma,
+                )[0]
+            )
+            predicted_volatility = float(
+                np.clip(predicted[horizon]["volatility"][0], 0.0, self.config.target_clip_sigma)
+                * target_scales[horizon]["volatility"]
+            )
             forecasts[horizon] = {
-                "return": float(predicted[horizon]["return"][0]),
-                "volatility": float(predicted[horizon]["volatility"][0]),
+                "return": predicted_return,
+                "volatility": predicted_volatility,
                 "direction_probabilities": probabilities.tolist(),
                 "direction": ("down", "neutral", "up")[int(probabilities.argmax())],
                 "regime": ("trend_up", "trend_down", "high_volatility", "sideways")[int(predicted[horizon]["regime"][0].argmax())],
                 "calibration_temperature": calibrator.temperature,
+                "trade_signal": derive_trade_signal(
+                    probabilities,
+                    predicted_return,
+                    trading_cost_bps=self.config.trading_cost_bps,
+                    min_signal_edge_bps=self.config.min_signal_edge_bps,
+                    confidence_threshold=self.config.signal_confidence_threshold,
+                ),
                 "as_of": str(latest_at),
             }
         return {
@@ -297,6 +665,7 @@ class WalkForwardTransformerTrainer:
             "source_sample_count": data.sample_count,
             "feature_count": len(feature_columns),
             "feature_columns": list(feature_columns),
+            "target_scales": target_scales,
             "forecasts": forecasts,
             "evaluations": evaluations,
             "walk_forward": {"folds": fold_summaries},
@@ -304,4 +673,10 @@ class WalkForwardTransformerTrainer:
         }
 
 
-__all__ = ["MODEL_VERSION", "TransformerTrainingConfig", "WalkForwardTransformerTrainer", "walk_forward_sequence_splits"]
+__all__ = [
+    "MODEL_VERSION",
+    "TransformerTrainingConfig",
+    "WalkForwardTransformerTrainer",
+    "derive_trade_signal",
+    "walk_forward_sequence_splits",
+]

@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- [改进] BTC Transformer 离线训练 CLI 新增 `--device` 参数，可显式选择 `cpu`、`cuda` 或 `cuda:0`，默认保持 CPU。
+- [修复] BTC Transformer 训练对收益/波动目标按训练折做稳健尺度拟合与异常值裁剪，并在评估和预测时还原真实单位；同时改进多任务损失权重与训练窗口打乱，避免回归头输出异常值压低 PatchTST、iTransformer 和 Fusion 的方向表现。
+- [修复] BTC Transformer 默认关闭收益回归与方向概率的一致性约束；该约束保留为可调参数，避免长周期收益噪声把方向概率压向中性。
+- [新功能] 新增 BTC Transformer 在线样本外验证脚本，按 cutoff 前数据训练并用 cutoff 后已实现的 OKX 闭合小时线评估 `1h/4h/24h` 方向、收益误差和交易信号净收益；结果保持 research/shadow 模式。
+- [改进] BTC Transformer 研究训练新增按训练折计算的类别权重、收益与方向一致性约束、可调方向中性区间、成本感知交易信号过滤、低置信度 abstain，以及多数类基线、Brier、净收益、胜率和最大回撤等评估字段；结果仍保持离线 shadow 模式。
+- [改进] BTC Transformer 离线训练 CLI 新增 `--device` 参数，可显式选择 `cpu`、`cuda` 或 `cuda:0`，默认保持 CPU；JSON 结果新增 `training_config` 记录实际训练参数。
 - [新功能] 新增离线 BTC Transformer 研究模块：以闭合 K 线构造 256 步序列，提供 PatchTST、iTransformer、表征融合、多任务收益/波动/方向/regime head，以及带 purge gap 和训练折内缩放的 expanding walk-forward CLI；结果保持观测模式，不参与交易决策。
 - [新功能] 新增离线 BTC 多任务训练基线：从闭合 OHLCV 生成未来收益分布、波动率和市场状态标签，使用 purged expanding walk-forward 输出分位数、方向概率、状态预测及折外评估；结果保持观测模式，不参与交易决策。
 - [改进] BTC 小时线影子预测新增可选 LightGBM 候选与 Logistic/HGB/LightGBM 等权概率集成；每折按内层 Brier 选择候选或集成，缺少 LightGBM 时明确降级并保持影子模式，不影响交易决策链路。

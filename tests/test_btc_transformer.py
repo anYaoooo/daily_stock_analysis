@@ -15,10 +15,14 @@ from src.services.btc_transformer import (  # noqa: E402
     PatchTSTBackbone,
     TransformerFeatureConfig,
     TransformerTrainingConfig,
+    WalkForwardTransformerTrainer,
     build_sequences,
     build_transformer_feature_frame,
+    derive_trade_signal,
     walk_forward_sequence_splits,
 )
+from src.services.btc_transformer.dataset import SequenceData  # noqa: E402
+from src.services.btc_transformer.trainer import _fit_target_scales, _inverse_target, _scale_targets  # noqa: E402
 
 from scripts.train_btc_transformer import build_arg_parser  # noqa: E402
 
@@ -95,6 +99,94 @@ def test_training_config_purge_covers_longest_horizon() -> None:
     assert config.purge_samples == 100
 
 
+def test_trade_signal_abstains_until_cost_confidence_and_direction_agree() -> None:
+    low_confidence = derive_trade_signal([0.34, 0.33, 0.33], 0.02, trading_cost_bps=10, min_signal_edge_bps=5, confidence_threshold=0.55)
+    assert low_confidence["action"] == "hold"
+    assert low_confidence["reason"] == "low_confidence"
+
+    conflicting = derive_trade_signal([0.10, 0.10, 0.80], -0.02, trading_cost_bps=10, min_signal_edge_bps=5, confidence_threshold=0.55)
+    assert conflicting["action"] == "hold"
+    assert conflicting["reason"] == "return_direction_conflict"
+
+    signal = derive_trade_signal([0.10, 0.10, 0.80], 0.02, trading_cost_bps=10, min_signal_edge_bps=5, confidence_threshold=0.55)
+    assert signal["action"] == "long"
+    assert signal["reason"] == "cost_aware_signal"
+
+    invalid_return = derive_trade_signal([0.10, 0.10, 0.80], float("nan"))
+    assert invalid_return == {"action": "hold", "reason": "invalid_predicted_return"}
+
+
+def test_training_config_exposes_cost_aware_signal_defaults() -> None:
+    config = TransformerTrainingConfig()
+    assert config.class_weighted_loss is True
+    assert config.trading_cost_bps == 10.0
+    assert config.min_signal_edge_bps == 5.0
+    assert config.signal_confidence_threshold == 0.55
+    assert config.direction_consistency_weight == 0.0
+
+
 def test_transformer_cli_exposes_training_device() -> None:
     args = build_arg_parser().parse_args(["--device", "cuda:0"])
     assert args.device == "cuda:0"
+
+
+def test_transformer_cli_exposes_neutral_band() -> None:
+    args = build_arg_parser().parse_args(["--neutral-band-bps", "35"])
+    assert args.neutral_band_bps == 35
+
+
+def test_transformer_cli_exposes_target_clip() -> None:
+    args = build_arg_parser().parse_args(["--target-clip-sigma", "4"])
+    assert args.target_clip_sigma == 4
+
+
+def test_transformer_cli_disables_direction_consistency_by_default() -> None:
+    assert build_arg_parser().parse_args([]).direction_consistency_weight == 0.0
+
+
+def test_training_config_exposes_direction_consistency_weight() -> None:
+    config = TransformerTrainingConfig(direction_consistency_weight=0.4)
+    assert config.direction_consistency_weight == 0.4
+
+
+def test_target_scaling_is_train_only_and_bounded() -> None:
+    data = SequenceData(
+        features=np.zeros((6, 2, 1), dtype=np.float32),
+        returns={"1h": np.array([0.01, -0.02, 0.03, 0.04, 10.0, 0.0], dtype=np.float32)},
+        volatilities={"1h": np.array([0.01, 0.02, 0.03, 0.04, 10.0, 0.0], dtype=np.float32)},
+        directions={"1h": np.zeros(6, dtype=np.int64)},
+        regimes={"1h": np.zeros(6, dtype=np.int64)},
+        timestamps=np.arange(6),
+        feature_names=("feature_x",),
+        horizons=("1h",),
+    )
+    scales = _fit_target_scales(data, [0, 1, 2, 3])
+    assert scales["1h"]["return"] < 0.1
+    assert scales["1h"]["volatility"] < 0.1
+    scaled = _scale_targets(data, scales, clip_sigma=5.0)
+    assert float(np.max(np.abs(scaled.returns["1h"]))) <= 5.0
+    assert float(np.max(scaled.volatilities["1h"])) <= 5.0
+    restored = _inverse_target(np.array([2.0]), scales["1h"]["return"], clip_sigma=5.0)
+    assert restored[0] == pytest.approx(2.0 * scales["1h"]["return"])
+
+
+def test_training_result_records_effective_configuration() -> None:
+    config = TransformerTrainingConfig(
+        feature=TransformerFeatureConfig(horizons={"1h": 1}, sequence_length=32),
+        architecture="itransformer",
+        d_model=16,
+        n_heads=4,
+        layers=1,
+        epochs=2,
+        folds=1,
+        min_train_samples=20,
+        validation_samples=8,
+        purge_samples=1,
+        device="cpu",
+    )
+    # The configuration is exposed through the trainer payload even before a
+    # dataset is available, which keeps constrained runs auditable.
+    trainer = WalkForwardTransformerTrainer(config)
+    result = trainer.build(pd.DataFrame())
+    assert result["training_config"]["sequence_length"] == 32
+    assert result["training_config"]["device"] == "cpu"
