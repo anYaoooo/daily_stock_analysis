@@ -2328,6 +2328,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         同时清理依赖这些历史记录的回测结果和分析来源决策信号，避免
         依赖历史记录的派生数据残留。DecisionSignal 的 source_report_id
         允许弱引用，因此这里只清理 source_type=analysis 的真实历史绑定信号。
+        仍 active 且带 crypto plan key 的 BTC 主计划会解除来源引用而不删除。
 
         Args:
             record_ids: 要删除的历史记录主键 ID 列表
@@ -2356,14 +2357,35 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 ).scalars().all()
             )
 
-            session.execute(
-                delete(DecisionSignalRecord).where(
-                    and_(
-                        DecisionSignalRecord.source_type == "analysis",
-                        DecisionSignalRecord.source_report_id.in_(existing_ids),
+            bound_signals = list(
+                session.execute(
+                    select(DecisionSignalRecord).where(
+                        and_(
+                            DecisionSignalRecord.source_type == "analysis",
+                            DecisionSignalRecord.source_report_id.in_(existing_ids),
+                        )
                     )
-                )
+                ).scalars().all()
             )
+            deleted_at = utc_naive_now().isoformat()
+            for signal in bound_signals:
+                metadata = self._decision_signal_metadata_object(signal.metadata_json)
+                plan_key = str(metadata.get("plan_key") or "").strip().lower()
+                if signal.status == "active" and plan_key.startswith("crypto:"):
+                    metadata["source_history_deleted"] = {
+                        "source_report_id": signal.source_report_id,
+                        "deleted_at": deleted_at,
+                    }
+                    signal.source_report_id = None
+                    signal.metadata_json = json.dumps(
+                        metadata,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    )
+                    signal.updated_at = utc_naive_now()
+                else:
+                    session.delete(signal)
             session.execute(
                 delete(BacktestResult).where(BacktestResult.analysis_history_id.in_(existing_ids))
             )
@@ -2380,6 +2402,18 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 delete(AnalysisHistory).where(AnalysisHistory.id.in_(existing_ids))
             )
             return result.rowcount or 0
+
+    @staticmethod
+    def _decision_signal_metadata_object(value: Optional[str]) -> Dict[str, Any]:
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return {"metadata_replaced_due_to_invalid_json": True}
+        if isinstance(parsed, dict):
+            return dict(parsed)
+        return {"metadata_replaced_due_to_non_object": True}
 
     def get_distinct_stocks_from_history(
         self,

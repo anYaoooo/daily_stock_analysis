@@ -32,6 +32,12 @@ _CONFIDENCE_MAP = {
     "低": 0.4,
     "low": 0.4,
 }
+_INTRADAY_MARKET_PHASES = {
+    "premarket",
+    "intraday",
+    "lunch_break",
+    "closing_auction",
+}
 
 
 def build_decision_signal_payload_from_report(
@@ -75,7 +81,7 @@ def build_decision_signal_payload_from_report(
     plan_key = strategy_plan.get("key")
     action = _action_from_strategy_plan(plan_key, plan_payload, action)
     entry_low, entry_high = _entry_range(
-        *_entry_values_from_strategy_plan(plan_payload, sniper_points)
+        *_entry_values_from_strategy_plan(plan_payload, sniper_points, action)
     )
 
     metadata = {
@@ -124,6 +130,15 @@ def build_decision_signal_payload_from_report(
         "metadata": metadata,
         "report_language": getattr(result, "report_language", None),
     }
+    if market == "crypto":
+        crypto_horizon = payload.get("horizon") or _default_crypto_horizon(
+            action=action,
+            market_phase=payload.get("market_phase"),
+            context_snapshot=context_snapshot,
+        )
+        payload["horizon"] = crypto_horizon
+        metadata["plan_key"] = _crypto_plan_key(raw_code, crypto_horizon)
+        payload["metadata"] = metadata
     return {key: value for key, value in payload.items() if value not in (None, "", [], {})}
 
 
@@ -152,6 +167,17 @@ def extract_and_persist_from_analysis_result(
             return None
         writer = service or DecisionSignalService()
         payload = _apply_crypto_plan_freeze(payload, writer)
+        lifecycle = _as_mapping(_as_mapping(payload.get("metadata")).get("plan_lifecycle"))
+        if lifecycle.get("state") == "updated_existing":
+            return {
+                "item": writer.update_plan_signal(
+                    int(lifecycle["plan_id"]),
+                    payload,
+                    preserve_execution=True,
+                ),
+                "created": False,
+                "updated": True,
+            }
         return writer.create_signal(payload)
     except Exception as exc:
         logger.warning(
@@ -213,19 +239,32 @@ def _select_primary_strategy_plan(
 
     analysis_mode = _analysis_mode_from_snapshot(context_snapshot)
     intraday = _as_mapping(plans.get("intraday_plan"))
-    if intraday and (analysis_mode == "hourly" or _is_intraday_plan_enabled(intraday)):
-        return {"key": "intraday_plan", "plan": intraday}
+    if analysis_mode == "hourly":
+        # An hourly report has one identity: its intraday plan, including an
+        # explicit wait/no-trade plan. It must not fall through to a daily plan
+        # when the hourly block is present but disabled.
+        if intraday:
+            return {"key": "intraday_plan", "plan": intraday}
+        # If the hourly block is absent, do not borrow a daily plan. Returning
+        # an empty strategy plan keeps the report-level action and intraday
+        # horizon while allowing generic sniper points to remain available.
+        return {"key": None, "plan": None}
+    else:
+        # Daily reports own the multi-day plan identity. An intraday block may
+        # be present in the same dashboard for display, but it is a separate
+        # execution lifecycle and must never become the daily signal.
+        if default_action in {"buy", "add"} and plans.get("long_plan"):
+            return {"key": "long_plan", "plan": plans["long_plan"]}
+        if default_action in {"sell", "reduce"} and plans.get("short_plan"):
+            return {"key": "short_plan", "plan": plans["short_plan"]}
 
-    if default_action in {"buy", "add"} and plans.get("long_plan"):
+    # With a neutral daily conclusion, one-sided structured output can still
+    # identify the primary plan. When both sides are present, neither is the
+    # recommendation: keep the report-level neutral action instead of choosing
+    # whichever branch happens to be listed first.
+    if plans.get("long_plan") and not plans.get("short_plan"):
         return {"key": "long_plan", "plan": plans["long_plan"]}
-    if default_action in {"sell", "reduce"} and plans.get("short_plan"):
-        return {"key": "short_plan", "plan": plans["short_plan"]}
-
-    if intraday:
-        return {"key": "intraday_plan", "plan": intraday}
-    if plans.get("long_plan"):
-        return {"key": "long_plan", "plan": plans["long_plan"]}
-    if plans.get("short_plan"):
+    if plans.get("short_plan") and not plans.get("long_plan"):
         return {"key": "short_plan", "plan": plans["short_plan"]}
     return {"key": None, "plan": None}
 
@@ -272,6 +311,7 @@ def _action_from_strategy_plan(
 def _entry_values_from_strategy_plan(
     plan: Mapping[str, Any],
     sniper_points: Mapping[str, Any],
+    action: str,
 ) -> tuple[Optional[float], Optional[float]]:
     direction = str(plan.get("direction") or "").strip().lower()
     if plan and (direction not in {"long", "short"} or not _is_intraday_plan_enabled(plan)):
@@ -287,14 +327,16 @@ def _entry_values_from_strategy_plan(
         return zone_values[0], None
     if entry_price is not None:
         return entry_price, None
-    return sniper_points.get("ideal_buy"), sniper_points.get("secondary_buy")
+    if action in {"buy", "add", "reduce", "sell"}:
+        return sniper_points.get("ideal_buy"), sniper_points.get("secondary_buy")
+    return None, None
 
 
 def _apply_crypto_plan_freeze(
     payload: Dict[str, Any],
     service: DecisionSignalService,
 ) -> Dict[str, Any]:
-    """Keep an actionable BTC plan fixed until it expires or reverses direction."""
+    """Keep one actionable BTC plan canonical until its lifecycle ends."""
 
     if payload.get("market") != "crypto":
         return payload
@@ -303,16 +345,24 @@ def _apply_crypto_plan_freeze(
     if not stock_code or not horizon:
         return payload
 
+    metadata = dict(payload.get("metadata") or {})
+    plan_key = str(metadata.get("plan_key") or "").strip()
     active = service.get_latest_active(
         stock_code=stock_code,
         market="crypto",
         limit=20,
     ).get("items", [])
     same_horizon = [item for item in active if item.get("horizon") == horizon]
+    if plan_key:
+        same_horizon = [
+            item for item in same_horizon
+            if str(_as_mapping(item.get("metadata")).get("plan_key") or "").strip()
+            in {"", plan_key}
+        ]
     new_action = str(payload.get("action") or "").strip().lower()
     new_direction = _signal_action_direction(new_action)
 
-    if new_direction is not None:
+    if new_direction is not None and not plan_key:
         for item in same_horizon:
             if _signal_action_direction(str(item.get("action") or "")) is None:
                 service.update_status(int(item["id"]), status="archived")
@@ -323,14 +373,56 @@ def _apply_crypto_plan_freeze(
         if _signal_action_direction(str(item.get("action") or "")) is not None
     ]
     if not actionable:
+        if plan_key and same_horizon:
+            canonical = min(
+                same_horizon,
+                key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)),
+            )
+            _archive_duplicate_crypto_plans(
+                service,
+                same_horizon,
+                canonical_plan_id=int(canonical["id"]),
+            )
+            metadata["plan_lifecycle"] = {
+                "state": "updated_existing",
+                "plan_id": canonical.get("id"),
+                "reason": "same_plan_observation",
+            }
+            payload = dict(payload)
+            payload["metadata"] = metadata
         return payload
 
     frozen = min(
         actionable,
         key=lambda item: (str(item.get("created_at") or ""), int(item.get("id") or 0)),
     )
+    if plan_key:
+        _archive_duplicate_crypto_plans(
+            service,
+            same_horizon,
+            canonical_plan_id=int(frozen["id"]),
+        )
     frozen_direction = _signal_action_direction(str(frozen.get("action") or ""))
     if new_direction is not None and new_direction != frozen_direction:
+        if plan_key:
+            metadata["plan_lifecycle"] = {
+                "state": "reversal_candidate",
+                "parent_plan_id": frozen.get("id"),
+                "reason": "opposite_direction_requires_closed_bar_confirmation",
+            }
+            payload = dict(payload)
+            payload["metadata"] = metadata
+            payload["status"] = "archived"
+        return payload
+
+    if plan_key:
+        metadata["plan_lifecycle"] = {
+            "state": "updated_existing",
+            "plan_id": frozen.get("id"),
+            "reason": "same_plan_observation",
+        }
+        payload = dict(payload)
+        payload["metadata"] = metadata
         return payload
 
     metadata = dict(payload.get("metadata") or {})
@@ -344,6 +436,50 @@ def _apply_crypto_plan_freeze(
     payload["metadata"] = metadata
     payload["status"] = "archived"
     return payload
+
+
+def _crypto_plan_key(stock_code: str, horizon: str) -> str:
+    """Stable identity for one BTC execution plan lifecycle."""
+    return f"crypto:{normalize_stock_code(stock_code).upper()}:{str(horizon).strip().lower()}"
+
+
+def _default_crypto_horizon(
+    *,
+    action: str,
+    market_phase: Any,
+    context_snapshot: Optional[Mapping[str, Any]],
+) -> str:
+    if (
+        _analysis_mode_from_snapshot(context_snapshot) == "hourly"
+        or action == "alert"
+        or str(market_phase or "").strip().lower() in _INTRADAY_MARKET_PHASES
+    ):
+        return "intraday"
+    return "3d"
+
+
+def _archive_duplicate_crypto_plans(
+    service: DecisionSignalService,
+    plans: list[Dict[str, Any]],
+    *,
+    canonical_plan_id: int,
+) -> None:
+    for duplicate in plans:
+        duplicate_id = int(duplicate.get("id") or 0)
+        if not duplicate_id or duplicate_id == canonical_plan_id:
+            continue
+        duplicate_metadata = _as_mapping(duplicate.get("metadata"))
+        duplicate_metadata["plan_lifecycle"] = {
+            "state": "duplicate_archived",
+            "canonical_plan_id": canonical_plan_id,
+            "reason": "one_active_plan_per_crypto_horizon",
+        }
+        service.update_status(
+            duplicate_id,
+            status="archived",
+            metadata=duplicate_metadata,
+            replace_metadata=True,
+        )
 
 
 def _signal_action_direction(action: str) -> Optional[str]:

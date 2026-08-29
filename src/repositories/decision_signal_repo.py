@@ -285,6 +285,30 @@ class DecisionSignalRepository:
             session.refresh(row)
             return row
 
+    def update_fields(
+        self,
+        signal_id: int,
+        fields: Dict[str, Any],
+    ) -> Optional[DecisionSignalRecord]:
+        """Update a persisted signal without changing its identity or creation time."""
+        if not fields:
+            return self.get(signal_id)
+        allowed = set(fields)
+        allowed.difference_update({"id", "created_at"})
+        with self.db.get_session() as session:
+            row = session.execute(
+                select(DecisionSignalRecord).where(DecisionSignalRecord.id == signal_id).limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            for field_name in allowed:
+                if hasattr(row, field_name):
+                    setattr(row, field_name, fields[field_name])
+            row.updated_at = utc_naive_now()
+            session.commit()
+            session.refresh(row)
+            return row
+
     def expire_due_signals(self, now: Optional[datetime] = None) -> int:
         now_value = to_utc_naive_datetime(now) if now is not None else utc_naive_now()
         with self.db.get_session() as session:

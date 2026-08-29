@@ -36,6 +36,7 @@ REDACTION_MARKERS = ("[REDACTED]", "[REDACTED_URL]")
 TERMINAL_STATUSES = frozenset({"expired", "invalidated", "closed", "archived"})
 BULLISH_ACTIONS = frozenset({"buy", "add"})
 DEFENSIVE_ACTIONS = frozenset({"reduce", "sell", "avoid"})
+EXECUTABLE_ACTIONS = frozenset({"buy", "add", "reduce", "sell"})
 INTRADAY_PHASES = frozenset({
     MarketPhase.PREMARKET.value,
     MarketPhase.INTRADAY.value,
@@ -215,6 +216,123 @@ class DecisionSignalService:
             metadata_json=metadata_json,
             replace_metadata=replace_metadata,
         )
+        if row is None:
+            raise DecisionSignalNotFoundError(f"Decision signal not found: {signal_id}")
+        return self._serialize(row)
+
+    def update_plan_signal(
+        self,
+        signal_id: int,
+        payload: Dict[str, Any],
+        *,
+        preserve_execution: bool = True,
+    ) -> Dict[str, Any]:
+        """Refresh an existing plan observation while keeping its execution contract stable."""
+        existing = self.repo.get(signal_id)
+        if existing is None:
+            raise DecisionSignalNotFoundError(f"Decision signal not found: {signal_id}")
+        if existing.status != "active":
+            raise ValueError("terminal decision signal cannot be refreshed")
+
+        fields, _lifecycle = self._normalize_payload(payload)
+        # Observations are partial by design. Do not erase an existing plan
+        # field merely because the latest report omitted it.
+        update_fields = {
+            field_name: value
+            for field_name, value in fields.items()
+            if value not in (None, "", [], {})
+        }
+        for field_name in (
+            "stock_code",
+            "market",
+            "horizon",
+            "market_phase",
+            "created_at",
+            "expires_at",
+            "source_type",
+            "source_report_id",
+            "trace_id",
+            "status",
+        ):
+            update_fields.pop(field_name, None)
+
+        # A neutral observation must not downgrade an already actionable plan.
+        if existing.action in EXECUTABLE_ACTIONS:
+            if fields.get("action") not in EXECUTABLE_ACTIONS:
+                update_fields.pop("action", None)
+                update_fields.pop("action_label", None)
+
+        if preserve_execution:
+            for field_name in (
+                "entry_low",
+                "entry_high",
+                "stop_loss",
+                "target_price",
+                "invalidation",
+            ):
+                if getattr(existing, field_name, None) is not None:
+                    update_fields.pop(field_name, None)
+
+        # Do not combine one preserved entry bound with an incompatible bound
+        # from a later observation. Other missing execution fields may still be
+        # filled independently.
+        final_entry_low = update_fields.get("entry_low", existing.entry_low)
+        final_entry_high = update_fields.get("entry_high", existing.entry_high)
+        if (
+            final_entry_low is not None
+            and final_entry_high is not None
+            and final_entry_low > final_entry_high
+        ):
+            if existing.entry_low is not None and existing.entry_high is None:
+                update_fields.pop("entry_high", None)
+            elif existing.entry_high is not None and existing.entry_low is None:
+                update_fields.pop("entry_low", None)
+
+        quality_fields = {
+            field_name: update_fields.get(field_name, getattr(existing, field_name, None))
+            for field_name in (
+                "action",
+                "reason",
+                "entry_low",
+                "entry_high",
+                "stop_loss",
+                "target_price",
+                "invalidation",
+                "watch_conditions",
+            )
+        }
+        update_fields["plan_quality"] = self._normalize_plan_quality(
+            payload.get("plan_quality"),
+            fields=quality_fields,
+        )
+
+        old_metadata = self._json_loads(
+            existing.metadata_json,
+            signal_id=existing.id,
+            field_name="metadata_json",
+        )
+        if not isinstance(old_metadata, dict):
+            old_metadata = {}
+        incoming_metadata = fields.get("metadata_json")
+        if incoming_metadata:
+            parsed_metadata = self._json_loads(
+                incoming_metadata,
+                signal_id=signal_id,
+                field_name="metadata_json",
+            )
+            if isinstance(parsed_metadata, dict):
+                old_metadata.update(parsed_metadata)
+                update_fields["metadata_json"] = self._json_dumps(old_metadata)
+
+        old_metadata["latest_observation"] = {
+            "source_report_id": payload.get("source_report_id"),
+            "trace_id": payload.get("trace_id"),
+            "trigger_source": payload.get("trigger_source"),
+            "observed_at": utc_naive_now().isoformat(),
+        }
+        update_fields["metadata_json"] = self._json_dumps(old_metadata)
+
+        row = self.repo.update_fields(signal_id, update_fields)
         if row is None:
             raise DecisionSignalNotFoundError(f"Decision signal not found: {signal_id}")
         return self._serialize(row)

@@ -100,7 +100,8 @@ describe('AnalysisContextSummary', () => {
     expect(screen.getByText('行情')).toBeInTheDocument();
     expect(screen.getByText('来源: mock_quote')).toBeVisible();
     expect(screen.getByText('告警:')).toBeInTheDocument();
-    expect(screen.getByText(/intraday_realtime_overlay/)).toBeInTheDocument();
+    expect(screen.getByText(/已使用盘中实时行情，当前日线尚未收盘/)).toBeInTheDocument();
+    expect(screen.queryByText(/intraday_realtime_overlay/)).not.toBeInTheDocument();
     expect(screen.getByText('数据限制:')).toBeInTheDocument();
     expect(screen.getByText(/基本面：抓取失败/)).toBeInTheDocument();
     expect(screen.getByText(/news_provider_timeout/)).toBeInTheDocument();
@@ -127,6 +128,8 @@ describe('AnalysisContextSummary', () => {
 
     expect(screen.getByText('Data Limitations:')).toBeInTheDocument();
     expect(screen.getByText(/fundamentals: Fetch failed/)).toBeInTheDocument();
+    expect(screen.getByText(/Intraday real-time data is in use; the current daily bar is not final/)).toBeInTheDocument();
+    expect(screen.queryByText(/intraday_realtime_overlay/)).not.toBeInTheDocument();
   });
 
   it('surfaces degraded non-zero states in the collapsed summary', () => {

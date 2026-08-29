@@ -129,6 +129,83 @@ def test_service_accepts_crypto_decision_signal_without_portfolio_market_change(
     assert item["plan_quality"] == "complete"
 
 
+def test_update_plan_signal_preserves_each_existing_execution_field_independently(isolated_db) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+    created = service.create_signal(
+        _payload(
+            stock_code="BTC",
+            stock_name="Bitcoin",
+            market="crypto",
+            source_report_id=103,
+            trace_id="trace-crypto-103",
+            horizon="intraday",
+            entry_low=65000,
+            stop_loss=64000,
+        )
+    )["item"]
+
+    updated = service.update_plan_signal(
+        int(created["id"]),
+        _payload(
+            stock_code="BTC",
+            stock_name="Bitcoin",
+            market="crypto",
+            source_report_id=104,
+            trace_id="trace-crypto-104",
+            horizon="intraday",
+            entry_low=65100,
+            stop_loss=63900,
+            target_price=67000,
+            invalidation="小时线收盘跌破 64000",
+        ),
+    )
+
+    assert updated["id"] == created["id"]
+    assert updated["source_report_id"] == created["source_report_id"]
+    assert updated["entry_low"] == 65000.0
+    assert updated["stop_loss"] == 64000.0
+    assert updated["target_price"] == 67000.0
+    assert updated["invalidation"] == "小时线收盘跌破 64000"
+    assert updated["plan_quality"] == "complete"
+
+    observed = service.update_plan_signal(
+        int(created["id"]),
+        _payload(
+            stock_code="BTC",
+            stock_name="Bitcoin",
+            market="crypto",
+            source_report_id=105,
+            trace_id="trace-crypto-105",
+            horizon="intraday",
+            action="watch",
+            reason="等待下一根闭合小时线",
+        ),
+    )
+
+    assert observed["action"] == "buy"
+    assert observed["target_price"] == 67000.0
+    assert observed["plan_quality"] == "complete"
+
+    sparse_observation = service.update_plan_signal(
+        int(created["id"]),
+        {
+            "stock_code": "BTC",
+            "market": "crypto",
+            "source_type": "analysis",
+            "source_report_id": 106,
+            "trace_id": "trace-crypto-106",
+            "trigger_source": "hourly_schedule",
+            "action": "watch",
+            "horizon": "intraday",
+        },
+    )
+
+    assert sparse_observation["stock_name"] == "Bitcoin"
+    assert sparse_observation["reason"] == observed["reason"]
+    assert sparse_observation["target_price"] == 67000.0
+    assert sparse_observation["market_phase"] == created["market_phase"]
+
+
 def test_service_defaults_lifecycle_and_preserves_explicit_values(isolated_db) -> None:
     service = DecisionSignalService(db_manager=isolated_db)
 

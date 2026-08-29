@@ -470,3 +470,309 @@ def test_wait_plan_does_not_publish_fake_entry_range() -> None:
     assert payload is not None
     assert "entry_low" not in payload
     assert "entry_high" not in payload
+
+
+def test_daily_and_hourly_reports_keep_separate_plan_identities() -> None:
+    result = _result()
+    result.dashboard["battle_plan"].update(
+        {
+            "long_plan": {
+                "direction": "long",
+                "entry_price": "66000",
+                "stop_loss": "65000",
+                "take_profit": "68000",
+                "reason": "日线趋势向上",
+            },
+            "short_plan": {
+                "direction": "short",
+                "entry_price": "64000",
+                "stop_loss": "65000",
+                "take_profit": "62000",
+            },
+            "intraday_plan": {
+                "enabled": True,
+                "direction": "long",
+                "entry_zone": "65500-65700",
+                "stop_loss": "65100",
+                "take_profit": "66200",
+            },
+        }
+    )
+
+    daily = build_decision_signal_payload_from_report(
+        result,
+        context_snapshot={"analysis_mode": "daily"},
+        source_report_id=910,
+        trace_id="trace-plan-daily",
+        query_source="daily_schedule",
+        report_type="simple",
+    )
+    hourly = build_decision_signal_payload_from_report(
+        result,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=911,
+        trace_id="trace-plan-hourly",
+        query_source="hourly_schedule",
+        report_type="simple",
+    )
+
+    assert daily is not None and hourly is not None
+    assert daily["horizon"] == "3d"
+    assert daily["metadata"]["strategy_plan"]["source"] == "long_plan"
+    assert daily["metadata"]["plan_key"] == "crypto:BTC:3d"
+    assert hourly["horizon"] == "intraday"
+    assert hourly["metadata"]["strategy_plan"]["source"] == "intraday_plan"
+    assert hourly["metadata"]["plan_key"] == "crypto:BTC:intraday"
+
+
+def test_hourly_wait_plan_does_not_fall_through_to_daily_plan() -> None:
+    result = _result(operation_advice="观望", decision_type="hold", action="watch")
+    result.dashboard["battle_plan"].update(
+        {
+            "long_plan": {
+                "direction": "long",
+                "entry_price": "66000",
+                "stop_loss": "65000",
+                "take_profit": "68000",
+            },
+            "intraday_plan": {
+                "enabled": False,
+                "direction": "wait",
+                "entry_zone": "65500-65700",
+                "no_trade_reason": "等待小时线确认",
+            },
+        }
+    )
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=912,
+        trace_id="trace-hourly-wait",
+        query_source="hourly_schedule",
+        report_type="simple",
+    )
+
+    assert payload is not None
+    assert payload["action"] == "watch"
+    assert payload["horizon"] == "intraday"
+    assert payload["metadata"]["strategy_plan"]["source"] == "intraday_plan"
+    assert payload["metadata"]["plan_key"] == "crypto:BTC:intraday"
+    assert "entry_low" not in payload
+    assert "entry_high" not in payload
+
+
+def test_daily_neutral_report_does_not_choose_one_side_of_two_way_plan() -> None:
+    result = _result(operation_advice="观望", decision_type="hold", action="watch")
+    result.dashboard["battle_plan"].update(
+        {
+            "long_plan": {
+                "direction": "long",
+                "entry_price": "66000",
+                "stop_loss": "65000",
+                "take_profit": "68000",
+            },
+            "short_plan": {
+                "direction": "short",
+                "entry_price": "64000",
+                "stop_loss": "65000",
+                "take_profit": "62000",
+            },
+        }
+    )
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        context_snapshot={"analysis_mode": "daily"},
+        source_report_id=918,
+        trace_id="trace-daily-neutral",
+        query_source="daily_schedule",
+        report_type="simple",
+    )
+
+    assert payload is not None
+    assert payload["action"] == "watch"
+    assert payload["horizon"] == "3d"
+    assert payload["metadata"]["plan_key"] == "crypto:BTC:3d"
+    assert "strategy_plan" not in payload["metadata"]
+    assert "entry_low" not in payload
+    assert "entry_high" not in payload
+
+
+def test_crypto_plan_observation_updates_one_stable_active_plan(isolated_db) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+    first_result = _result()
+    first = extract_and_persist_from_analysis_result(
+        first_result,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=904,
+        trace_id="trace-plan-first",
+        query_source="btc_volatility",
+        report_type="simple",
+        service=service,
+    )
+    assert first is not None and first["created"] is True
+
+    second_result = _result(sentiment_score=64, analysis_summary="后续观察更新")
+    second = extract_and_persist_from_analysis_result(
+        second_result,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=905,
+        trace_id="trace-plan-second",
+        query_source="hourly_schedule",
+        report_type="simple",
+        service=service,
+    )
+
+    assert second is not None
+    assert second["created"] is False
+    assert second.get("updated") is True
+    assert second["item"]["id"] == first["item"]["id"]
+    assert second["item"]["source_report_id"] == 904
+    assert second["item"]["metadata"]["latest_observation"]["source_report_id"] == 905
+    active = service.get_latest_active(stock_code="BTC", market="crypto", limit=10)
+    assert [item["id"] for item in active["items"]] == [first["item"]["id"]]
+
+
+def test_crypto_wait_observation_does_not_downgrade_actionable_plan(isolated_db) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+    first = extract_and_persist_from_analysis_result(
+        _result(),
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=906,
+        trace_id="trace-plan-actionable",
+        query_source="btc_volatility",
+        report_type="simple",
+        service=service,
+    )
+    assert first is not None
+
+    wait_result = _result(operation_advice="观望", decision_type="hold", action="watch")
+    wait = extract_and_persist_from_analysis_result(
+        wait_result,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=907,
+        trace_id="trace-plan-wait",
+        query_source="hourly_schedule",
+        report_type="simple",
+        service=service,
+    )
+
+    assert wait is not None and wait.get("updated") is True
+    assert wait["item"]["id"] == first["item"]["id"]
+    assert wait["item"]["action"] == "buy"
+    assert wait["item"]["entry_low"] == first["item"]["entry_low"]
+
+
+def test_crypto_avoid_observation_does_not_replace_executable_action(isolated_db) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+    first = extract_and_persist_from_analysis_result(
+        _result(),
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=913,
+        trace_id="trace-plan-before-avoid",
+        query_source="hourly_schedule",
+        report_type="simple",
+        service=service,
+    )
+    assert first is not None
+
+    observed = extract_and_persist_from_analysis_result(
+        _result(operation_advice="回避", decision_type="hold", action="avoid"),
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=914,
+        trace_id="trace-plan-avoid",
+        query_source="hourly_schedule",
+        report_type="simple",
+        service=service,
+    )
+
+    assert observed is not None and observed.get("updated") is True
+    assert observed["item"]["id"] == first["item"]["id"]
+    assert observed["item"]["action"] == "buy"
+
+
+def test_crypto_plan_update_archives_legacy_and_keyed_duplicates(isolated_db) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+    base_payload = {
+        "stock_code": "BTC",
+        "stock_name": "Bitcoin",
+        "market": "crypto",
+        "source_type": "analysis",
+        "market_phase": "intraday",
+        "trigger_source": "hourly_schedule",
+        "action": "buy",
+        "horizon": "intraday",
+        "entry_low": 65000,
+    }
+    legacy = service.create_signal(
+        {
+            **base_payload,
+            "source_report_id": 915,
+            "trace_id": "trace-plan-legacy",
+            "metadata": {"legacy_marker": True},
+        }
+    )["item"]
+    keyed = service.create_signal(
+        {
+            **base_payload,
+            "source_report_id": 916,
+            "trace_id": "trace-plan-keyed",
+            "metadata": {"plan_key": "crypto:BTC:intraday", "keyed_marker": True},
+        }
+    )["item"]
+
+    observed = extract_and_persist_from_analysis_result(
+        _result(),
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=917,
+        trace_id="trace-plan-converge",
+        query_source="hourly_schedule",
+        report_type="simple",
+        service=service,
+    )
+
+    assert observed is not None and observed.get("updated") is True
+    assert observed["item"]["id"] == legacy["id"]
+    assert observed["item"]["metadata"]["legacy_marker"] is True
+    assert observed["item"]["metadata"]["plan_key"] == "crypto:BTC:intraday"
+    archived = service.get_signal(keyed["id"])
+    assert archived["status"] == "archived"
+    assert archived["metadata"]["keyed_marker"] is True
+    assert archived["metadata"]["plan_lifecycle"]["canonical_plan_id"] == legacy["id"]
+
+
+def test_crypto_opposite_direction_is_archived_reversal_candidate(isolated_db) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+    first = extract_and_persist_from_analysis_result(
+        _result(),
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=908,
+        trace_id="trace-plan-parent",
+        query_source="btc_volatility",
+        report_type="simple",
+        service=service,
+    )
+    assert first is not None
+
+    reversal_result = _result(
+        operation_advice="卖出",
+        decision_type="sell",
+        action="sell",
+        sentiment_score=38,
+    )
+    reversal = extract_and_persist_from_analysis_result(
+        reversal_result,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=909,
+        trace_id="trace-plan-reversal",
+        query_source="btc_volatility",
+        report_type="simple",
+        service=service,
+    )
+
+    assert reversal is not None
+    assert reversal["created"] is True
+    assert reversal["item"]["status"] == "archived"
+    assert reversal["item"]["metadata"]["plan_lifecycle"]["state"] == "reversal_candidate"
+    assert service.get_signal(first["item"]["id"])["status"] == "active"

@@ -140,6 +140,15 @@ const MISSING_REASON_LABELS: Record<ReportLanguage, Record<string, string>> = {
   },
 };
 
+const WARNING_LABELS: Record<ReportLanguage, Record<string, string>> = {
+  zh: {
+    intraday_realtime_overlay: '已使用盘中实时行情，当前日线尚未收盘',
+  },
+  en: {
+    intraday_realtime_overlay: 'Intraday real-time data is in use; the current daily bar is not final',
+  },
+};
+
 const STATUS_ORDER: AnalysisContextPackBlockStatus[] = [
   'available',
   'missing',
@@ -189,6 +198,10 @@ const formatMissingReason = (reason: string, language: ReportLanguage): string =
   const label = MISSING_REASON_LABELS[language][reason];
   return label ? `${label} (${reason})` : reason;
 };
+
+const formatWarning = (warning: string, language: ReportLanguage): string => (
+  WARNING_LABELS[language][warning] || warning
+);
 
 export const AnalysisContextSummary: React.FC<AnalysisContextSummaryProps> = ({
   overview,
@@ -318,7 +331,7 @@ export const AnalysisContextSummary: React.FC<AnalysisContextSummaryProps> = ({
           {overview.warnings?.length ? (
             <div className="mb-3 home-subpanel p-3 text-xs leading-5 text-warning">
               <span className="font-medium">{text.warnings}: </span>
-              {overview.warnings.join(', ')}
+              {overview.warnings.map((warning) => formatWarning(warning, reportLanguage)).join(', ')}
             </div>
           ) : null}
 
@@ -344,7 +357,9 @@ export const AnalysisContextSummary: React.FC<AnalysisContextSummaryProps> = ({
 
                   {block.warnings?.length ? (
                     <p className="mt-2 text-xs leading-5 text-warning">
-                      {text.warnings}: {block.warnings.join(', ')}
+                      {text.warnings}: {block.warnings
+                        .map((warning) => formatWarning(warning, reportLanguage))
+                        .join(', ')}
                     </p>
                   ) : null}
                   {block.missingReasons?.length ? (
