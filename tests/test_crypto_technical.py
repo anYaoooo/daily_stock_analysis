@@ -73,6 +73,15 @@ def test_build_crypto_technical_context_distinguishes_liquidity_sweep_from_break
     assert context["price_action"]["state"] == "liquidity_sweep_high"
     assert context["price_action"]["high_swept"] is True
     assert context["price_action"]["close_above_resistance"] is False
+    event = context["event"]
+    assert event["type"] == "liquidity_sweep_high_reversal_candidate"
+    assert event["suggested_direction"] == "conditional_short"
+    assert event["right_side"]["version"] == "btc-right-side-v1"
+    assert event["right_side"]["state"] == "sweep_detected"
+    assert event["right_side"]["direction"] == "short"
+    assert event["right_side"]["confirmation_price"] is not None
+    assert event["right_side"]["invalidation_price"] is not None
+    assert event["right_side"]["confirmation_add_requires_retest"] is True
 
 
 def test_build_crypto_technical_context_caps_position_in_extreme_ewma_regime() -> None:
@@ -117,6 +126,8 @@ def test_build_crypto_technical_context_flags_selloff_rebound_candidate() -> Non
     assert context["event"]["trigger_reference"]["long_confirmation_price"] is not None
     assert context["event"]["trigger_reference"]["long_invalidation_price"] is not None
     assert context["event"]["trigger_reference"]["short_breakdown_price"] is not None
+    assert context["event"]["right_side"]["direction"] == "long"
+    assert context["event"]["right_side"]["state"] == "sweep_detected"
 
 
 def test_build_crypto_technical_context_ignores_regular_stocks() -> None:

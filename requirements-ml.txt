@@ -1,0 +1,3 @@
+# Optional dependencies for the offline BTC PatchTST/iTransformer research module.
+-r requirements.txt
+torch>=2.2

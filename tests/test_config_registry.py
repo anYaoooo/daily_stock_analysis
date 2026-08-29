@@ -17,6 +17,39 @@ from src.core.config_registry import (
 )
 
 
+class TestBtcShadowForecastFieldsRegistered(unittest.TestCase):
+    """BTC shadow-model controls must be available in system settings."""
+
+    _SHADOW_KEYS = (
+        "BTC_SHADOW_FORECAST_MODEL_CANDIDATES",
+        "BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED",
+    )
+
+    def test_field_definitions_match_runtime_contract(self):
+        candidates = get_field_definition("BTC_SHADOW_FORECAST_MODEL_CANDIDATES")
+        self.assertEqual(candidates["category"], "system")
+        self.assertEqual(candidates["data_type"], "string")
+        self.assertEqual(candidates["ui_control"], "text")
+        self.assertEqual(
+            candidates["default_value"],
+            "logistic,hist_gradient_boosting,lightgbm",
+        )
+
+        ensemble = get_field_definition("BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED")
+        self.assertEqual(ensemble["category"], "system")
+        self.assertEqual(ensemble["data_type"], "boolean")
+        self.assertEqual(ensemble["ui_control"], "switch")
+        self.assertEqual(ensemble["default_value"], "true")
+
+    def test_schema_response_includes_shadow_controls(self):
+        schema = build_schema_response()
+        system_category = next(
+            category for category in schema["categories"] if category["category"] == "system"
+        )
+        field_keys = {field["key"] for field in system_category["fields"]}
+        self.assertTrue(set(self._SHADOW_KEYS).issubset(field_keys))
+
+
 class TestSlackFieldsRegistered(unittest.TestCase):
     """Slack config keys must be present in the registry."""
 

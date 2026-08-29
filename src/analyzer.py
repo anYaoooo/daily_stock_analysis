@@ -1870,6 +1870,7 @@ def align_btc_execution_plans(
     _apply_btc_trigger_execution_guard(
         battle_plan,
         trigger_context=trigger_context,
+        technical_context=technical_context,
         language=normalize_report_language(result.report_language),
     )
     _apply_btc_intraday_alignment_guard(
@@ -2395,10 +2396,22 @@ def _apply_btc_trigger_execution_guard(
     *,
     trigger_context: Optional[Dict[str, Any]],
     language: str,
+    technical_context: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Prevent a late volatility trigger from becoming an immediate chase plan."""
+    """Prevent late volatility and stale sweep events from becoming chase plans."""
     if not isinstance(trigger_context, dict):
         return
+
+    trigger_reason = str(trigger_context.get("trigger_reason") or "").strip().lower()
+    if trigger_reason == "liquidity_sweep":
+        _apply_btc_right_side_sweep_guard(
+            battle_plan,
+            trigger_context=trigger_context,
+            technical_context=technical_context,
+            language=language,
+        )
+        return
+
     if trigger_context.get("entry_executable_now") not in {0, False, "0", "false", "False"}:
         return
 
@@ -2437,6 +2450,112 @@ def _apply_btc_trigger_execution_guard(
         trial_entry = ladder.get("trial_entry")
         if isinstance(trial_entry, dict):
             trial_entry["enabled"] = False
+
+
+def _apply_btc_right_side_sweep_guard(
+    battle_plan: Dict[str, Any],
+    *,
+    trigger_context: Dict[str, Any],
+    technical_context: Optional[Dict[str, Any]],
+    language: str,
+) -> None:
+    """Apply deterministic no-chase and sizing rules to a liquidity sweep."""
+
+    intraday_plan = battle_plan.get("intraday_plan")
+    if not isinstance(intraday_plan, dict):
+        return
+
+    direction = str(
+        trigger_context.get("right_side_direction")
+        or trigger_context.get("trade_direction")
+        or ""
+    ).strip().lower()
+    if direction not in {"long", "short"}:
+        return
+
+    hourly_context = {}
+    if isinstance(technical_context, dict):
+        timeframes = technical_context.get("timeframes")
+        if isinstance(timeframes, dict) and isinstance(timeframes.get("hourly"), dict):
+            hourly_context = timeframes["hourly"]
+        elif isinstance(technical_context.get("event"), dict):
+            hourly_context = technical_context
+    event = hourly_context.get("event") if isinstance(hourly_context, dict) else None
+    right_side = event.get("right_side") if isinstance(event, dict) else None
+    right_side = right_side if isinstance(right_side, dict) else {}
+
+    def numeric(*values: Any) -> Optional[float]:
+        for value in values:
+            parsed = parse_sniper_value(value)
+            if parsed is not None and parsed > 0:
+                return float(parsed)
+        return None
+
+    current_price = numeric(trigger_context.get("price"))
+    no_chase_price = numeric(right_side.get("no_chase_price"), trigger_context.get("no_chase_price"))
+    overextended = (
+        current_price is not None
+        and no_chase_price is not None
+        and (
+            (direction == "short" and current_price < no_chase_price)
+            or (direction == "long" and current_price > no_chase_price)
+        )
+    )
+
+    if overextended:
+        current_text = current_price
+        no_chase_text = no_chase_price
+        reason = (
+            f"扫流动性后的价格已越过禁止追价线（当前价 {current_text}，禁止追价线 {no_chase_text}），"
+            "本轮机会已错过，等待新的结构确认，不追空/追多。"
+            if language == "zh"
+            else (
+                f"Price has moved beyond the no-chase level after the liquidity sweep "
+                f"(current {current_text}, no-chase {no_chase_text}); the setup is missed. "
+                "Wait for a new structure instead of chasing."
+            )
+        )
+        intraday_plan["enabled"] = False
+        intraday_plan["direction"] = "wait"
+        intraday_plan["no_trade_reason"] = reason
+        intraday_plan["reason"] = reason
+        intraday_plan["trigger_execution_state"] = "right_side_missed"
+        ladder = intraday_plan.get("execution_ladder")
+        if isinstance(ladder, dict):
+            ladder["current_action"] = "wait"
+            trial_entry = ladder.get("trial_entry")
+            if isinstance(trial_entry, dict):
+                trial_entry["enabled"] = False
+        return
+
+    # A sweep may be actionable without a retest, but only as a capped trial.
+    cap = min(_coerce_position_multiplier_cap(intraday_plan.get("position_multiplier_cap")), 0.25)
+    intraday_plan["position_multiplier_cap"] = cap
+    intraday_plan["right_side_control"] = {
+        "version": "btc-right-side-v1",
+        "state": right_side.get("state") or trigger_context.get("right_side_state") or "sweep_detected",
+        "direction": direction,
+        "trial_position_cap": cap,
+        "retest_required_for_confirmation_add": True,
+        "max_wait_bars": 4,
+        "no_chase_price": no_chase_price,
+    }
+    ladder = intraday_plan.get("execution_ladder")
+    if not isinstance(ladder, dict):
+        return
+    trial_entry = ladder.get("trial_entry")
+    if isinstance(trial_entry, dict):
+        trial_entry["position_multiplier_cap"] = cap
+    confirmation_add = ladder.get("confirmation_add")
+    if isinstance(confirmation_add, dict):
+        confirmation_add["requires_retest"] = True
+    contract = intraday_plan.get("execution_contract")
+    entry_contract = contract.get("entry") if isinstance(contract, dict) else None
+    if isinstance(entry_contract, dict):
+        try:
+            entry_contract["max_wait_bars"] = min(int(entry_contract.get("max_wait_bars", 4)), 4)
+        except (TypeError, ValueError):
+            entry_contract["max_wait_bars"] = 4
 
 
 class GeminiAnalyzer:
@@ -4365,6 +4484,9 @@ class GeminiAnalyzer:
             hourly_trigger_reference = (
                 hourly_event.get("trigger_reference") if isinstance(hourly_event.get("trigger_reference"), dict) else {}
             )
+            hourly_right_side = (
+                hourly_event.get("right_side") if isinstance(hourly_event.get("right_side"), dict) else {}
+            )
             derivatives = crypto_technical.get("derivatives") if isinstance(crypto_technical.get("derivatives"), dict) else {}
             funding = derivatives.get("funding") if isinstance(derivatives.get("funding"), dict) else {}
             open_interest = derivatives.get("open_interest") if isinstance(derivatives.get("open_interest"), dict) else {}
@@ -4383,7 +4505,11 @@ class GeminiAnalyzer:
             hourly_opportunity = intraday.get("opportunity", "N/A")
             if not hourly_crypto:
                 hourly_opportunity = "小时线数据缺失，日内交易计划必须设为 enabled=false、direction=\"wait\"，等待小时线数据恢复或新的日内触发。"
-            if isinstance(trigger_context, dict) and trigger_context.get("trigger_reason") in {"volatility_spike", "entry_signal"}:
+            if isinstance(trigger_context, dict) and trigger_context.get("trigger_reason") in {
+                "volatility_spike",
+                "entry_signal",
+                "liquidity_sweep",
+            }:
                 prompt += f"""
 ### BTC 波动触发上下文（日内触发，必须解释）
 | 字段 | 数值 |
@@ -4410,9 +4536,11 @@ class GeminiAnalyzer:
 | 确认价越过幅度 | {trigger_context.get('entry_overshoot_pct', 'N/A')}% |
 | 追价上限/下限 | {trigger_context.get('no_chase_price', 'N/A')} |
 | 脉冲极值 / 回撤 | {trigger_context.get('impulse_extreme_price', 'N/A')} / {trigger_context.get('impulse_retrace_pct', 'N/A')}% |
+| 扫流动性方向 / 极值 / 回撤 | {trigger_context.get('sweep_side', 'N/A')} / {trigger_context.get('swept_extreme_price', 'N/A')} / {trigger_context.get('revert_pct', 'N/A')}% |
+| 右侧状态 / 方向 / 试仓比例 | {trigger_context.get('right_side_state', 'N/A')} / {trigger_context.get('right_side_direction', 'N/A')} / {trigger_context.get('right_side_trial_position_pct', 'N/A')}% |
 | 行情时间 | {trigger_context.get('provider_timestamp', 'N/A')} |
 
-> 本轮小时线分析由日内价格机会监控触发，不是普通整点小时线复盘。若 `触发原因=entry_signal` 且 `当前可执行=1`、`脉冲阶段=early_continuation`，必须把“入场确认价、失效价、观察秒数、建议交易方向”写入 `dashboard.battle_plan.intraday_plan.trigger_condition`、`invalidation` 或 `reason`，形成可执行的多/空入场信号。若 `当前可执行=0`，或脉冲阶段为 `late_extension`/`exhaustion_candidate`，`intraday_plan` 必须 `enabled=false`、`direction="wait"`，禁止把虚构的理想回踩价包装成当前建议；只可说明未来重新满足的确认条件和失效条件。当前 1 小时 K 线可能尚未收线，短窗口冲击只能作为日内触发/风控上下文，不能直接升级为日线趋势反转结论。
+> 本轮小时线分析由日内价格机会监控触发，不是普通整点小时线复盘。若 `触发原因=entry_signal` 且 `当前可执行=1`、`脉冲阶段=early_continuation`，必须把“入场确认价、失效价、观察秒数、建议交易方向”写入 `dashboard.battle_plan.intraday_plan.trigger_condition`、`invalidation` 或 `reason`，形成可执行的多/空入场信号。若 `触发原因=liquidity_sweep`，本轮只负责启动 `btc-right-side-v1` 状态机：扫高对应条件性空头，扫低对应条件性多头；先输出 `trial_entry` 与 `confirmation_add` 两层，确认价附近允许小仓试仓，反抽/回踩不是硬性必需，但当前价距离确认位超过 0.75 ATR 时禁止追价。若 `当前可执行=0`，或脉冲阶段为 `late_extension`/`exhaustion_candidate`，`intraday_plan` 必须 `enabled=false`、`direction="wait"`，禁止把虚构的理想回踩价包装成当前建议；只可说明未来重新满足的确认条件和失效条件。当前 1 小时 K 线可能尚未收线，短窗口冲击只能作为日内触发/风控上下文，不能直接升级为日线趋势反转结论。
 """
             prompt += f"""
 ### BTC 小时线日内交易机会（独立判断）
@@ -4423,14 +4551,15 @@ class GeminiAnalyzer:
 | 对齐状态 | {intraday.get('alignment', 'N/A')} | aligned_long/short 表示顺日线机会；conflict/countertrend 表示逆日线短线机会，需要更严格风控 |
 | 小时线 Price Action | 状态={hourly_price_action.get('state', unknown_text)}；前20根高点/阻力={hourly_price_action.get('recent_high', 'N/A')}；前20根低点/支撑={hourly_price_action.get('recent_low', 'N/A')}；最新涨跌={hourly_price_action.get('close_change_pct', 'N/A')}%；扫过前高={hourly_price_action.get('high_swept', 'N/A')}；收盘站上阻力={hourly_price_action.get('close_above_resistance', 'N/A')} | 日内触发必须区分真突破与插针扫高；扫高回落不得作为多单突破触发 |
 | 小时线 Volume/VWAP/EMA/ATR | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')}；ATR14={hourly_volatility.get('atr14', 'N/A')}；ATR14%={hourly_volatility.get('atr14_pct', 'N/A')}%；EWMA sigma={hourly_volatility_forecast.get('forecast_sigma_pct', 'N/A')}%；波动状态={hourly_volatility_forecast.get('regime', 'N/A')}；仓位上限乘数={hourly_volatility_forecast.get('position_multiplier_cap', 'N/A')} | 判断日内触发是否有量价、均线和波动率确认；止损不得落在小时线常规 ATR 噪音内，elevated/extreme 必须缩仓 |
-| 小时线急跌/扫低事件 | 类型={hourly_event.get('type', 'N/A')}；建议方向={hourly_event.get('suggested_direction', 'N/A')}；紧急度={hourly_event.get('urgency', 'N/A')}；参考高点={hourly_event.get('reference_high', 'N/A')}；事件低点={hourly_event.get('event_low', 'N/A')}；事件K高点={hourly_event.get('event_bar_high', 'N/A')}；高点到低点跌幅={hourly_event.get('drop_from_reference_high_pct', 'N/A')}%；低点反弹={hourly_event.get('rebound_from_event_low_pct', 'N/A')}%；ATR位移={hourly_event.get('atr_move', 'N/A')}；多单确认价={hourly_trigger_reference.get('long_confirmation_price', 'N/A')}；多单失效价={hourly_trigger_reference.get('long_invalidation_price', 'N/A')}；空单跌破价={hourly_trigger_reference.get('short_breakdown_price', 'N/A')} | 若出现 `sharp_selloff_*`、`selloff_rebound_*` 或 `liquidity_sweep_low_reversal_candidate`，不得只写泛泛观望；必须给出“上破多单确认价才进场”和“跌破空单跌破价则放弃抄底/转空”的明确二选一条件 |
+| 小时线急跌/扫低事件（含扫高） | 类型={hourly_event.get('type', 'N/A')}；建议方向={hourly_event.get('suggested_direction', 'N/A')}；紧急度={hourly_event.get('urgency', 'N/A')}；参考高点={hourly_event.get('reference_high', 'N/A')}；事件低点={hourly_event.get('event_low', 'N/A')}；事件K高点={hourly_event.get('event_bar_high', 'N/A')}；高点到低点跌幅={hourly_event.get('drop_from_reference_high_pct', 'N/A')}%；低点反弹={hourly_event.get('rebound_from_event_low_pct', 'N/A')}%；ATR位移={hourly_event.get('atr_move', 'N/A')}%；多单确认价={hourly_trigger_reference.get('long_confirmation_price', 'N/A')}；多单失效价={hourly_trigger_reference.get('long_invalidation_price', 'N/A')}；空单跌破价={hourly_trigger_reference.get('short_breakdown_price', 'N/A')}；右侧状态={hourly_right_side.get('state', 'N/A')}；右侧方向={hourly_right_side.get('direction', 'N/A')}；确认价={hourly_right_side.get('confirmation_price', 'N/A')}；回踩/反抽区={hourly_right_side.get('retest_zone', 'N/A')}；延续试仓价={hourly_right_side.get('continuation_price', 'N/A')}；禁止追价线={hourly_right_side.get('no_chase_price', 'N/A')} | 扫高后未收盘站上对应条件性空头，扫低后未收盘跌破对应条件性多头；反抽/回踩不是硬性必需，但若当前价超过禁止追价线，必须标记机会错过并等待新结构，不得激进追单 |
 | 日内机会 | {hourly_opportunity} | 必须写清是否有日内交易机会；没有机会时说明等待什么小时线条件 |
 | 衍生品杠杆环境 | 数据质量={derivatives.get('data_quality', 'N/A')}；资金费率={funding.get('rate_pct', 'N/A')}%；状态={funding.get('state', 'N/A')}；7日均值={funding_history.get('avg_rate_pct', 'N/A')}%；趋势={funding_history.get('trend', 'N/A')}；持仓量={open_interest.get('value', 'N/A')} BTC；名义规模={open_interest.get('notional_usdt', 'N/A')} USDT；OI 24h变化={oi_history.get('change_pct', 'N/A')}%；OI趋势={oi_history.get('state', 'N/A')}；永续基差={basis.get('perpetual_premium_pct', 'N/A')}%；基差状态={basis.get('state', 'N/A')}；多空比={long_short_ratio.get('current', 'N/A')}；多空比状态={long_short_ratio.get('state', 'N/A')}；跨所质量={cross_exchange.get('data_quality', 'N/A')}；跨所Funding差={cross_exchange.get('funding_spread_pct', 'N/A')}%；杠杆压力={derivatives.get('leverage_pressure', 'N/A')} | Funding 为正且偏高时警惕多头拥挤和追多回撤；Funding 为负且偏深时警惕空头拥挤和 short squeeze；结合 Funding 趋势、OI 变化、基差和多空比判断杠杆扩张/去杠杆，跨所只有单源时必须降置信度；数据缺失必须标记为不确定而不是中性 |
 | 主动买卖量 / CVD（影子因子） | 数据质量={order_flow.get('data_quality', 'N/A')}；窗口={order_flow.get('window_minutes', 'N/A')}分钟；主动买入占比={order_flow.get('taker_buy_ratio_pct', 'N/A')}%；CVD={order_flow.get('cvd_base_volume', 'N/A')} BTC；CVD占成交量={order_flow.get('cvd_pct_of_volume', 'N/A')}%；价格变化={order_flow.get('price_change_pct', 'N/A')}%；状态={order_flow.get('state', 'N/A')}；背离={order_flow.get('divergence', 'N/A')} | 仅作为突破/回踩执行质量的影子确认因子，不得单独决定多空；价格上涨但 CVD 偏空时降低追多置信度，价格下跌但 CVD 偏多时警惕假跌破/空头衰竭 |
 | 跨市场相关性 | 数据质量={macro_correlation.get('data_quality', 'N/A')}；纳指30/60日={nasdaq_corr.get('correlation_30d', 'N/A')}/{nasdaq_corr.get('correlation_60d', 'N/A')}，状态={nasdaq_corr.get('state', 'N/A')}；DXY30/60日={dxy_corr.get('correlation_30d', 'N/A')}/{dxy_corr.get('correlation_60d', 'N/A')}，状态={dxy_corr.get('state', 'N/A')}；美债10Y30/60日={us10y_corr.get('correlation_30d', 'N/A')}/{us10y_corr.get('correlation_60d', 'N/A')}，状态={us10y_corr.get('state', 'N/A')}；黄金30/60日={gold_corr.get('correlation_30d', 'N/A')}/{gold_corr.get('correlation_60d', 'N/A')}，状态={gold_corr.get('state', 'N/A')} | 相关性只用于识别风险因子暴露和仓位降权，不作为单独入场依据；纳指高正相关时视为科技风险资产暴露，DXY/美债相关性突变时降低方向置信度；样本不足不得推断 |
 
 > BTC 小时线约束：小时线是独立的日内机会层，不再强制服从日线方向。日线偏空但小时线出现多单机会、或日线偏多但小时线出现空单机会时，可以给出逆日线短线计划，但必须明确这是日内/短线机会，止损更严格、仓位更轻、有效期更短，并写清触发价、止损、目标、失效条件和 `daily_constraint`。必须写入 `dashboard.battle_plan.intraday_plan`；若小时线数据缺失或没有日内机会，`enabled=false`、`direction="wait"`，并说明等待条件。
-> BTC 急跌机会约束：当“小时线急跌/扫低事件”的类型不是 `none` 时，`dashboard.battle_plan.intraday_plan.trigger_condition` 必须引用“多单确认价”或“空单跌破价”中的具体数值；`invalidation` 必须引用“多单失效价”或事件低点；`reason` 必须说明这是急跌后的右侧确认/假跌破反弹/跌破延续，禁止只输出“暂无明确信号”而不给可执行等待价位。
+> BTC 右侧状态机约束：当 `event.right_side.version=btc-right-side-v1` 时，必须按 `state` 与 `direction` 输出双向执行路径。`sweep_detected` 只启动观察，不直接追单；收盘越过 `confirmation_price` 后可进入 `trial_entry`，反抽/回踩不是硬性必需，但若价格未过度延伸，可只用小仓延续试仓；`confirmation_add` 只有在回踩/反抽确认失败后才允许启用。当前价距离确认价超过 `no_chase_distance_atr` 时，必须写为机会错过/等待新结构，不能把远端旧区间继续当作有效入场区。`breakdown_confirmed`/`breakout_confirmed` 允许直接进入对应方向的延续路径，但仍受追价线、风险收益比和失效价约束。
+> BTC 急跌机会约束（含扫高扫低）：当小时线事件类型不是 `none` 时，`dashboard.battle_plan.intraday_plan.trigger_condition` 必须引用具体确认价或延续试仓价；`invalidation` 必须引用方向对应的失效价；`reason` 必须说明这是扫高反转、扫低反转、急跌后的右侧确认或跌破延续，禁止只输出“暂无明确信号”而不给可执行等待价位。
 > BTC 衍生品约束：Funding/OI 只作为杠杆拥挤度和风控降权信息，不得单独作为入场依据；当 `leverage_pressure` 显示 long/short crowding risk 时，必须在对应方向计划中降低仓位、等待更强价格确认，或解释为什么当前结构足以抵消拥挤风险。
 > BTC 订单流约束：CVD/主动买卖量当前处于影子验证阶段，只能用于降低置信度、要求更强价格确认或解释假突破风险；不得因单个订单流窗口直接反转日线/小时线方向，也不得把缺失订单流解释为中性。
 """

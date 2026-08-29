@@ -4116,6 +4116,61 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
+    "BTC_SHADOW_FORECAST_MODEL_CANDIDATES": {
+        "title": "BTC Shadow Forecast Models",
+        "description": (
+            "Comma-separated candidate models for the BTC hourly shadow forecast. "
+            "Supported values are logistic, hist_gradient_boosting, and lightgbm."
+        ),
+        "category": "system",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "logistic,hist_gradient_boosting,lightgbm",
+        "options": [],
+        "validation": {},
+        "display_order": 88,
+        "help_key": "settings.system.btc_volatility_monitor",
+        "examples": [
+            "BTC_SHADOW_FORECAST_MODEL_CANDIDATES=logistic,hist_gradient_boosting,lightgbm",
+            "BTC_SHADOW_FORECAST_MODEL_CANDIDATES=lightgbm,hist_gradient_boosting",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：环境变量完整列表",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED": {
+        "title": "BTC Shadow Forecast Ensemble",
+        "description": "Evaluate an equal-weight probability ensemble of the configured BTC shadow forecast candidates during inner walk-forward model selection.",
+        "category": "system",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "true",
+        "options": [],
+        "validation": {},
+        "display_order": 89,
+        "help_key": "settings.system.btc_volatility_monitor",
+        "examples": [
+            "BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=true",
+            "BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=false",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：环境变量完整列表",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
     "BTC_VOLATILITY_MONITOR_INTERVAL_SECONDS": {
         "title": "BTC Volatility Poll Interval",
         "description": "Polling interval in seconds for BTC volatility-triggered analysis. The scheduler clamps values below 5 seconds.",

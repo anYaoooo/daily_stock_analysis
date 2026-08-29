@@ -112,6 +112,41 @@ class TestAnalysisReportSchema(unittest.TestCase):
             self.assertEqual(pp.current_price, "N/A")
             self.assertEqual(pp.bias_ma5, "2.5")
 
+    def test_schema_preserves_btc_execution_ladder(self) -> None:
+        """The structured schema includes the right-side execution ladder contract."""
+        data = {
+            "dashboard": {
+                "battle_plan": {
+                    "short_plan": {
+                        "direction": "short",
+                        "execution_ladder": {
+                            "current_action": "wait",
+                            "trial_entry": {"enabled": False, "entry_price": 81500},
+                            "confirmation_add": {"enabled": False},
+                            "invalidation": {"price": 82300},
+                        },
+                    },
+                    "intraday_plan": {
+                        "direction": "short",
+                        "execution_ladder": {"current_action": "wait"},
+                    },
+                }
+            }
+        }
+
+        schema = AnalysisReportSchema.model_validate(data)
+        battle_plan = schema.dashboard and schema.dashboard.battle_plan
+        self.assertIsNotNone(battle_plan)
+        if battle_plan:
+            self.assertEqual(
+                battle_plan.short_plan.execution_ladder["current_action"],
+                "wait",
+            )
+            self.assertEqual(
+                battle_plan.intraday_plan.execution_ladder["current_action"],
+                "wait",
+            )
+
     def test_schema_fails_on_invalid_sentiment_score(self) -> None:
         """Schema validation fails when sentiment_score out of range."""
         data = {

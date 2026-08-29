@@ -1705,7 +1705,7 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 
 BTC 分析默认读取近 2500 天已闭合的 1 小时 K 线（覆盖当前本地全量缓存），构建下一根收益率回归、上涨方向概率和未来 24 小时分析曲线。曲线对每个时距直接拟合独立的 Ridge 收益率模型与 Logistic 上涨概率模型，以最新闭合价为基准输出 24 个预测价格点，不递归使用前一预测点。特征仅使用当根及此前已闭合 K 线的滞后收益、滚动收益/波动、成交量偏离、实体/振幅和 EMA 偏离。验证使用跨历史均匀分布的 expanding walk-forward：每一折的标准化器和模型只在该折训练段拟合，再对后续连续验证窗口生成严格折外预测；上下文会记录收益 MAE、方向命中率、Brier 分数、恒定看多/前一根方向基线、高置信度覆盖率，以及 1h/4h/12h/24h 的分时距表现。高置信度多空模拟同时按现有 `CRYPTO_BACKTEST_FEE_RATE_BPS` 与 `CRYPTO_BACKTEST_SLIPPAGE_BPS` 扣除双边往返成本，输出净平均收益和净胜率。
 
-主影子预测默认使用 4 小时成本感知三分类目标：未来收益高于双边往返成本记为 `up`，低于负成本记为 `down`，中间区间记为 `no_signal`。每个外层折会按预测时距净化训练末端，随后只用训练数据的内部尾窗比较标准化 Logistic 与直方图梯度提升的多分类 Brier，并选择概率向历史类别率收缩的校准权重。输出的 `primary_forecast` 包含三类概率、条件方向概率、入选模型和校准权重；方向概率未达到阈值或中性概率过高时明确返回 `no_signal`。
+主影子预测默认使用 4 小时成本感知三分类目标：未来收益高于双边往返成本记为 `up`，低于负成本记为 `down`，中间区间记为 `no_signal`。每个外层折会按预测时距净化训练末端，随后只用训练数据的内部尾窗比较标准化 Logistic、直方图梯度提升和可选 LightGBM 的多分类 Brier，并额外评估可用候选的等权概率集成；每个候选及集成结果都向历史类别率选择校准权重，最终选择内部 Brier 最低者。输出的 `primary_forecast` 包含三类概率、条件方向概率、入选模型、可用/缺失候选和校准权重；方向概率未达到阈值或中性概率过高时明确返回 `no_signal`。LightGBM 缺失时会记录 `optional_dependency_missing` 并自动回退，不会让 BTC 分析失败。
 
 `primary_evaluation.eligible_for_promotion` 只有在至少 1000 个折外样本、200 个影子信号、成本后均值为正、至少三分之二历史折为正、最近三折均为正且多分类 Brier 优于历史类别率基线时才会为 `true`。该字段只是离线升级门槛，不会自动改变影子模式或交易权限。
 
@@ -1720,9 +1720,11 @@ BTC_SHADOW_FORECAST_VALIDATION_BARS=168
 BTC_SHADOW_FORECAST_CURVE_HORIZON_HOURS=24
 BTC_SHADOW_FORECAST_PRIMARY_HORIZON_HOURS=4
 BTC_SHADOW_FORECAST_CONFIDENCE_THRESHOLD=0.58
+BTC_SHADOW_FORECAST_MODEL_CANDIDATES=logistic,hist_gradient_boosting,lightgbm
+BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=true
 ```
 
-回滚方式：设置 `BTC_SHADOW_FORECAST_ENABLED=false`。该开关只停止附加影子上下文，已有 BTC 技术分析、回测和交易执行路径不受影响。
+`BTC_SHADOW_FORECAST_MODEL_CANDIDATES` 支持 `logistic`、`hist_gradient_boosting`、`lightgbm`，逗号分隔且会自动去重；`BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=false` 可关闭等权集成，仅保留单候选内层选择。LightGBM 由 `requirements.txt` 提供；精简环境若未安装，诊断会明确列出缺失依赖并继续使用其余候选。回滚方式：设置 `BTC_SHADOW_FORECAST_ENABLED=false`。该开关只停止附加影子上下文，已有 BTC 技术分析、回测和交易执行路径不受影响。
 
 ## BTC 交易机会触发分析
 
@@ -1734,7 +1736,7 @@ BTC_SHADOW_FORECAST_CONFIDENCE_THRESHOLD=0.58
 
 默认参数偏保守：每 60 秒检查一次，观察 5 分钟窗口，价格变化超过 1.0% 后开始观察，继续同向推进 0.2% 才形成入场信号，反向 0.5% 或观察 20 分钟未确认则失效，触发后冷却 30 分钟。若开启 WebSocket，可把检查间隔下调到 15 秒、观察窗口下调到 1 分钟以更快捕捉日内机会；调度器后台任务最小轮询精度为 5 秒，因此低于 5 秒的间隔会被自动夹到 5 秒。
 
-检测窗口可进一步分层。配置 `BTC_VOLATILITY_MONITOR_WINDOW_TIERS`（如 `1:0.4,3:0.7,5:1.0,15:1.5`，格式为“窗口分钟:阈值%”）后，监控同时维护多级窗口，最短命中窗口优先进入机会观察，慢速爬坡行情不再被单一 5 分钟窗口漏掉；留空则保持旧版单窗口行为完全一致。多级窗口模式下还会检测插针：窗口内极端价冲高回落幅度超过 `BTC_VOLATILITY_MONITOR_SPIKE_REVERT_PCT`（默认 0.4%）时只推送“流动性掠夺”告警、不触发分析。`BTC_VOLATILITY_MONITOR_COOLDOWN_ALLOW_REVERSAL=true` 允许反向窗口突破信号打断触发后冷却（速度触发等噪声级信号不参与旁路），瀑布反转行情不会因冷却漏报。
+检测窗口可进一步分层。配置 `BTC_VOLATILITY_MONITOR_WINDOW_TIERS`（如 `1:0.4,3:0.7,5:1.0,15:1.5`，格式为“窗口分钟:阈值%”）后，监控同时维护多级窗口，最短命中窗口优先进入机会观察，慢速爬坡行情不再被单一 5 分钟窗口漏掉；留空则保持旧版单窗口行为完全一致。多级窗口模式下还会检测插针：窗口内极端价冲高回落幅度超过 `BTC_VOLATILITY_MONITOR_SPIKE_REVERT_PCT`（默认 0.4%）时推送“流动性掠夺”告警并启动小时线右侧状态分析，但不直接计为入场或下单。`BTC_VOLATILITY_MONITOR_COOLDOWN_ALLOW_REVERSAL=true` 允许反向窗口突破信号打断触发后冷却（速度触发等噪声级信号不参与旁路），瀑布反转行情不会因冷却漏报。
 
 以下高级检测项默认全部关闭，开启前建议先用回放工具在历史 K 线上定标。`BTC_VOLATILITY_MONITOR_ADAPTIVE_THRESHOLD_ENABLED=true` 按近期实际波动率缩放阈值：`threshold = clamp(K × σ × √窗口, MIN, MAX)`，样本不足时回退固定阈值；`BTC_VOLATILITY_MONITOR_VELOCITY_ENABLED=true` 在相邻采样速率达到历史中位速率 × `VELOCITY_MULT` 且绝对幅度 ≥ `VELOCITY_MIN_PCT` 时升级为事件（绝对地板用于防止低波动期纯相对倍数把噪声当信号；多级窗口模式下地板自动抬升为 max(`VELOCITY_MIN_PCT`, 0.5×最快窗口阈值)，且速度触发不享受快速确认、不允许反向打断冷却，避免高频采样下噪声方向反复触发多空指导）；`BTC_VOLATILITY_MONITOR_FAST_CONFIRMATION_ENABLED=true` 对暴力行情（初始涨跌幅 ≥ `FAST_CONFIRMATION_MULT` × 阈值）把确认采样数降为 1，时效优先，但不会跳过入场确认价。
 

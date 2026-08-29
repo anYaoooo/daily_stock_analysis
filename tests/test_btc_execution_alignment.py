@@ -312,6 +312,62 @@ def test_late_volatility_trigger_disables_immediate_intraday_entry() -> None:
     assert plan["execution_ladder"]["trial_entry"]["enabled"] is False
 
 
+def test_liquidity_sweep_guard_disables_stale_chase_plan() -> None:
+    result = AnalysisResult(
+        code="BTCUSDT",
+        name="Bitcoin",
+        sentiment_score=50,
+        trend_prediction="看空",
+        report_language="zh",
+        operation_advice="观望",
+        decision_type="hold",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "short",
+                    "execution_ladder": {
+                        "current_action": "trial",
+                        "trial_entry": {"enabled": True, "entry_price": 101.8},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        trigger_context={
+            "trigger_reason": "liquidity_sweep",
+            "right_side_direction": "short",
+            "price": 100.0,
+        },
+        technical_context={
+            "timeframes": {
+                "hourly": {
+                    "event": {
+                        "right_side": {
+                            "version": "btc-right-side-v1",
+                            "state": "sweep_detected",
+                            "direction": "short",
+                            "no_chase_price": 101.7,
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["enabled"] is False
+    assert plan["direction"] == "wait"
+    assert plan["trigger_execution_state"] == "right_side_missed"
+    assert "机会已错过" in plan["no_trade_reason"]
+    assert plan["execution_ladder"]["current_action"] == "wait"
+    assert plan["execution_ladder"]["trial_entry"]["enabled"] is False
+
+
 def test_aligned_timeframes_block_opposed_intraday_plan() -> None:
     result = AnalysisResult(
         code="BTCUSDT",

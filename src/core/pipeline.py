@@ -551,6 +551,18 @@ class StockAnalysisPipeline:
                                             0.58,
                                         )
                                     ),
+                                    model_candidates=getattr(
+                                        self.config,
+                                        "btc_shadow_forecast_model_candidates",
+                                        "logistic,hist_gradient_boosting,lightgbm",
+                                    ),
+                                    ensemble_enabled=bool(
+                                        getattr(
+                                            self.config,
+                                            "btc_shadow_forecast_ensemble_enabled",
+                                            True,
+                                        )
+                                    ),
                                     round_trip_cost_bps=2.0 * (
                                         float(
                                             getattr(self.config, "crypto_backtest_fee_rate_bps", 5.0)

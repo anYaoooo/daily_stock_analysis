@@ -567,8 +567,8 @@ class BTCVolatilityMonitor:
 
         A fast wick that reverts between polls never crosses the current-price
         thresholds, so without this check the move is invisible. The event is
-        alert-only (no analysis trigger): a failed breakout must not be turned
-        into an entry plan.
+        analysis-triggering but not an entry: a failed breakout starts the
+        right-side state machine and must not be turned into an immediate order.
         """
         if len(self._snapshots) < 3:
             return None
@@ -611,6 +611,11 @@ class BTCVolatilityMonitor:
                     "sweep_runup_pct": round(runup_pct, 4),
                     "revert_pct": round(revert_pct, 4),
                     "spike_revert_pct": round(spike_revert_pct, 4),
+                    "right_side_state": "sweep_detected",
+                    "right_side_direction": trade_direction,
+                    "right_side_trial_position_pct": 25,
+                    "right_side_retest_required": False,
+                    "right_side_confirmation_add_requires_retest": True,
                     "trade_direction": trade_direction,
                     "suggested_trade_action": f"watch_{trade_direction}_after_sweep",
                 }

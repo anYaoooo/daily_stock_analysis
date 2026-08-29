@@ -511,6 +511,62 @@ class MainScheduleModeTestCase(unittest.TestCase):
         send_alert.assert_called_once_with(args, monitor.run_once.return_value)
         run_full_analysis.assert_not_called()
 
+    def test_liquidity_sweep_starts_state_analysis_without_counting_as_entry(self) -> None:
+        args = self._make_args(schedule=True)
+        config = self._make_config(
+            schedule_enabled=False,
+            btc_volatility_monitor_enabled=True,
+        )
+        monitor = MagicMock()
+        monitor.run_once.return_value = {
+            "triggered": 0,
+            "event_detected": 1,
+            "reason": "liquidity_sweep",
+            "trigger_reason": "liquidity_sweep",
+            "direction": "up",
+            "trade_direction": "short",
+            "sweep_side": "up",
+            "swept_extreme_price": 81520,
+            "sweep_runup_pct": 1.2,
+            "revert_pct": 0.5,
+            "opportunity_state": "sweep_detected",
+            "right_side_state": "sweep_detected",
+            "right_side_direction": "short",
+            "right_side_trial_position_pct": 25,
+            "right_side_retest_required": False,
+            "right_side_confirmation_add_requires_retest": True,
+        }
+        scheduled_call = {}
+
+        def fake_run_with_schedule(
+            task,
+            schedule_time,
+            run_immediately,
+            background_tasks=None,
+            schedule_time_provider=None,
+            schedule_mode="daily",
+        ):
+            scheduled_call["background_tasks"] = background_tasks or []
+
+        with patch("main.parse_arguments", return_value=args), \
+             patch("main.get_config", return_value=config), \
+             patch.object(main, "_reload_runtime_config", return_value=config), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "08:00"), \
+             patch("main.setup_logging"), \
+             patch("main.run_full_analysis") as run_full_analysis, \
+             patch("main._send_btc_volatility_alert") as send_alert, \
+             patch("src.services.btc_volatility_monitor.BTCVolatilityMonitor", return_value=monitor), \
+             patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
+            self.assertEqual(main.main(), 0)
+            scheduled_call["background_tasks"][1]["task"]()
+
+        send_alert.assert_called_once_with(args, monitor.run_once.return_value)
+        run_full_analysis.assert_called_once()
+        trigger_context = run_full_analysis.call_args.kwargs["trigger_context"]
+        self.assertEqual(trigger_context["trigger_reason"], "liquidity_sweep")
+        self.assertEqual(trigger_context["right_side_direction"], "short")
+        self.assertEqual(trigger_context["swept_extreme_price"], 81520)
+
     def test_btc_volatility_alert_states_confirmation_and_invalidation_prices(self) -> None:
         content = main._format_btc_volatility_alert(
             {

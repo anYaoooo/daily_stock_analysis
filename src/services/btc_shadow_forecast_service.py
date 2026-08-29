@@ -15,7 +15,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-MODEL_VERSION = "btc-hourly-shadow-cost-aware-wf-v3"
+MODEL_VERSION = "btc-hourly-shadow-cost-aware-wf-v4"
 DEFAULT_LOOKBACK_DAYS = 2500
 DEFAULT_MIN_TRAIN_BARS = 336
 DEFAULT_FOLDS = 12
@@ -26,6 +26,8 @@ DEFAULT_ROUND_TRIP_COST_BPS = 14.0
 DEFAULT_PRIMARY_HORIZON_HOURS = 4
 TRADE_CLASSES = np.array([-1, 0, 1], dtype=int)
 TRADE_CLASS_NAMES = {-1: "down", 0: "no_signal", 1: "up"}
+DEFAULT_TRADE_MODEL_CANDIDATES = ("logistic", "hist_gradient_boosting", "lightgbm")
+SUPPORTED_TRADE_MODELS = frozenset(DEFAULT_TRADE_MODEL_CANDIDATES)
 
 
 @dataclass(frozen=True)
@@ -59,7 +61,7 @@ class _TradeFoldPrediction:
 class BtcShadowForecastService:
     """Build direct multi-horizon BTC forecasts without affecting decisions.
 
-    The service intentionally uses small numpy models rather than notebook-only
+    The service intentionally uses small tabular models rather than notebook-only
     dependencies. Every validation fold fits its own scaler on prior data only.
     """
 
@@ -73,6 +75,8 @@ class BtcShadowForecastService:
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
         round_trip_cost_bps: float = DEFAULT_ROUND_TRIP_COST_BPS,
         primary_horizon_hours: int = DEFAULT_PRIMARY_HORIZON_HOURS,
+        model_candidates: Optional[Iterable[str] | str] = None,
+        ensemble_enabled: bool = True,
     ) -> None:
         self.min_train_bars = max(24, int(min_train_bars))
         self.folds = max(1, int(folds))
@@ -81,12 +85,16 @@ class BtcShadowForecastService:
         self.confidence_threshold = min(0.95, max(0.5, float(confidence_threshold)))
         self.round_trip_cost_bps = max(0.0, float(round_trip_cost_bps))
         self.primary_horizon_hours = max(1, int(primary_horizon_hours))
+        self.model_candidates = self._normalize_model_candidates(model_candidates)
+        self.ensemble_enabled = bool(ensemble_enabled)
 
     def build(self, hourly_bars: Optional[pd.DataFrame]) -> Dict[str, Any]:
         base = {
             "model_version": MODEL_VERSION,
             "feature_set_version": "ohlcv-core-v1",
-            "primary_model": "walk_forward_logistic_hist_gradient_boosting",
+            "primary_model": "walk_forward_calibrated_candidate_selection",
+            "configured_model_candidates": list(self.model_candidates),
+            "ensemble_enabled": self.ensemble_enabled,
             "mode": "shadow",
             "participates_in_decision": False,
             "target": "next_closed_1h_return",
@@ -218,6 +226,7 @@ class BtcShadowForecastService:
             labels,
             latest[columns].to_numpy(dtype=float),
             float(selection["calibration_weight"]),
+            selection.get("ensemble_models"),
         )[0]
         expected_return = float(
             self._ridge_predict(
@@ -239,6 +248,9 @@ class BtcShadowForecastService:
             "predicted_action": TRADE_CLASS_NAMES[action],
             "selected_model": selection["model"],
             "calibration_weight": round(float(selection["calibration_weight"]), 2),
+            "available_models": selection.get("available_models", []),
+            "unavailable_models": selection.get("unavailable_models", {}),
+            "ensemble_models": selection.get("ensemble_models", []),
             "candidate_multiclass_brier": {
                 name: round(float(score), 6)
                 for name, score in selection["candidate_scores"].items()
@@ -272,6 +284,7 @@ class BtcShadowForecastService:
                 train_labels,
                 validation[columns].to_numpy(dtype=float),
                 float(selection["calibration_weight"]),
+                selection.get("ensemble_models"),
             )
             actual_returns = validation["target_return"].to_numpy(dtype=float)
             actual_classes = self._cost_aware_labels(actual_returns)
@@ -302,12 +315,16 @@ class BtcShadowForecastService:
         feature_columns: Iterable[str],
     ) -> Dict[str, Any]:
         columns = list(feature_columns)
+        available_models, unavailable_models = self._available_trade_models()
         maximum_inner_bars = len(train) - self.primary_horizon_hours - 24
         if maximum_inner_bars < 24:
             return {
                 "model": "historical_prior",
                 "calibration_weight": 0.0,
                 "candidate_scores": {"historical_prior": 0.0},
+                "available_models": available_models,
+                "unavailable_models": unavailable_models,
+                "ensemble_models": [],
             }
         inner_validation_bars = min(672, max(168, len(train) // 5))
         inner_validation_bars = min(inner_validation_bars, maximum_inner_bars)
@@ -329,13 +346,17 @@ class BtcShadowForecastService:
                         calibration_labels,
                     )
                 },
+                "available_models": available_models,
+                "unavailable_models": unavailable_models,
+                "ensemble_models": [],
             }
 
         candidate_scores: Dict[str, float] = {}
         candidate_weights: Dict[str, float] = {}
+        raw_candidates: Dict[str, np.ndarray] = {}
         x_fit = fit[columns].to_numpy(dtype=float)
         x_calibration = calibration[columns].to_numpy(dtype=float)
-        for model_name in ("logistic", "hist_gradient_boosting"):
+        for model_name in available_models:
             try:
                 raw_probabilities = self._raw_trade_probabilities(
                     model_name,
@@ -343,8 +364,9 @@ class BtcShadowForecastService:
                     fit_labels,
                     x_calibration,
                 )
-            except ValueError:
+            except (ImportError, OSError, ValueError):
                 continue
+            raw_candidates[model_name] = raw_probabilities
             best_score = float("inf")
             best_weight = 0.0
             for weight in (0.0, 0.25, 0.5, 0.75, 1.0):
@@ -356,17 +378,40 @@ class BtcShadowForecastService:
             candidate_scores[model_name] = best_score
             candidate_weights[model_name] = best_weight
 
+        ensemble_models = list(raw_candidates)
+        if self.ensemble_enabled and len(ensemble_models) >= 2:
+            ensemble_raw = np.mean(
+                [raw_candidates[model_name] for model_name in ensemble_models],
+                axis=0,
+            )
+            best_score = float("inf")
+            best_weight = 0.0
+            for weight in (0.0, 0.25, 0.5, 0.75, 1.0):
+                calibrated = weight * ensemble_raw + (1.0 - weight) * priors
+                score = self._multiclass_brier(calibrated, calibration_labels)
+                if score < best_score:
+                    best_score = score
+                    best_weight = weight
+            candidate_scores["ensemble"] = best_score
+            candidate_weights["ensemble"] = best_weight
+
         if not candidate_scores:
             return {
                 "model": "historical_prior",
                 "calibration_weight": 0.0,
                 "candidate_scores": {"historical_prior": 0.0},
+                "available_models": available_models,
+                "unavailable_models": unavailable_models,
+                "ensemble_models": [],
             }
         selected_model = min(candidate_scores, key=candidate_scores.get)
         return {
             "model": selected_model,
             "calibration_weight": candidate_weights[selected_model],
             "candidate_scores": candidate_scores,
+            "available_models": available_models,
+            "unavailable_models": unavailable_models,
+            "ensemble_models": ensemble_models if selected_model == "ensemble" else [],
         }
 
     def _fit_trade_probabilities(
@@ -376,11 +421,22 @@ class BtcShadowForecastService:
         labels: np.ndarray,
         x_predict: np.ndarray,
         calibration_weight: float,
+        ensemble_models: Optional[Iterable[str]] = None,
     ) -> np.ndarray:
         priors = self._class_priors(labels)
         if model_name == "historical_prior" or len(np.unique(labels)) < 2:
             return np.tile(priors, (len(x_predict), 1))
-        raw = self._raw_trade_probabilities(model_name, x_train, labels, x_predict)
+        if model_name == "ensemble":
+            component_models = list(ensemble_models or self._available_trade_models()[0])
+            component_probabilities = [
+                self._raw_trade_probabilities(component, x_train, labels, x_predict)
+                for component in component_models
+            ]
+            if not component_probabilities:
+                return np.tile(priors, (len(x_predict), 1))
+            raw = np.mean(component_probabilities, axis=0)
+        else:
+            raw = self._raw_trade_probabilities(model_name, x_train, labels, x_predict)
         return calibration_weight * raw + (1.0 - calibration_weight) * priors
 
     @staticmethod
@@ -404,6 +460,24 @@ class BtcShadowForecastService:
                 l2_regularization=1.0,
                 random_state=42,
             )
+        elif model_name == "lightgbm":
+            try:
+                from lightgbm import LGBMClassifier
+            except (ImportError, OSError) as exc:
+                raise ImportError("lightgbm is not installed") from exc
+            estimator = LGBMClassifier(
+                n_estimators=120,
+                learning_rate=0.03,
+                num_leaves=15,
+                max_depth=4,
+                min_child_samples=80,
+                reg_lambda=1.0,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                verbosity=-1,
+                random_state=42,
+                n_jobs=1,
+            )
         else:
             raise ValueError(f"unsupported trade model: {model_name}")
         estimator.fit(x_train, labels)
@@ -413,6 +487,34 @@ class BtcShadowForecastService:
             target_index = int(np.where(TRADE_CLASSES == int(class_value))[0][0])
             aligned[:, target_index] = raw[:, source_index]
         return aligned
+
+    @staticmethod
+    def _normalize_model_candidates(model_candidates: Optional[Iterable[str] | str]) -> tuple[str, ...]:
+        if model_candidates is None:
+            values = list(DEFAULT_TRADE_MODEL_CANDIDATES)
+        elif isinstance(model_candidates, str):
+            values = model_candidates.split(",")
+        else:
+            values = list(model_candidates)
+        normalized = []
+        for value in values:
+            name = str(value).strip().lower()
+            if name in SUPPORTED_TRADE_MODELS and name not in normalized:
+                normalized.append(name)
+        return tuple(normalized or ("logistic", "hist_gradient_boosting"))
+
+    def _available_trade_models(self) -> tuple[list[str], Dict[str, str]]:
+        available: list[str] = []
+        unavailable: Dict[str, str] = {}
+        for model_name in self.model_candidates:
+            if model_name == "lightgbm":
+                try:
+                    import lightgbm  # noqa: F401
+                except (ImportError, OSError):
+                    unavailable[model_name] = "optional_dependency_missing"
+                    continue
+            available.append(model_name)
+        return available, unavailable
 
     def _trade_action(self, probabilities: np.ndarray) -> tuple[int, float]:
         directional_total = float(probabilities[0] + probabilities[2])

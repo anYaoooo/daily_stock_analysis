@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] BTC Transformer 离线训练 CLI 新增 `--device` 参数，可显式选择 `cpu`、`cuda` 或 `cuda:0`，默认保持 CPU。
+- [新功能] 新增离线 BTC Transformer 研究模块：以闭合 K 线构造 256 步序列，提供 PatchTST、iTransformer、表征融合、多任务收益/波动/方向/regime head，以及带 purge gap 和训练折内缩放的 expanding walk-forward CLI；结果保持观测模式，不参与交易决策。
+- [新功能] 新增离线 BTC 多任务训练基线：从闭合 OHLCV 生成未来收益分布、波动率和市场状态标签，使用 purged expanding walk-forward 输出分位数、方向概率、状态预测及折外评估；结果保持观测模式，不参与交易决策。
+- [改进] BTC 小时线影子预测新增可选 LightGBM 候选与 Logistic/HGB/LightGBM 等权概率集成；每折按内层 Brier 选择候选或集成，缺少 LightGBM 时明确降级并保持影子模式，不影响交易决策链路。
+- [改进] BTC 右侧状态机改为双向扫高/扫低对称处理：扫流动性事件触发小时线分析但不直接计为入场，支持无反抽时的受追价保护小仓延续试仓，并在确认价过度偏离后标记机会错过。
 - [修复] Web 分析报告将盘中实时行情告警码转换为中英文用户提示，不再直接展示 `intraday_realtime_overlay` 内部枚举。
 - [改进] BTC 决策计划按 `crypto:BTC:<horizon>` 稳定归并：同向观察原地更新并逐字段保留/补齐执行价，观望或回避不降级已有动作，反向报告归档为 `reversal_candidate`；日线与小时线计划分层，历史重复 active 记录在后续写入时收敛为单一主计划，删除首份历史报告时保留仍 active 的主计划并解除来源引用。
 - [改进] BTC 可交易性护栏新增版本化前向审计：保留护栏修改前的结构化计划，以影子反事实回测对比“放行实际”与“拦截假想”结果；影子结果不进入正式胜率、权益或风险指标，旧计划明确归为未分类。
@@ -35,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Agent 模式 BTC 分析补齐双向策略基线与 `battle_plan` 结构契约（long_plan/short_plan/intraday_plan 与 execution_contract 字段要求），与 legacy 分析路径对齐；股票分析不受影响。
 - [改进] BTC 执行契约校验改为标注模式：未通过校验的多空计划保留原方向与建议，改写 `validation_status`/`validation_errors`/`validation_note` 供用户自行判断，不再统一降级为观望。
 - [改进] BTC 双向计划 prompt 增加可触发性约束：入场/试仓价需落在现价 ±1×ATR 内、确认价与入场价偏离不超过 0.5%，执行契约范例解除仅 breakout、2 根确认K线的限制，等待窗口与持仓窗口按计划周期说明。
-- [新功能] BTC 波动监控支持多级窗口检测（`BTC_VOLATILITY_MONITOR_WINDOW_TIERS`）、插针流动性掠夺告警（仅告警不触发分析）与反向信号打断触发后冷却；窗口列表留空时保持旧版单窗口行为完全一致。
+- [新功能] BTC 波动监控支持多级窗口检测（`BTC_VOLATILITY_MONITOR_WINDOW_TIERS`）、插针流动性掠夺告警（告警并启动右侧状态分析，不直接触发入场）与反向信号打断触发后冷却；窗口列表留空时保持旧版单窗口行为完全一致。
 - [新功能] BTC 波动监控新增自适应阈值、速度触发与暴力行情单次确认快进（默认全部关闭），并新增 `scripts/replay_volatility_monitor.py` 回放调参工具，可在历史 1m K 线上对比各配置的检出率、检出延迟与误报率后再开启。
 - [修复] BTC 与普通分析在 LLM 结果解析后不再因加密上下文变量未定义而失败。
 - [修复] BTC 回测页的单条和批量回测改为异步受理并轮询任务状态，不再因浏览器 30 秒请求超时中断长耗时回测。

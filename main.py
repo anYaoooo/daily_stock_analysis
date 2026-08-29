@@ -1446,7 +1446,11 @@ def main() -> int:
                     stats = volatility_monitor.run_once(runtime_config)
                     if stats.get("early_warning_detected") or stats.get("event_detected"):
                         _send_btc_volatility_alert(args, stats)
-                    if not stats.get("triggered"):
+                    # A liquidity sweep is not an entry by itself, but it is a
+                    # state-machine event that needs an immediate hourly analysis.
+                    # Keep ``triggered=0`` so execution metrics do not count it as
+                    # a filled/confirmed entry signal.
+                    if not stats.get("triggered") and stats.get("trigger_reason") != "liquidity_sweep":
                         if stats.get("suppressed"):
                             logger.info(
                                 "[BTCVolatility] 触发被冷却抑制: change=%s%% threshold=%s%%",
@@ -1491,6 +1495,18 @@ def main() -> int:
                         "impulse_extreme_price": stats.get("impulse_extreme_price"),
                         "impulse_retrace_pct": stats.get("impulse_retrace_pct"),
                         "exhaustion_retrace_pct": stats.get("exhaustion_retrace_pct"),
+                        "sweep_side": stats.get("sweep_side"),
+                        "swept_extreme_price": stats.get("swept_extreme_price"),
+                        "sweep_runup_pct": stats.get("sweep_runup_pct"),
+                        "revert_pct": stats.get("revert_pct"),
+                        "opportunity_state": stats.get("opportunity_state"),
+                        "right_side_state": stats.get("right_side_state"),
+                        "right_side_direction": stats.get("right_side_direction"),
+                        "right_side_trial_position_pct": stats.get("right_side_trial_position_pct"),
+                        "right_side_retest_required": stats.get("right_side_retest_required"),
+                        "right_side_confirmation_add_requires_retest": stats.get(
+                            "right_side_confirmation_add_requires_retest"
+                        ),
                         "poll_interval_seconds": getattr(runtime_config, 'btc_volatility_monitor_interval_seconds', 60),
                     }
                     trigger_context = {
@@ -1499,7 +1515,8 @@ def main() -> int:
                         if value is not None
                     }
                     logger.info(
-                        "[BTCVolatility] 入场信号触发小时线分析: trade_direction=%s change=%s%% price=%s entry=%s invalidation=%s",
+                        "[BTCVolatility] 事件触发小时线分析: reason=%s trade_direction=%s change=%s%% price=%s entry=%s invalidation=%s",
+                        trigger_reason,
                         stats.get("trade_direction") or stats.get("direction"),
                         stats.get("change_pct"),
                         stats.get("price"),

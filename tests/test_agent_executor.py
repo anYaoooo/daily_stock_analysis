@@ -1074,6 +1074,9 @@ class TestAgentExecutor(unittest.TestCase):
         self.assertIn("BTC 作战计划输出结构", prompt)
         self.assertIn("long_plan", prompt)
         self.assertIn("execution_contract", prompt)
+        self.assertIn("btc-right-side-v1", prompt)
+        self.assertIn("没有反抽/回踩也不阻止", prompt)
+        self.assertIn("0.75×ATR", prompt)
 
     def test_prompt_btc_contract_present_but_policy_gated_on_explicit_skill_run(self):
         """Explicit skill BTC runs keep the structure contract but skip the baseline policy."""

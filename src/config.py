@@ -747,6 +747,8 @@ class Config:
     btc_shadow_forecast_curve_horizon_hours: int = 24
     btc_shadow_forecast_primary_horizon_hours: int = 4
     btc_shadow_forecast_confidence_threshold: float = 0.58
+    btc_shadow_forecast_model_candidates: str = "logistic,hist_gradient_boosting,lightgbm"
+    btc_shadow_forecast_ensemble_enabled: bool = True
     btc_volatility_monitor_enabled: bool = False
     btc_volatility_monitor_use_websocket: bool = False
     btc_volatility_monitor_ws_stale_seconds: int = 30
@@ -1672,6 +1674,14 @@ class Config:
                 field_name='BTC_SHADOW_FORECAST_CONFIDENCE_THRESHOLD',
                 minimum=0.5,
                 maximum=0.95,
+            ),
+            btc_shadow_forecast_model_candidates=os.getenv(
+                'BTC_SHADOW_FORECAST_MODEL_CANDIDATES',
+                'logistic,hist_gradient_boosting,lightgbm',
+            ),
+            btc_shadow_forecast_ensemble_enabled=parse_env_bool(
+                os.getenv('BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED'),
+                default=True,
             ),
             btc_volatility_monitor_enabled=parse_env_bool(
                 os.getenv('BTC_VOLATILITY_MONITOR_ENABLED'),

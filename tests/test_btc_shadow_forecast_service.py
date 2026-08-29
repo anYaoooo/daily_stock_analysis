@@ -49,6 +49,7 @@ def test_shadow_forecast_uses_expanding_walk_forward_and_train_only_scaling() ->
 
     assert result["mode"] == "shadow"
     assert result["participates_in_decision"] is False
+    assert result["primary_model"] == "walk_forward_calibrated_candidate_selection"
     assert result["data_quality"] == "available"
     assert result["target"] == "next_closed_1h_return"
     assert result["forecast"]["predicted_direction"] in {"up", "down"}
@@ -57,7 +58,13 @@ def test_shadow_forecast_uses_expanding_walk_forward_and_train_only_scaling() ->
     assert primary["horizon_hours"] == 4
     assert primary["target"] == "cost_aware_up_down_no_signal"
     assert primary["predicted_action"] in {"up", "down", "no_signal"}
-    assert primary["selected_model"] in {"logistic", "hist_gradient_boosting"}
+    assert primary["selected_model"] in {"logistic", "hist_gradient_boosting", "lightgbm", "ensemble"}
+    assert set(primary["available_models"]).issubset(
+        {"logistic", "hist_gradient_boosting", "lightgbm"}
+    )
+    assert "lightgbm" in primary["available_models"] or "lightgbm" in primary["unavailable_models"]
+    if primary["selected_model"] == "ensemble":
+        assert primary["ensemble_models"] == primary["available_models"]
     assert primary["participates_in_decision"] is False
     assert primary["up_probability"] + primary["down_probability"] + primary[
         "no_signal_probability"
@@ -148,3 +155,60 @@ def test_shadow_forecast_config_can_be_disabled_and_tuned() -> None:
     assert config.btc_shadow_forecast_curve_horizon_hours == 48
     assert config.btc_shadow_forecast_primary_horizon_hours == 6
     assert config.btc_shadow_forecast_confidence_threshold == 0.62
+
+
+def test_shadow_forecast_model_candidates_and_ensemble_config() -> None:
+    env = {
+        "BTC_SHADOW_FORECAST_MODEL_CANDIDATES": "logistic,lightgbm,unsupported,logistic",
+        "BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED": "false",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        config = Config._load_from_env()
+
+    assert config.btc_shadow_forecast_model_candidates == "logistic,lightgbm,unsupported,logistic"
+    assert config.btc_shadow_forecast_ensemble_enabled is False
+
+    service = BtcShadowForecastService(
+        model_candidates=config.btc_shadow_forecast_model_candidates,
+        ensemble_enabled=config.btc_shadow_forecast_ensemble_enabled,
+    )
+    assert service.model_candidates == ("logistic", "lightgbm")
+    assert service.ensemble_enabled is False
+
+
+def test_shadow_forecast_ensemble_probabilities_are_normalized() -> None:
+    service = BtcShadowForecastService(model_candidates=("logistic", "hist_gradient_boosting"))
+    labels = np.array([-1, 0, 1, 1, -1, 0], dtype=int)
+    x_train = np.arange(24, dtype=float).reshape(6, 4)
+    x_predict = np.arange(8, dtype=float).reshape(2, 4)
+
+    with patch.object(
+        service,
+        "_raw_trade_probabilities",
+        side_effect=[
+            np.array([[0.6, 0.2, 0.2], [0.2, 0.3, 0.5]]),
+            np.array([[0.2, 0.3, 0.5], [0.4, 0.2, 0.4]]),
+        ],
+    ):
+        probabilities = service._fit_trade_probabilities(
+            "ensemble",
+            x_train,
+            labels,
+            x_predict,
+            1.0,
+            ("logistic", "hist_gradient_boosting"),
+        )
+
+    assert probabilities.shape == (2, 3)
+    assert probabilities.sum(axis=1) == pytest.approx(np.ones(2))
+    assert probabilities[0] == pytest.approx([0.4, 0.25, 0.35])
+    assert probabilities[1] == pytest.approx([0.3, 0.25, 0.45])
+
+
+def test_shadow_forecast_falls_back_when_lightgbm_is_unavailable() -> None:
+    service = BtcShadowForecastService(model_candidates="logistic,lightgbm")
+    with patch.dict("sys.modules", {"lightgbm": None}):
+        available, unavailable = service._available_trade_models()
+
+    assert available == ["logistic"]
+    assert unavailable == {"lightgbm": "optional_dependency_missing"}

@@ -18,6 +18,7 @@ pypinyin>=0.50.0            # Name-to-code resolver (pinyin matching)
 openpyxl>=3.1.0             # Excel (.xlsx) parsing for import
 numpy>=1.24.0               # Numeric computing
 scikit-learn>=1.4.0,<2.0.0  # BTC shadow-model selection and probability calibration
+lightgbm>=4.0.0             # Optional nonlinear BTC shadow-model candidate
 json-repair>=0.55.1         # JSON repair
 
 # AI analysis

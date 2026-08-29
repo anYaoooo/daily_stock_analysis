@@ -214,14 +214,20 @@ def _build_event_context(
     bars: pd.DataFrame,
     *,
     close: float,
+    recent_high: Optional[float],
     recent_low: Optional[float],
+    high_swept: bool,
     low_swept: bool,
+    close_above_resistance: bool,
     close_below_support: bool,
+    latest_open: Optional[float],
+    latest_high: Optional[float],
+    latest_low: Optional[float],
     atr14: Optional[float],
     vwap: Optional[float],
     ema20: Optional[float],
 ) -> Dict[str, Any]:
-    """Summarize recent BTC shock moves into concrete intraday trigger references."""
+    """Summarize BTC events into a symmetric, bounded right-side state machine."""
     prior = bars.iloc[:-1] if len(bars) > 1 else bars
     reference_window = prior.tail(12)
     event_window = bars.tail(6)
@@ -247,16 +253,106 @@ def _build_event_context(
     long_invalidation = (event_low - invalidation_buffer) if event_low is not None and invalidation_buffer is not None else event_low
     short_breakdown = recent_low if recent_low is not None else event_low
 
+    event_open = _safe_float(latest_open)
+    event_high = _safe_float(latest_high)
+    event_low_price = _safe_float(latest_low)
+    body_high = max(value for value in (event_open, close) if value is not None)
+    body_low = min(value for value in (event_open, close) if value is not None)
+    band_buffer = atr14 * 0.25 if atr14 is not None and atr14 > 0 else max(abs(close) * 0.002, 1.0)
+    stop_buffer = invalidation_buffer if invalidation_buffer is not None else band_buffer
+
+    right_side_state = "wait"
+    right_side_direction = "wait"
+    right_side_confirmation = None
+    right_side_invalidation = None
+    right_side_retest_zone = None
+    right_side_continuation = None
+
+    # A sweep arms a directional setup but never becomes an immediate market order.
+    # The continuation branch allows a small trial when there is no retest, while
+    # the ATR guard prevents a late, overextended entry.
+    if high_swept and not close_above_resistance:
+        right_side_state = "sweep_detected"
+        right_side_direction = "short"
+        right_side_confirmation = body_low
+        right_side_invalidation = (event_high + stop_buffer) if event_high is not None else None
+        right_side_retest_zone = [
+            _round(body_low - band_buffer),
+            _round(body_low + band_buffer),
+        ]
+        right_side_continuation = body_low
+    elif low_swept and not close_below_support:
+        right_side_state = "sweep_detected"
+        right_side_direction = "long"
+        right_side_confirmation = body_high
+        right_side_invalidation = (event_low_price - stop_buffer) if event_low_price is not None else None
+        right_side_retest_zone = [
+            _round(body_high - band_buffer),
+            _round(body_high + band_buffer),
+        ]
+        right_side_continuation = body_high
+    elif close_below_support:
+        right_side_state = "breakdown_confirmed"
+        right_side_direction = "short"
+        right_side_confirmation = short_breakdown
+        right_side_invalidation = (recent_high + stop_buffer) if recent_high is not None else None
+        right_side_retest_zone = (
+            [_round(short_breakdown - band_buffer), _round(short_breakdown + band_buffer)]
+            if short_breakdown is not None
+            else None
+        )
+        right_side_continuation = short_breakdown
+    elif close_above_resistance:
+        right_side_state = "breakout_confirmed"
+        right_side_direction = "long"
+        right_side_confirmation = recent_high
+        right_side_invalidation = (recent_low - stop_buffer) if recent_low is not None else None
+        right_side_retest_zone = (
+            [_round(recent_high - band_buffer), _round(recent_high + band_buffer)]
+            if recent_high is not None
+            else None
+        )
+        right_side_continuation = recent_high
+
+    no_chase_distance = atr14 * 0.75 if atr14 is not None and atr14 > 0 else band_buffer * 3
+    no_chase_price = None
+    if right_side_confirmation is not None:
+        no_chase_price = (
+            right_side_confirmation - no_chase_distance
+            if right_side_direction == "short"
+            else right_side_confirmation + no_chase_distance
+        )
+
+    right_side = {
+        "version": "btc-right-side-v1",
+        "state": right_side_state,
+        "direction": right_side_direction,
+        "confirmation_price": _round(right_side_confirmation),
+        "continuation_price": _round(right_side_continuation),
+        "retest_zone": right_side_retest_zone,
+        "invalidation_price": _round(right_side_invalidation),
+        "no_chase_distance_atr": 0.75,
+        "no_chase_price": _round(no_chase_price),
+        "max_wait_bars": 4,
+        "trial_position_pct": 25,
+        "confirmation_add_requires_retest": True,
+    }
+
     event_type = "none"
     suggested_direction = "wait"
     urgency = "normal"
     interpretation = "未检测到足够明确的急跌、扫低或反转事件。"
 
-    if low_swept and not close_below_support:
+    if high_swept and not close_above_resistance:
+        event_type = "liquidity_sweep_high_reversal_candidate"
+        suggested_direction = "conditional_short"
+        urgency = "high"
+        interpretation = "插针扫过前高后未收盘站上，启动右侧空头状态；先等收盘确认，直接下跌时仅允许受追价保护的小仓试空。"
+    elif low_swept and not close_below_support:
         event_type = "liquidity_sweep_low_reversal_candidate"
         suggested_direction = "conditional_long"
         urgency = "high"
-        interpretation = "插针扫过前低后未收盘跌破，优先按假跌破/反弹候选处理，等待右侧确认。"
+        interpretation = "插针扫过前低后未收盘跌破，启动右侧多头状态；先等收盘确认，直接上涨时仅允许受追价保护的小仓试多。"
     elif shock_move:
         urgency = "high"
         if confirmation_price is not None and close >= confirmation_price:
@@ -293,6 +389,7 @@ def _build_event_context(
             "short_breakdown_price": _round(short_breakdown),
             "stop_buffer_atr": _round(invalidation_buffer),
         },
+        "right_side": right_side,
         "interpretation": interpretation,
     }
 
@@ -425,9 +522,15 @@ def build_crypto_technical_context(
     event_context = _build_event_context(
         bars,
         close=close,
+        recent_high=recent_high,
         recent_low=recent_low,
+        high_swept=bool(high_swept),
         low_swept=bool(low_swept),
+        close_above_resistance=bool(close_above_resistance),
         close_below_support=bool(close_below_support),
+        latest_open=_safe_float(latest.get("open")),
+        latest_high=high,
+        latest_low=low,
         atr14=atr14,
         vwap=vwap,
         ema20=ema20,
@@ -502,9 +605,9 @@ def _infer_bias(context: Optional[Dict[str, Any]]) -> str:
     elif vwap_position == "below":
         bearish_score += 1
 
-    if price_action in {"breakout", "bullish_push"}:
+    if price_action in {"breakout", "bullish_push", "liquidity_sweep_low"}:
         bullish_score += 1
-    elif price_action in {"breakdown", "bearish_push"}:
+    elif price_action in {"breakdown", "bearish_push", "liquidity_sweep_high"}:
         bearish_score += 1
 
     if bullish_score > bearish_score:
