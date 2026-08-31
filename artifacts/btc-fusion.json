@@ -1,5 +1,5 @@
 {
-  "model_version": "btc-transformer-multitask-wf-v2",
+  "model_version": "btc-transformer-multitask-wf-v4",
   "architecture": "fusion",
   "mode": "offline_research",
   "participates_in_decision": false,
@@ -11,23 +11,33 @@
     },
     "bar_hours": 1.0,
     "neutral_band": 0.002,
+    "neutral_bands": {
+      "1h": 0.002,
+      "4h": 0.004,
+      "24h": 0.01
+    },
     "sequence_length": 64,
     "patch_length": 16,
     "stride": 8,
     "d_model": 32,
     "n_heads": 4,
     "layers": 1,
-    "epochs": 1,
-    "batch_size": 256,
+    "epochs": 3,
+    "batch_size": 1024,
     "learning_rate": 0.0001,
     "folds": 3,
-    "min_train_samples": 336,
-    "validation_samples": 48,
+    "min_train_samples": 1008,
+    "validation_samples": 168,
     "purge_samples": 48,
     "seed": 7,
     "device": "cpu",
     "class_weighted_loss": true,
-    "direction_consistency_weight": 0.25,
+    "target_clip_sigma": 5.0,
+    "return_loss_weight": 0.25,
+    "volatility_loss_weight": 0.1,
+    "direction_loss_weight": 1.0,
+    "regime_loss_weight": 0.25,
+    "direction_consistency_weight": 0.0,
     "trading_cost_bps": 10.0,
     "min_signal_edge_bps": 5.0,
     "signal_confidence_threshold": 0.55
@@ -43,8 +53,8 @@
     "abstain_on_conflict": true
   },
   "data_quality": "available",
-  "source_sample_count": 57000,
-  "feature_count": 49,
+  "source_sample_count": 57343,
+  "feature_count": 98,
   "feature_columns": [
     "feature_log_return_1",
     "feature_open_close_return",
@@ -94,130 +104,274 @@
     "feature_volume_zscore_192",
     "feature_range_position_192",
     "feature_vwap_deviation_24",
-    "feature_bollinger_position_24"
+    "feature_bollinger_position_24",
+    "feature_funding_rate",
+    "feature_funding_rate_missing",
+    "feature_funding_complete",
+    "feature_funding_complete_missing",
+    "feature_open_interest",
+    "feature_open_interest_missing",
+    "feature_open_interest_change",
+    "feature_basis",
+    "feature_basis_missing",
+    "feature_basis_change",
+    "feature_liquidation_long",
+    "feature_liquidation_long_missing",
+    "feature_liquidation_short",
+    "feature_liquidation_short_missing",
+    "feature_long_short_ratio",
+    "feature_long_short_ratio_missing",
+    "feature_bid_depth",
+    "feature_bid_depth_missing",
+    "feature_bid_depth_change",
+    "feature_ask_depth",
+    "feature_ask_depth_missing",
+    "feature_ask_depth_change",
+    "feature_spread",
+    "feature_spread_missing",
+    "feature_ofi",
+    "feature_ofi_missing",
+    "feature_eth_close",
+    "feature_eth_close_missing",
+    "feature_eth_close_change",
+    "feature_sol_close",
+    "feature_sol_close_missing",
+    "feature_sol_close_change",
+    "feature_dxy_close",
+    "feature_dxy_close_missing",
+    "feature_dxy_close_change",
+    "feature_nasdaq_close",
+    "feature_nasdaq_close_missing",
+    "feature_nasdaq_close_change",
+    "feature_vix_close",
+    "feature_vix_close_missing",
+    "feature_vix_close_change",
+    "feature_mark_close",
+    "feature_mark_close_missing",
+    "feature_mark_close_change",
+    "feature_mark_close_basis",
+    "feature_execution_close",
+    "feature_execution_close_missing",
+    "feature_execution_close_change",
+    "feature_execution_close_basis"
   ],
-  "forecasts": {
+  "target_scales": {
     "1h": {
-      "return": -0.008897759020328522,
-      "volatility": 0.16299481689929962,
-      "direction_probabilities": [
-        0.27618834252012425,
-        0.46075892319011447,
-        0.26305273428976134
-      ],
-      "direction": "neutral",
-      "regime": "sideways",
-      "calibration_temperature": 0.8,
-      "trade_signal": {
-        "action": "hold",
-        "direction": "neutral",
-        "confidence": 0.46075892319011447,
-        "expected_return": -0.008897759020328522,
-        "required_return": 0.0015,
-        "trading_cost_bps": 10.0,
-        "min_signal_edge_bps": 5.0,
-        "confidence_threshold": 0.55,
-        "reason": "low_confidence"
-      },
-      "as_of": "2026-08-15 00:00:00+00:00"
+      "return": 0.00892618112266064,
+      "volatility": 0.00892618112266064
     },
     "4h": {
-      "return": 0.06378135085105896,
-      "volatility": 0.24701765179634094,
-      "direction_probabilities": [
-        0.2924217193740822,
-        0.37148070989523724,
-        0.3360975707306805
-      ],
-      "direction": "neutral",
-      "regime": "sideways",
-      "calibration_temperature": 3.0,
-      "trade_signal": {
-        "action": "hold",
-        "direction": "neutral",
-        "confidence": 0.3714807098952373,
-        "expected_return": 0.06378135085105896,
-        "required_return": 0.0015,
-        "trading_cost_bps": 10.0,
-        "min_signal_edge_bps": 5.0,
-        "confidence_threshold": 0.55,
-        "reason": "low_confidence"
-      },
-      "as_of": "2026-08-15 00:00:00+00:00"
+      "return": 0.01880279369652272,
+      "volatility": 0.009599005617201329
     },
     "24h": {
-      "return": -0.16673915088176727,
-      "volatility": 0.26121988892555237,
+      "return": 0.047915322333574296,
+      "volatility": 0.009354071319103242
+    }
+  },
+  "forecasts": {
+    "1h": {
+      "return": -0.00040524204884681575,
+      "volatility": 0.0035712134558707476,
       "direction_probabilities": [
-        0.3105459576121991,
-        0.35360118895225234,
-        0.3358528534355485
+        0.3256916916857219,
+        0.33277253427775344,
+        0.34153577403652474
       ],
-      "direction": "neutral",
+      "direction": "up",
       "regime": "sideways",
       "calibration_temperature": 3.0,
       "trade_signal": {
         "action": "hold",
-        "direction": "neutral",
-        "confidence": 0.35360118895225234,
-        "expected_return": -0.16673915088176727,
+        "direction": "up",
+        "confidence": 0.34153577403652474,
+        "expected_return": -0.00040524204884681575,
         "required_return": 0.0015,
         "trading_cost_bps": 10.0,
         "min_signal_edge_bps": 5.0,
         "confidence_threshold": 0.55,
         "reason": "low_confidence"
       },
-      "as_of": "2026-08-15 00:00:00+00:00"
+      "as_of": "2026-08-29 07:00:00+00:00"
+    },
+    "4h": {
+      "return": -0.0012114237614151567,
+      "volatility": 0.004313236568123102,
+      "direction_probabilities": [
+        0.35960019225137096,
+        0.3069245852832732,
+        0.33347522246535577
+      ],
+      "direction": "down",
+      "regime": "trend_up",
+      "calibration_temperature": 3.0,
+      "trade_signal": {
+        "action": "hold",
+        "direction": "down",
+        "confidence": 0.359600192251371,
+        "expected_return": -0.0012114237614151567,
+        "required_return": 0.0015,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "confidence_threshold": 0.55,
+        "reason": "low_confidence"
+      },
+      "as_of": "2026-08-29 07:00:00+00:00"
+    },
+    "24h": {
+      "return": -0.0009036257347183719,
+      "volatility": 0.005939902737736702,
+      "direction_probabilities": [
+        0.27870585334220993,
+        0.36446542133378573,
+        0.3568287253240044
+      ],
+      "direction": "neutral",
+      "regime": "trend_up",
+      "calibration_temperature": 0.9,
+      "trade_signal": {
+        "action": "hold",
+        "direction": "neutral",
+        "confidence": 0.36446542133378573,
+        "expected_return": -0.0009036257347183719,
+        "required_return": 0.0015,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "confidence_threshold": 0.55,
+        "reason": "low_confidence"
+      },
+      "as_of": "2026-08-29 07:00:00+00:00"
     }
   },
   "evaluations": {
     "1h": {
       "fold_count": 3,
-      "samples": 144,
-      "return_mae": 0.17123765,
-      "volatility_mae": 0.43641407,
-      "direction_accuracy": 0.59027778,
-      "regime_accuracy": 0.59027778,
-      "majority_direction_accuracy": 0.51388889,
-      "direction_brier": 0.19988722,
+      "samples": 504,
+      "direction_confusion_matrix": [
+        [
+          1,
+          53,
+          77
+        ],
+        [
+          3,
+          126,
+          93
+        ],
+        [
+          5,
+          58,
+          88
+        ]
+      ],
+      "predicted_direction_counts": [
+        9,
+        237,
+        258
+      ],
+      "actual_direction_counts": [
+        131,
+        222,
+        151
+      ],
+      "return_mae": 0.00603857,
+      "volatility_mae": 0.0048401,
+      "direction_accuracy": 0.4265873,
+      "regime_accuracy": 0.35714286,
+      "majority_direction_accuracy": 0.44047619,
+      "direction_brier": 0.22361999,
       "trading": {
-        "trades": 8,
-        "signal_rate": 0.05555556,
-        "net_return": 0.011921,
-        "avg_net_return": 0.00149013,
-        "win_rate": 0.5,
-        "profit_factor": 1.75530161,
-        "max_drawdown": 0.01457737
+        "trades": 0,
+        "signal_rate": 0.0,
+        "net_return": 0.0,
+        "avg_net_return": null,
+        "win_rate": null,
+        "profit_factor": null,
+        "max_drawdown": 0.0
       }
     },
     "4h": {
       "fold_count": 3,
-      "samples": 144,
-      "return_mae": 0.14198692,
-      "volatility_mae": 0.42409734,
-      "direction_accuracy": 0.40972222,
-      "regime_accuracy": 0.47222222,
-      "majority_direction_accuracy": 0.30555556,
-      "direction_brier": 0.25091376,
+      "samples": 504,
+      "direction_confusion_matrix": [
+        [
+          40,
+          40,
+          65
+        ],
+        [
+          63,
+          89,
+          53
+        ],
+        [
+          41,
+          38,
+          75
+        ]
+      ],
+      "predicted_direction_counts": [
+        144,
+        167,
+        193
+      ],
+      "actual_direction_counts": [
+        145,
+        205,
+        154
+      ],
+      "return_mae": 0.00931233,
+      "volatility_mae": 0.00336597,
+      "direction_accuracy": 0.4047619,
+      "regime_accuracy": 0.35119048,
+      "majority_direction_accuracy": 0.43452381,
+      "direction_brier": 0.23038815,
       "trading": {
-        "trades": 39,
-        "signal_rate": 0.27083333,
-        "net_return": -0.19027675,
-        "avg_net_return": -0.00487889,
-        "win_rate": 0.30769231,
-        "profit_factor": 0.31244631,
-        "max_drawdown": 0.19397187
+        "trades": 11,
+        "signal_rate": 0.0218254,
+        "net_return": -0.01991924,
+        "avg_net_return": -0.00181084,
+        "win_rate": 0.45454545,
+        "profit_factor": 0.61172567,
+        "max_drawdown": 0.03239913
       }
     },
     "24h": {
       "fold_count": 3,
-      "samples": 144,
-      "return_mae": 0.13817544,
-      "volatility_mae": 0.39974638,
-      "direction_accuracy": 0.21527778,
-      "regime_accuracy": 0.17361111,
-      "majority_direction_accuracy": 0.48611111,
-      "direction_brier": 0.24874142,
+      "samples": 504,
+      "direction_confusion_matrix": [
+        [
+          37,
+          43,
+          77
+        ],
+        [
+          28,
+          72,
+          77
+        ],
+        [
+          17,
+          42,
+          111
+        ]
+      ],
+      "predicted_direction_counts": [
+        82,
+        157,
+        265
+      ],
+      "actual_direction_counts": [
+        157,
+        177,
+        170
+      ],
+      "return_mae": 0.03410528,
+      "volatility_mae": 0.00257138,
+      "direction_accuracy": 0.43650794,
+      "regime_accuracy": 0.38095238,
+      "majority_direction_accuracy": 0.36507937,
+      "direction_brier": 0.21425113,
       "trading": {
         "trades": 0,
         "signal_rate": 0.0,
@@ -233,33 +387,33 @@
     "folds": [
       {
         "train_start": 0,
-        "train_end": 336,
-        "validation_start": 384,
-        "validation_end": 432,
+        "train_end": 1008,
+        "validation_start": 1056,
+        "validation_end": 1224,
         "purge_samples": 48,
         "fold": 1,
-        "train_samples": 336,
-        "validation_samples": 48
+        "train_samples": 1008,
+        "validation_samples": 168
       },
       {
         "train_start": 0,
-        "train_end": 28620,
-        "validation_start": 28668,
-        "validation_end": 28716,
+        "train_end": 29067,
+        "validation_start": 29115,
+        "validation_end": 29283,
         "purge_samples": 48,
         "fold": 2,
-        "train_samples": 28620,
-        "validation_samples": 48
+        "train_samples": 29067,
+        "validation_samples": 168
       },
       {
         "train_start": 0,
-        "train_end": 56904,
-        "validation_start": 56952,
-        "validation_end": 57000,
+        "train_end": 57127,
+        "validation_start": 57175,
+        "validation_end": 57343,
         "purge_samples": 48,
         "fold": 3,
-        "train_samples": 56904,
-        "validation_samples": 48
+        "train_samples": 57127,
+        "validation_samples": 168
       }
     ]
   },

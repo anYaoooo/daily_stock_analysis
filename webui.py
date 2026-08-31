@@ -39,9 +39,12 @@ def main() -> int:
         import uvicorn
         from src.config import setup_env
         from src.logging_config import setup_logging
+        from src.webui_frontend import prepare_webui_frontend_assets
 
         setup_env()
         setup_logging(log_prefix="web_server")
+        if not prepare_webui_frontend_assets():
+            logger.warning("WebUI 前端静态资源未准备完成，将继续启动 API 服务")
 
         uvicorn.run(
             "api.app:app",

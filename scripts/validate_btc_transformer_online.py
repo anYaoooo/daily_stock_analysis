@@ -13,17 +13,16 @@ import argparse
 import json
 import math
 import sys
-from datetime import timedelta
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
-import numpy as np
 import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.services.btc_transformer import (  # noqa: E402
+    DEFAULT_NEUTRAL_BANDS,
     TransformerFeatureConfig,
     TransformerTrainingConfig,
     WalkForwardTransformerTrainer,
@@ -33,6 +32,7 @@ from src.services.btc_transformer import (  # noqa: E402
 DEFAULT_INPUT = Path("data/btc_okx_perpetual_1h_training.csv")
 DEFAULT_OUTPUT = Path("artifacts/btc-transformer-online-validation.json")
 DEFAULT_HORIZONS = {"1h": 1, "4h": 4, "24h": 24}
+DEFAULT_NEUTRAL_BANDS_BPS = {name: value * 10000.0 for name, value in DEFAULT_NEUTRAL_BANDS.items()}
 
 
 def _parse_horizons(value: str) -> dict[str, int]:
@@ -53,6 +53,19 @@ def _parse_horizons(value: str) -> dict[str, int]:
     return result
 
 
+def _parse_neutral_bands(value: str) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for item in str(value or "").split(","):
+        name, separator, bps = item.partition(":")
+        if not separator or not name.strip():
+            raise argparse.ArgumentTypeError("neutral bands 应为 horizon:bps,horizon:bps")
+        try:
+            result[name.strip()] = max(0.0, float(bps))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"无效 neutral band bps: {bps}") from exc
+    return result
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="BTC Transformer 长周期训练与在线样本外验证。")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="包含最新闭合 K 线的 CSV 路径。")
@@ -60,20 +73,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--architecture", choices=("patchtst", "itransformer", "fusion", "all"), default="all")
     parser.add_argument("--horizons", type=_parse_horizons, default=dict(DEFAULT_HORIZONS))
     parser.add_argument("--holdout-hours", type=int, default=24, help="在线验证 cutoff 距最新闭合小时的距离。")
-    parser.add_argument("--sequence-length", type=int, default=64)
+    parser.add_argument("--sequence-length", type=int, default=256)
     parser.add_argument("--patch-length", type=int, default=16)
     parser.add_argument("--stride", type=int, default=8)
-    parser.add_argument("--d-model", type=int, default=32)
-    parser.add_argument("--heads", type=int, default=4)
-    parser.add_argument("--layers", type=int, default=1)
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--d-model", type=int, default=128)
+    parser.add_argument("--heads", type=int, default=8)
+    parser.add_argument("--layers", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--folds", type=int, default=1)
-    parser.add_argument("--min-train-samples", type=int, default=336)
-    parser.add_argument("--validation-samples", type=int, default=48)
+    parser.add_argument("--folds", type=int, default=6)
+    parser.add_argument("--min-train-samples", type=int, default=1008)
+    parser.add_argument("--validation-samples", type=int, default=168)
     parser.add_argument("--purge-samples", type=int, default=48)
     parser.add_argument("--neutral-band-bps", type=float, default=20.0)
+    parser.add_argument(
+        "--neutral-band-bps-by-horizon",
+        type=_parse_neutral_bands,
+        default=dict(DEFAULT_NEUTRAL_BANDS_BPS),
+        help="按 horizon 覆盖中性区间，例如 1h:20,4h:40,24h:100。",
+    )
     parser.add_argument("--target-clip-sigma", type=float, default=5.0)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=7)
@@ -95,6 +114,7 @@ def _realized_targets(
     horizons: dict[str, int],
     bar_hours: float,
     neutral_band: float,
+    neutral_bands: Optional[Mapping[str, float]] = None,
 ) -> dict[str, Optional[dict[str, Any]]]:
     frame = bars.copy()
     frame["date"] = pd.to_datetime(frame["date"], utc=True, errors="coerce")
@@ -112,10 +132,11 @@ def _realized_targets(
             targets[name] = None
             continue
         realized_return = float(math.log(future_close / start_close))
+        band = float((neutral_bands or {}).get(name, neutral_band))
         targets[name] = {
             "as_of": str(future_at),
             "return": realized_return,
-            "direction": _direction(realized_return, neutral_band),
+            "direction": _direction(realized_return, band),
             "start_close": start_close,
             "future_close": future_close,
         }
@@ -166,12 +187,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     architectures = ("patchtst", "itransformer", "fusion") if args.architecture == "all" else (args.architecture,)
     neutral_band = max(0.0, float(args.neutral_band_bps)) / 10000.0
+    neutral_bands = {
+        name: max(0.0, float(value)) / 10000.0
+        for name, value in (args.neutral_band_bps_by_horizon or {}).items()
+    }
     realized = _realized_targets(
         bars,
         cutoff=cutoff,
         horizons=args.horizons,
         bar_hours=1.0,
         neutral_band=neutral_band,
+        neutral_bands=neutral_bands,
     )
     results: dict[str, Any] = {}
     for architecture in architectures:
@@ -180,6 +206,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             sequence_length=args.sequence_length,
             bar_hours=1.0,
             neutral_band=neutral_band,
+            neutral_bands=neutral_bands,
         )
         config = TransformerTrainingConfig(
             feature=feature_config,
@@ -223,6 +250,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         }
     output = {
         "mode": "offline_trained_online_holdout",
+        "research_only": True,
+        "participates_in_decision": False,
+        "eligible_for_promotion": False,
+        "promotion_eligible": False,
         "source": str(args.input),
         "source_latest_closed": str(latest_open),
         "cutoff": str(cutoff),

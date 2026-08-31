@@ -16,14 +16,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.services.btc_transformer import (  # noqa: E402
+    DEFAULT_RESEARCH_SEEDS,
+    DEFAULT_NEUTRAL_BANDS,
     TransformerFeatureConfig,
     TransformerTrainingConfig,
     WalkForwardTransformerTrainer,
+    run_research_experiment,
 )
 
 
 DEFAULT_INPUT = Path("data/btc_okx_perpetual_1h_training.csv")
 DEFAULT_HOURLY_HORIZONS = {"1h": 1, "4h": 4, "24h": 24}
+DEFAULT_NEUTRAL_BANDS_BPS = {name: value * 10000.0 for name, value in DEFAULT_NEUTRAL_BANDS.items()}
 
 
 def _parse_horizons(value: str) -> dict[str, int]:
@@ -39,6 +43,33 @@ def _parse_horizons(value: str) -> dict[str, int]:
     return result
 
 
+def _parse_neutral_bands(value: str) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for item in str(value or "").split(","):
+        name, separator, bps = item.partition(":")
+        if not separator or not name.strip():
+            raise argparse.ArgumentTypeError("neutral bands 应为 horizon:bps,horizon:bps，例如 1h:20,4h:40,24h:100")
+        try:
+            result[name.strip()] = max(0.0, float(bps))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"无效 neutral band bps: {bps}") from exc
+    return result
+
+
+def _parse_seeds(value: str) -> list[int]:
+    try:
+        seeds = [int(item.strip()) for item in str(value or "").split(",") if item.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("seeds 应为逗号分隔的整数，例如 7,13,29,43,71") from exc
+    if len(set(seeds)) < 5:
+        raise argparse.ArgumentTypeError("研究模式至少需要 5 个不同 seed")
+    return list(dict.fromkeys(seeds))
+
+
+def _parse_ablation_features(value: str) -> list[str]:
+    return list(dict.fromkeys(item.strip() for item in str(value or "").split(",") if item.strip()))
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="离线训练 BTC PatchTST/iTransformer 多任务研究模型。")
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="OHLCV CSV 路径。")
@@ -51,15 +82,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--heads", type=int, default=8)
     parser.add_argument("--layers", type=int, default=3)
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--min-train-samples", type=int, default=336)
-    parser.add_argument("--validation-samples", type=int, default=48)
+    parser.add_argument("--min-train-samples", type=int, default=1008)
+    parser.add_argument("--validation-samples", type=int, default=168)
     parser.add_argument("--purge-samples", type=int, default=48)
-    parser.add_argument("--folds", type=int, default=3)
+    parser.add_argument("--folds", type=int, default=12)
     parser.add_argument("--bar-hours", type=float, default=1.0, help="每根 K 线覆盖小时数，5m 数据为 0.0833333。")
     parser.add_argument("--neutral-band-bps", type=float, default=20.0, help="方向标签的中性区间（基点），区间内不产生多空标签。")
+    parser.add_argument(
+        "--neutral-band-bps-by-horizon",
+        type=_parse_neutral_bands,
+        default=dict(DEFAULT_NEUTRAL_BANDS_BPS),
+        help="按 horizon 覆盖中性区间，例如 1h:20,4h:40,24h:100；未列出的 horizon 使用 --neutral-band-bps。",
+    )
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="cpu", help="PyTorch 设备，例如 cpu、cuda 或 cuda:0；默认 cpu。")
     parser.add_argument("--target-clip-sigma", type=float, default=5.0, help="回归目标按训练折稳健缩放后的裁剪范围，默认 ±5。")
@@ -67,6 +104,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-signal-edge-bps", type=float, default=5.0, help="除交易成本外要求的最小预期收益缓冲（基点）。")
     parser.add_argument("--signal-confidence-threshold", type=float, default=0.55, help="方向概率进入交易信号所需的最低置信度。")
     parser.add_argument("--direction-consistency-weight", type=float, default=0.0, help="收益回归与方向概率一致性损失的权重；默认关闭，避免长周期噪声压制方向分类。")
+    parser.add_argument("--research", action="store_true", help="运行至少 5 个 seed 的固定窗口研究并保存 OOF 预测。")
+    parser.add_argument("--seeds", type=_parse_seeds, default=list(DEFAULT_RESEARCH_SEEDS), help="研究模式 seed 列表，至少 5 个不同值。")
+    parser.add_argument("--ablation-features", type=_parse_ablation_features, default=[], help="研究模式下按逗号指定单变量消融特征。")
     return parser
 
 
@@ -79,6 +119,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             sequence_length=args.sequence_length,
             bar_hours=args.bar_hours,
             neutral_band=max(0.0, args.neutral_band_bps) / 10000.0,
+            neutral_bands={name: value / 10000.0 for name, value in args.neutral_band_bps_by_horizon.items()}
+            if args.neutral_band_bps_by_horizon
+            else {},
         )
         config = TransformerTrainingConfig(
             feature=feature_config,
@@ -103,7 +146,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             signal_confidence_threshold=args.signal_confidence_threshold,
             direction_consistency_weight=args.direction_consistency_weight,
         )
-        result = WalkForwardTransformerTrainer(config).build(bars)
+        if args.research:
+            result = run_research_experiment(
+                bars,
+                config=config,
+                architectures=(args.architecture,),
+                seeds=args.seeds,
+                ablation_features=args.ablation_features,
+            )
+        else:
+            result = WalkForwardTransformerTrainer(config).build(bars)
         payload = json.dumps(result, ensure_ascii=False, indent=2)
         if args.output:
             args.output.parent.mkdir(parents=True, exist_ok=True)

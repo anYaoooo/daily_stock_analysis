@@ -56,6 +56,10 @@ vi.mock('./pages/TokenUsagePage', () => ({
   default: () => <div data-testid="token-usage-page">Usage</div>,
 }));
 
+vi.mock('./pages/BtcTrainingPage', () => ({
+  default: () => <div data-testid="btc-training-page">Training</div>,
+}));
+
 vi.mock('./pages/SettingsPage', () => ({
   default: () => <div data-testid="settings-page">Settings</div>,
 }));
@@ -136,6 +140,15 @@ describe('App routing behavior', () => {
     expect(await screen.findByTestId('token-usage-page')).toBeInTheDocument();
     expect(setCurrentRoute).toHaveBeenCalledWith('/usage');
     expect(screen.queryByTestId('home-page')).not.toBeInTheDocument();
+  });
+
+  it('routes /training to the BTC training research page', async () => {
+    window.history.pushState({}, '', '/training');
+
+    render(<App />);
+
+    expect(await screen.findByTestId('btc-training-page')).toBeInTheDocument();
+    expect(setCurrentRoute).toHaveBeenCalledWith('/training');
   });
 
   it('redirects authenticated login visits back to the home page', async () => {

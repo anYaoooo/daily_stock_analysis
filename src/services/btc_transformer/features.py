@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
@@ -11,6 +12,8 @@ import pandas as pd
 
 
 DEFAULT_TRANSFORMER_HORIZONS = {"15m": 3, "1h": 12, "4h": 48}
+DEFAULT_NEUTRAL_BANDS = {"1h": 0.002, "4h": 0.004, "24h": 0.01}
+FEATURE_SET_VERSION = "btc-transformer-available-features-v2"
 REGIME_LABELS = ("trend_up", "trend_down", "high_volatility", "sideways")
 
 
@@ -25,6 +28,7 @@ class TransformerFeatureConfig:
     horizons: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_TRANSFORMER_HORIZONS))
     sequence_length: int = 256
     neutral_band: float = 0.002
+    neutral_bands: Mapping[str, float] = field(default_factory=lambda: dict(DEFAULT_NEUTRAL_BANDS))
     regime_volatility_threshold: float = 0.02
     bar_hours: float = 1.0 / 12.0
 
@@ -37,14 +41,42 @@ class TransformerFeatureConfig:
         object.__setattr__(self, "horizons", horizons)
         object.__setattr__(self, "sequence_length", max(8, int(self.sequence_length)))
         object.__setattr__(self, "neutral_band", max(0.0, float(self.neutral_band)))
+        bands = {
+            str(name).strip(): max(0.0, float(value))
+            for name, value in dict(self.neutral_bands).items()
+            if str(name).strip()
+        }
+        object.__setattr__(self, "neutral_bands", bands)
         object.__setattr__(self, "regime_volatility_threshold", max(0.0, float(self.regime_volatility_threshold)))
         object.__setattr__(self, "bar_hours", max(1.0 / 3600.0, float(self.bar_hours)))
+
+    def neutral_band_for(self, horizon: str) -> float:
+        """Return the configured return threshold for one forecast horizon."""
+
+        return float(self.neutral_bands.get(str(horizon), self.neutral_band))
 
 
 def _normalize_bars(bars: pd.DataFrame) -> pd.DataFrame:
     if bars is None or bars.empty:
         return pd.DataFrame()
     frame = bars.copy()
+    # Exchange exports use several names for the same aligned derivative
+    # fields.  Normalize them before feature construction so the CSV schema
+    # does not silently decide which information reaches the model.
+    aliases = {
+        "funding_rate": ("funding_rate", "funding_rates", "fundingRate"),
+        "open_interest": ("open_interest", "openInterest", "oi"),
+        "mark_close": ("mark_close", "markPrice", "mark_price"),
+        "execution_close": ("execution_close", "exec_close", "executionPrice"),
+        "funding_complete": ("funding_complete",),
+    }
+    columns_by_lower = {str(column).lower(): column for column in frame.columns}
+    for canonical, candidates in aliases.items():
+        if canonical in frame.columns:
+            continue
+        source = next((columns_by_lower.get(str(candidate).lower()) for candidate in candidates if str(candidate).lower() in columns_by_lower), None)
+        if source is not None:
+            frame[canonical] = frame[source]
     timestamp_column = "date" if "date" in frame.columns else "timestamp" if "timestamp" in frame.columns else None
     if timestamp_column is None:
         raise ValueError("bars must include a date or timestamp column")
@@ -77,16 +109,53 @@ def _rsi(close: pd.Series, window: int = 14) -> pd.Series:
     return 100.0 - 100.0 / (1.0 + rs)
 
 
-def _regime(return_value: Any, volatility: Any, config: TransformerFeatureConfig) -> Optional[str]:
+def _regime(
+    return_value: Any,
+    volatility: Any,
+    config: TransformerFeatureConfig,
+    neutral_band: Optional[float] = None,
+) -> Optional[str]:
     if pd.isna(return_value) or pd.isna(volatility):
         return None
     if float(volatility) >= config.regime_volatility_threshold:
         return "high_volatility"
-    if float(return_value) > config.neutral_band:
+    band = config.neutral_band if neutral_band is None else float(neutral_band)
+    if float(return_value) > band:
         return "trend_up"
-    if float(return_value) < -config.neutral_band:
+    if float(return_value) < -band:
         return "trend_down"
     return "sideways"
+
+
+def _optional_numeric(value: Any) -> float:
+    """Parse scalar or exchange-list values without treating empty lists as zero."""
+
+    if isinstance(value, (bool, np.bool_)):
+        return float(value)
+    if isinstance(value, (list, tuple, np.ndarray)):
+        if isinstance(value, np.ndarray) and value.ndim == 0:
+            value = value.item()
+        else:
+            value = value[-1] if len(value) else np.nan
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                return np.nan
+            if isinstance(parsed, (list, tuple)):
+                value = parsed[-1] if parsed else np.nan
+            else:
+                value = parsed
+        if value == "":
+            return np.nan
+        if isinstance(value, str) and value.lower() in {"true", "false"}:
+            return 1.0 if value.lower() == "true" else 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
 
 
 def build_transformer_feature_frame(
@@ -159,36 +228,65 @@ def build_transformer_feature_frame(
         / (2.0 * close.rolling(24, min_periods=24).std(ddof=0).replace(0, np.nan))
     )
 
-    # Preserve aligned derivatives and cross-asset inputs when present.  No
-    # synthetic neutral values are created for missing optional columns.
+    # Preserve aligned derivatives and cross-asset inputs when present.  Sparse
+    # exchange fields are carried forward causally and paired with a missing
+    # mask, so a missing feed cannot delete otherwise valid OHLCV windows.
     external_columns = (
-        "funding_rate", "open_interest", "basis", "liquidation_long", "liquidation_short",
+        "funding_rate", "funding_complete", "open_interest", "basis", "liquidation_long", "liquidation_short",
         "long_short_ratio", "bid_depth", "ask_depth", "spread", "ofi", "eth_close", "sol_close",
-        "dxy_close", "nasdaq_close", "vix_close",
+        "dxy_close", "nasdaq_close", "vix_close", "mark_close", "execution_close",
     )
     for column in external_columns:
+        # Do not manufacture channels for fields that are absent from the
+        # source export.  Previously every optional field produced a constant
+        # value/missing-mask pair, inflating the feature block from the
+        # actually available ~61 channels to 98 and making ablations
+        # indistinguishable from a missing feed.
         if column not in frame.columns:
             continue
-        series = pd.to_numeric(frame[column], errors="coerce")
-        result[f"feature_{column}"] = series
+        source = frame[column]
+        series = source.map(_optional_numeric)
+        if not series.notna().any():
+            continue
+        missing = series.isna()
+        # A present but constant optional feed is just as uninformative as an
+        # absent feed. Keep a sparse field when its missingness carries signal,
+        # otherwise omit the entire channel family.
+        if series.dropna().nunique() <= 1 and not missing.any():
+            continue
+        result[f"feature_{column}"] = series.ffill().fillna(0.0)
+        result[f"feature_{column}_missing"] = missing.astype(float)
         if column.endswith("_close") or column in {"open_interest", "basis", "bid_depth", "ask_depth"}:
-            result[f"feature_{column}_change"] = series.pct_change().replace([np.inf, -np.inf], np.nan)
+            result[f"feature_{column}_change"] = series.ffill().pct_change().replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        if column in {"mark_close", "execution_close"}:
+            result[f"feature_{column}_basis"] = (series.ffill() / close - 1.0).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
+    # Consolidate the feature block before adding the horizon target columns;
+    # long histories otherwise trigger pandas' fragmented-frame slow path.
+    result = result.copy()
     for name, horizon in cfg.horizons.items():
+        neutral_band = cfg.neutral_band_for(name)
         future_return = np.log(close.shift(-horizon) / close)
         next_returns = pd.concat([log_return.shift(-offset) for offset in range(1, horizon + 1)], axis=1)
         future_volatility = np.sqrt(next_returns.pow(2).mean(axis=1, skipna=False))
         result[f"target_return_{name}"] = future_return
         result[f"target_direction_{name}"] = np.select(
-            [future_return > cfg.neutral_band, future_return < -cfg.neutral_band], [1, -1], default=0
+            [future_return > neutral_band, future_return < -neutral_band], [1, -1], default=0
         ).astype(float)
         result[f"target_volatility_{name}"] = future_volatility
         result[f"target_regime_{name}"] = [
-            _regime(return_value, volatility, cfg)
+            _regime(return_value, volatility, cfg, neutral_band)
             for return_value, volatility in zip(future_return, future_volatility)
         ]
 
     return result.replace([np.inf, -np.inf], np.nan)
 
 
-__all__ = ["DEFAULT_TRANSFORMER_HORIZONS", "REGIME_LABELS", "TransformerFeatureConfig", "build_transformer_feature_frame"]
+__all__ = [
+    "DEFAULT_NEUTRAL_BANDS",
+    "DEFAULT_TRANSFORMER_HORIZONS",
+    "FEATURE_SET_VERSION",
+    "REGIME_LABELS",
+    "TransformerFeatureConfig",
+    "build_transformer_feature_frame",
+]

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .dataset import SequenceData, SequenceDataset, build_sequences, latest_sequence
-from .features import TransformerFeatureConfig, build_transformer_feature_frame
+from .features import FEATURE_SET_VERSION, TransformerFeatureConfig, build_transformer_feature_frame
 from .models import MultiTaskTransformer, ProbabilityCalibrator
 
 try:
@@ -24,12 +24,12 @@ except ImportError:  # pragma: no cover
     DataLoader = None  # type: ignore[assignment]
 
 
-MODEL_VERSION = "btc-transformer-multitask-wf-v3"
+MODEL_VERSION = "btc-transformer-multitask-wf-v5-available-features"
 
 
 @dataclass(frozen=True)
 class TransformerTrainingConfig:
-    """Conservative defaults for CPU-friendly research experiments."""
+    """Research defaults sized for repeatable out-of-fold evaluation."""
 
     feature: TransformerFeatureConfig = field(default_factory=TransformerFeatureConfig)
     architecture: str = "patchtst"
@@ -39,13 +39,13 @@ class TransformerTrainingConfig:
     n_heads: int = 8
     layers: int = 3
     dropout: float = 0.1
-    epochs: int = 5
+    epochs: int = 20
     batch_size: int = 128
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
-    folds: int = 3
-    min_train_samples: int = 336
-    validation_samples: int = 48
+    folds: int = 12
+    min_train_samples: int = 1008
+    validation_samples: int = 168
     purge_samples: int = 48
     seed: int = 7
     device: str = "cpu"
@@ -436,21 +436,42 @@ class WalkForwardTransformerTrainer:
                     collected[horizon]["regime"].append(outputs["regime"][horizon].cpu().numpy())
         return {horizon: {name: np.concatenate(values, axis=0) for name, values in tasks.items()} for horizon, tasks in collected.items()}
 
-    def build(self, bars: pd.DataFrame, *, as_of: Any = None) -> dict[str, Any]:
-        """Build features, evaluate purged folds, then fit the latest model."""
+    def build(
+        self,
+        bars: pd.DataFrame,
+        *,
+        as_of: Any = None,
+        feature_columns: Optional[Sequence[str]] = None,
+        feature_frame: Optional[pd.DataFrame] = None,
+    ) -> dict[str, Any]:
+        """Build features, evaluate purged folds, then fit the latest model.
+
+        ``feature_columns`` is intentionally an explicit override so research
+        callers can run a one-variable ablation on the exact same labels and
+        walk-forward windows.  Production callers should leave it unset.
+        """
 
         _require_torch()
         _set_seed(self.config.seed)
-        frame = build_transformer_feature_frame(bars, config=self.config.feature, as_of=as_of)
+        frame = (
+            feature_frame.copy()
+            if feature_frame is not None
+            else build_transformer_feature_frame(bars, config=self.config.feature, as_of=as_of)
+        )
         base: dict[str, Any] = {
             "model_version": MODEL_VERSION,
+            "feature_set_version": FEATURE_SET_VERSION,
             "architecture": self.config.architecture,
             "mode": "offline_research",
             "participates_in_decision": False,
+            "research_only": True,
+            "eligible_for_promotion": False,
+            "promotion_eligible": False,
             "training_config": {
                 "horizons": dict(self.config.feature.horizons),
                 "bar_hours": self.config.feature.bar_hours,
                 "neutral_band": self.config.feature.neutral_band,
+                "neutral_bands": dict(self.config.feature.neutral_bands),
                 "sequence_length": self.config.feature.sequence_length,
                 "patch_length": self.config.patch_length,
                 "stride": self.config.stride,
@@ -485,8 +506,39 @@ class WalkForwardTransformerTrainer:
             },
         }
         if frame.empty:
-            return {**base, "data_quality": "unavailable", "forecasts": {}, "evaluations": {}}
-        feature_columns = tuple(column for column in frame.columns if column.startswith("feature_"))
+            return {**base, "data_quality": "unavailable", "forecasts": {}, "evaluations": {}, "oof_predictions": {}}
+        available_features = tuple(column for column in frame.columns if column.startswith("feature_"))
+        if feature_columns is None:
+            feature_columns = available_features
+        else:
+            requested = tuple(dict.fromkeys(str(column) for column in feature_columns))
+            unknown = [column for column in requested if column not in available_features]
+            if unknown:
+                return {
+                    **base,
+                    "data_quality": "invalid_features",
+                    "reason": f"unknown feature columns: {unknown}",
+                    "source_bar_count": int(len(frame)),
+                    "feature_count": len(requested),
+                    "feature_columns": list(requested),
+                    "forecasts": {},
+                    "evaluations": {},
+                    "oof_predictions": {},
+                }
+            feature_columns = requested
+        feature_columns = tuple(feature_columns)
+        if not feature_columns:
+            return {
+                **base,
+                "data_quality": "invalid_features",
+                "reason": "no feature columns available",
+                "source_bar_count": int(len(frame)),
+                "feature_count": 0,
+                "feature_columns": [],
+                "forecasts": {},
+                "evaluations": {},
+                "oof_predictions": {},
+            }
         try:
             data = build_sequences(
                 frame,
@@ -504,10 +556,17 @@ class WalkForwardTransformerTrainer:
                 "feature_columns": list(feature_columns),
                 "forecasts": {},
                 "evaluations": {},
+                "oof_predictions": {},
             }
         self.feature_columns = data.feature_names
         splits = walk_forward_sequence_splits(data.sample_count, min_train_samples=self.config.min_train_samples, validation_samples=self.config.validation_samples, folds=self.config.folds, purge_samples=self.config.purge_samples)
-        evaluations: dict[str, Any] = {horizon: {"fold_count": 0, "samples": 0} for horizon in data.horizons}
+        evaluations: dict[str, Any] = {
+            horizon: {"fold_count": 0, "samples": 0}
+            for horizon in data.horizons
+        }
+        oof_predictions: dict[str, list[dict[str, Any]]] = {
+            horizon: [] for horizon in data.horizons
+        }
         calibration_logits: dict[str, list[np.ndarray]] = {horizon: [] for horizon in data.horizons}
         calibration_labels: dict[str, list[np.ndarray]] = {horizon: [] for horizon in data.horizons}
         fold_summaries: list[dict[str, Any]] = []
@@ -575,11 +634,42 @@ class WalkForwardTransformerTrainer:
                 current.setdefault("direction_correct", []).extend((direction == actual_direction).tolist())
                 current.setdefault("regime_correct", []).extend((regime == actual_regime).tolist())
                 current.setdefault("majority_direction_correct", []).extend((majority_label == actual_direction).tolist())
+                confusion = current.setdefault("direction_confusion_matrix", [[0, 0, 0] for _ in range(3)])
+                predicted_counts = current.setdefault("predicted_direction_counts", [0, 0, 0])
+                actual_counts = current.setdefault("actual_direction_counts", [0, 0, 0])
+                for actual_label, predicted_label in zip(actual_direction, direction):
+                    actual_index = int(actual_label)
+                    predicted_index = int(predicted_label)
+                    confusion[actual_index][predicted_index] += 1
+                    actual_counts[actual_index] += 1
+                    predicted_counts[predicted_index] += 1
                 current.setdefault("direction_brier", []).extend(
                     np.mean(np.square(probabilities - np.eye(3, dtype=float)[actual_direction]), axis=1).tolist()
                 )
                 current.setdefault("trade_net_returns", []).extend(net_returns.tolist())
                 current.setdefault("trade_signal_mask", []).extend(signal_mask.tolist())
+                # Keep one JSON-compatible row per validation sample.  This is
+                # deliberately collected before aggregate metrics are reduced
+                # so downstream analysis can reproduce any slice or ablation.
+                direction_labels = (-1, 0, 1)
+                regime_labels = ("trend_up", "trend_down", "high_volatility", "sideways")
+                oof_predictions[horizon].extend(
+                    {
+                        "fold": int(fold_number + 1),
+                        "sample_index": int(sample_index),
+                        "timestamp": str(data.timestamps[sample_index]),
+                        "actual_return": float(actual_return[offset]),
+                        "predicted_return": float(predicted_return[offset]),
+                        "actual_volatility": float(actual_vol[offset]),
+                        "predicted_volatility": float(predicted_vol[offset]),
+                        "actual_direction": int(direction_labels[int(actual_direction[offset])]),
+                        "predicted_direction": int(direction_labels[int(direction[offset])]),
+                        "actual_regime": regime_labels[int(actual_regime[offset])],
+                        "predicted_regime": regime_labels[int(regime[offset])],
+                        "direction_probabilities": [float(value) for value in probabilities[offset]],
+                    }
+                    for offset, sample_index in enumerate(validation_indices)
+                )
         for horizon, summary in evaluations.items():
             for key, output_key in (
                 ("return_mae", "return_mae"),
@@ -595,7 +685,7 @@ class WalkForwardTransformerTrainer:
             trade_mask = summary.pop("trade_signal_mask", [])
             summary["trading"] = _summarize_trading(trade_returns, trade_mask)
         if data.sample_count < self.config.min_train_samples:
-            return {**base, "data_quality": "insufficient", "source_sample_count": data.sample_count, "feature_count": len(feature_columns), "feature_columns": list(feature_columns), "forecasts": {}, "evaluations": evaluations, "walk_forward": {"folds": fold_summaries}}
+            return {**base, "data_quality": "insufficient", "source_sample_count": data.sample_count, "feature_count": len(feature_columns), "feature_columns": list(feature_columns), "forecasts": {}, "evaluations": evaluations, "oof_predictions": oof_predictions, "walk_forward": {"folds": fold_summaries}}
 
         # Fit final model on all complete samples. Scaling is fitted once here
         # for inference and is never reused to score a historical fold.
@@ -668,6 +758,7 @@ class WalkForwardTransformerTrainer:
             "target_scales": target_scales,
             "forecasts": forecasts,
             "evaluations": evaluations,
+            "oof_predictions": oof_predictions,
             "walk_forward": {"folds": fold_summaries},
             "ensemble_note": "Use ensemble_forecasts with separately trained, calibrated model forecasts; horizons are not model names.",
         }

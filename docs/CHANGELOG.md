@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] BTC Transformer 兼容 OKX `funding_rates`、标记价和成交价字段；稀疏衍生品数据采用因果填充并记录缺失掩码，方向标签支持按 horizon 设置中性区间。
+- [改进] BTC Transformer 默认训练轮数、walk-forward 折数和验证窗口提升，并将 PatchTST 时间 patch 改为按变量独立编码后再汇聚，降低特征混合造成的表示损失。
 - [修复] BTC Transformer 训练对收益/波动目标按训练折做稳健尺度拟合与异常值裁剪，并在评估和预测时还原真实单位；同时改进多任务损失权重与训练窗口打乱，避免回归头输出异常值压低 PatchTST、iTransformer 和 Fusion 的方向表现。
 - [修复] BTC Transformer 默认关闭收益回归与方向概率的一致性约束；该约束保留为可调参数，避免长周期收益噪声把方向概率压向中性。
 - [新功能] 新增 BTC Transformer 在线样本外验证脚本，按 cutoff 前数据训练并用 cutoff 后已实现的 OKX 闭合小时线评估 `1h/4h/24h` 方向、收益误差和交易信号净收益；结果保持 research/shadow 模式。

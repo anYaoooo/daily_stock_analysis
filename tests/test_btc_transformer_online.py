@@ -25,7 +25,14 @@ def test_online_cli_defaults_to_all_architectures_and_24h_holdout() -> None:
     args = build_arg_parser().parse_args([])
     assert args.architecture == "all"
     assert args.holdout_hours == 24
-    assert args.epochs == 5
+    assert args.epochs == 20
+    assert args.folds == 6
+    assert args.validation_samples == 168
+    assert args.min_train_samples == 1008
+    assert args.sequence_length == 256
+    assert args.d_model == 128
+    assert args.heads == 8
+    assert args.layers == 3
 
 
 def test_realized_targets_use_only_bars_after_cutoff() -> None:
@@ -41,6 +48,21 @@ def test_realized_targets_use_only_bars_after_cutoff() -> None:
     assert targets["1h"] is not None
     assert targets["1h"]["direction"] == "up"
     assert targets["4h"]["future_close"] == 104.0
+
+
+def test_realized_targets_use_horizon_specific_neutral_bands() -> None:
+    bars = _bars()
+    cutoff = bars["date"].iloc[0]
+    targets = _realized_targets(
+        bars,
+        cutoff=cutoff,
+        horizons={"1h": 1, "4h": 4},
+        bar_hours=1.0,
+        neutral_band=0.0,
+        neutral_bands={"1h": 0.02, "4h": 0.001},
+    )
+    assert targets["1h"]["direction"] == "neutral"
+    assert targets["4h"]["direction"] == "up"
 
 
 def test_online_score_applies_cost_only_to_executed_signal() -> None:

@@ -19,6 +19,7 @@ from api.v1.endpoints import (
     backtest,
     decision_signals,
     crypto_trading,
+    btc_training,
     health,
     history,
     portfolio,
@@ -101,6 +102,12 @@ router.include_router(
     crypto_trading.router,
     prefix="/crypto-trading",
     tags=["CryptoTrading"]
+)
+
+router.include_router(
+    btc_training.router,
+    prefix="/btc-training",
+    tags=["BtcTraining"],
 )
 
 router.include_router(

@@ -22,7 +22,13 @@ def _require_torch() -> Any:
 
 
 class PatchTSTBackbone(nn.Module if nn is not None else object):
-    """Patch-based temporal encoder (B, L, F) -> (B, d_model)."""
+    """Channel-independent temporal patch encoder (B, L, F) -> (B, d_model).
+
+    Each variable is encoded over time with shared weights, matching the
+    channel-independence inductive bias of the original PatchTST.  A learned
+    channel pool combines the resulting variable representations only after
+    temporal encoding.
+    """
 
     def __init__(
         self,
@@ -46,31 +52,42 @@ class PatchTSTBackbone(nn.Module if nn is not None else object):
         self.patch_length = int(patch_length)
         self.stride = int(stride)
         patch_count = max(1, (self.sequence_length - self.patch_length) // self.stride + 1)
-        self.projection = nn.Linear(self.patch_length * int(feature_count), d_model)
+        self.feature_count = int(feature_count)
+        self.projection = nn.Linear(self.patch_length, d_model)
         self.position = nn.Parameter(torch.zeros(1, patch_count, d_model))
         nn.init.trunc_normal_(self.position, std=0.02)
         layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=n_heads, dim_feedforward=d_model * 4, dropout=dropout, batch_first=True, norm_first=True)
         self.encoder = nn.TransformerEncoder(layer, num_layers=max(1, int(layers)))
-        self.pool_score = nn.Linear(d_model, 1)
+        self.time_pool_score = nn.Linear(d_model, 1)
+        self.channel_pool_score = nn.Linear(d_model, 1)
         # Start as mean pooling; a random attention scorer is unstable when
         # research runs use only a few CPU epochs.
-        nn.init.zeros_(self.pool_score.weight)
-        nn.init.zeros_(self.pool_score.bias)
+        nn.init.zeros_(self.time_pool_score.weight)
+        nn.init.zeros_(self.time_pool_score.bias)
+        nn.init.zeros_(self.channel_pool_score.weight)
+        nn.init.zeros_(self.channel_pool_score.bias)
         self.norm = nn.LayerNorm(d_model)
 
     def forward(self, inputs: Any) -> Any:
         if inputs.ndim != 3:
             raise ValueError("inputs must have shape (batch, sequence, features)")
-        if inputs.shape[1] < self.patch_length:
-            raise ValueError("sequence is shorter than patch_length")
+        if inputs.shape[1] != self.sequence_length:
+            raise ValueError(f"expected sequence length {self.sequence_length}, got {inputs.shape[1]}")
+        if inputs.shape[2] != self.feature_count:
+            raise ValueError(f"expected feature count {self.feature_count}, got {inputs.shape[2]}")
         patches = inputs.unfold(dimension=1, size=self.patch_length, step=self.stride)
-        # unfold gives (B, patches, F, patch_length); put time inside each token.
-        patches = patches.transpose(-1, -2).contiguous().flatten(start_dim=2)
+        # unfold gives (B, patches, F, patch_length).  Encode each channel's
+        # temporal patches independently with shared projection/encoder weights.
+        patches = patches.permute(0, 2, 1, 3).contiguous()
+        batch_size, channels, patch_count, _ = patches.shape
         tokens = self.projection(patches)
-        tokens = tokens + self.position[:, : tokens.shape[1]]
-        encoded = self.encoder(tokens)
-        weights = torch.softmax(self.pool_score(encoded).squeeze(-1), dim=1).unsqueeze(-1)
-        return self.norm((encoded * weights).sum(dim=1))
+        tokens = tokens + self.position[:, :patch_count].unsqueeze(1)
+        encoded = self.encoder(tokens.reshape(batch_size * channels, patch_count, -1))
+        encoded = encoded.reshape(batch_size, channels, patch_count, -1)
+        time_weights = torch.softmax(self.time_pool_score(encoded).squeeze(-1), dim=2).unsqueeze(-1)
+        channel_embeddings = (encoded * time_weights).sum(dim=2)
+        channel_weights = torch.softmax(self.channel_pool_score(channel_embeddings).squeeze(-1), dim=1).unsqueeze(-1)
+        return self.norm((channel_embeddings * channel_weights).sum(dim=1))
 
 
 class ITransformerBackbone(nn.Module if nn is not None else object):

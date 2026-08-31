@@ -98,6 +98,31 @@ describe('SidebarNav', () => {
     expect(hrefs).not.toContain('/decision-signals');
   });
 
+  it('renders the training research navigation tab', () => {
+    render(
+      <MemoryRouter initialEntries={['/training']}>
+        <SidebarNav />
+      </MemoryRouter>,
+    );
+
+    const trainingLink = screen.getByRole('link', { name: '训练研究' });
+    expect(trainingLink).toHaveAttribute('href', '/training');
+    expect(trainingLink).toHaveClass('font-medium');
+  });
+
+  it('keeps training near the primary workflow and makes the navigation scrollable', () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <SidebarNav />
+      </MemoryRouter>,
+    );
+
+    const links = screen.getAllByRole('link');
+    const labels = links.map((link) => link.getAttribute('aria-label'));
+    expect(labels.indexOf('训练研究')).toBe(labels.indexOf('回测') + 1);
+    expect(screen.getByRole('navigation', { name: '主导航' })).toHaveClass('overflow-y-auto');
+  });
+
   it('opens the logout confirmation and confirms logout', async () => {
     render(
       <MemoryRouter initialEntries={['/chat']}>

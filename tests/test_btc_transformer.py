@@ -2,6 +2,7 @@
 """Deterministic contracts for the offline BTC Transformer research module."""
 
 from datetime import datetime, timedelta, timezone
+import json
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,7 @@ from src.services.btc_transformer import (  # noqa: E402
     build_sequences,
     build_transformer_feature_frame,
     derive_trade_signal,
+    save_research_artifacts,
     walk_forward_sequence_splits,
 )
 from src.services.btc_transformer.dataset import SequenceData  # noqa: E402
@@ -59,6 +61,71 @@ def test_feature_frame_filters_open_bar_and_keeps_future_targets_separate() -> N
     assert len(frame) == len(bars) - 1
     assert frame.iloc[-1]["date"] == bars.iloc[-2]["date"]
     assert all(column.startswith("feature_") or column.startswith("target_") or column in {"date", "reference_close"} for column in frame)
+
+
+def test_feature_frame_maps_sparse_okx_derivatives_and_emits_missing_masks() -> None:
+    bars = _bars(80)
+    bars["funding_rates"] = ["[]"] * len(bars)
+    bars.loc[::8, "funding_rates"] = "[0.0002]"
+    bars["mark_close"] = bars["close"] * 1.001
+    frame = build_transformer_feature_frame(
+        bars,
+        config=TransformerFeatureConfig(horizons={"1h": 1}, sequence_length=16, bar_hours=5 / 60),
+    )
+    assert "feature_funding_rate" in frame
+    assert "feature_funding_rate_missing" in frame
+    assert "feature_mark_close_basis" in frame
+    assert frame["feature_funding_rate"].notna().all()
+    assert frame["feature_funding_rate_missing"].max() == 1.0
+
+
+def test_feature_frame_does_not_manufacture_absent_optional_channels() -> None:
+    frame = build_transformer_feature_frame(
+        _bars(80),
+        config=TransformerFeatureConfig(horizons={"1h": 1}, sequence_length=16, bar_hours=5 / 60),
+    )
+    assert "feature_funding_rate" not in frame
+    assert "feature_funding_rate_missing" not in frame
+    assert "feature_open_interest" not in frame
+    assert "feature_open_interest_missing" not in frame
+
+
+def test_research_artifact_saves_oof_as_per_sample_jsonl(tmp_path) -> None:
+    payload = {
+        "research_only": True,
+        "participates_in_decision": False,
+        "eligible_for_promotion": False,
+        "runs": [{
+            "architecture": "patchtst",
+            "seed": 7,
+            "feature_set": "full",
+            "removed_feature": None,
+            "oof_predictions": {
+                "1h": [{"fold": 1, "sample_index": 42, "predicted_return": 0.01}],
+            },
+        }],
+    }
+    summary_path = tmp_path / "summary.json"
+    oof_path = tmp_path / "oof.jsonl"
+
+    compact = save_research_artifacts(payload, summary_path, oof_path=oof_path)
+
+    assert "oof_predictions" not in compact["runs"][0]
+    assert compact["oof_prediction_count"] == 1
+    row = json.loads(oof_path.read_text(encoding="utf-8"))
+    assert row["architecture"] == "patchtst"
+    assert row["horizon"] == "1h"
+    assert row["sample_index"] == 42
+
+
+def test_neutral_band_can_vary_by_horizon() -> None:
+    config = TransformerFeatureConfig(
+        horizons={"1h": 1, "4h": 4},
+        neutral_band=0.002,
+        neutral_bands={"4h": 0.01},
+    )
+    assert config.neutral_band_for("1h") == pytest.approx(0.002)
+    assert config.neutral_band_for("4h") == pytest.approx(0.01)
 
 
 def test_sequence_dataset_shapes_and_label_encoding() -> None:
@@ -133,6 +200,11 @@ def test_transformer_cli_exposes_training_device() -> None:
 def test_transformer_cli_exposes_neutral_band() -> None:
     args = build_arg_parser().parse_args(["--neutral-band-bps", "35"])
     assert args.neutral_band_bps == 35
+
+
+def test_transformer_cli_exposes_horizon_neutral_bands() -> None:
+    args = build_arg_parser().parse_args(["--neutral-band-bps-by-horizon", "1h:25,24h:100"])
+    assert args.neutral_band_bps_by_horizon == {"1h": 25.0, "24h": 100.0}
 
 
 def test_transformer_cli_exposes_target_clip() -> None:

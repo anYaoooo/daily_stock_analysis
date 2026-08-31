@@ -8,6 +8,7 @@ fusion on identical, leakage-safe sequence datasets.
 
 from .dataset import REGIME_LABELS, SequenceData, SequenceDataset, build_sequences
 from .features import (
+    DEFAULT_NEUTRAL_BANDS,
     DEFAULT_TRANSFORMER_HORIZONS,
     TransformerFeatureConfig,
     build_transformer_feature_frame,
@@ -25,8 +26,17 @@ from .trainer import (
     derive_trade_signal,
     walk_forward_sequence_splits,
 )
+from .research import (
+    DEFAULT_RESEARCH_SEEDS,
+    MIN_RESEARCH_EPOCHS,
+    MIN_RESEARCH_SEEDS,
+    SUPPORTED_ARCHITECTURES,
+    run_research_experiment,
+    save_research_artifacts,
+)
 
 __all__ = [
+    "DEFAULT_NEUTRAL_BANDS",
     "DEFAULT_TRANSFORMER_HORIZONS",
     "ITransformerBackbone",
     "MultiTaskTransformer",
@@ -43,4 +53,10 @@ __all__ = [
     "derive_trade_signal",
     "ensemble_forecasts",
     "walk_forward_sequence_splits",
+    "DEFAULT_RESEARCH_SEEDS",
+    "MIN_RESEARCH_EPOCHS",
+    "MIN_RESEARCH_SEEDS",
+    "SUPPORTED_ARCHITECTURES",
+    "run_research_experiment",
+    "save_research_artifacts",
 ]
