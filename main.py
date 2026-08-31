@@ -80,6 +80,67 @@ def _format_btc_volatility_alert(stats: Dict[str, Any]) -> str:
     invalidation_price = stats.get("invalidation_price", "--")
     threshold_price = stats.get("threshold_price", "--")
 
+    trial_reason = str(stats.get("trigger_reason") or "").strip().lower()
+    if trial_reason == "trial_breakdown_watch":
+        return "\n".join(
+            [
+                "## BTC 试仓跟踪：疑似假跌破",
+                "",
+                f"- 当前价：{price} USDT，已短暂跌破冻结确认价 {stats.get('confirmation_price', '--')} USDT",
+                f"- 状态：第 {stats.get('consecutive_break_samples', 1)}/{stats.get('confirmation_required', 2)} 次跌破采样，先按疑似假跌破处理",
+                "- 动作：停止加仓，保留试仓观察；若迅速收回确认价，将提示假跌破修复",
+                f"- 硬失效价：{invalidation_price} USDT，触及则试仓信号直接失效",
+            ]
+        )
+    if trial_reason == "trial_breakdown_confirmed":
+        return "\n".join(
+            [
+                "## BTC 试仓跟踪：短周期有效跌破",
+                "",
+                f"- 当前价：{price} USDT，连续 {stats.get('consecutive_break_samples', '--')} 次采样位于冻结确认价 {stats.get('confirmation_price', '--')} USDT 下方",
+                "- 状态：不再按单次插针处理，急跌反弹试仓逻辑已经明显转弱",
+                "- 动作：退出或至少减掉试仓，禁止继续加仓；重新收回确认价后再评估",
+                f"- 硬失效价：{invalidation_price} USDT",
+            ]
+        )
+    if trial_reason == "trial_false_break_reclaimed":
+        reclaimed_from_confirmed = (
+            str(stats.get("reclaimed_from_state") or "").strip().lower()
+            == "breakdown_confirmed"
+        )
+        return "\n".join(
+            [
+                (
+                    "## BTC 试仓跟踪：有效跌破后重新收回"
+                    if reclaimed_from_confirmed
+                    else "## BTC 试仓跟踪：假跌破已收回"
+                ),
+                "",
+                f"- 当前价：{price} USDT，已重新站回冻结确认价 {stats.get('confirmation_price', '--')} USDT",
+                (
+                    "- 状态：此前连续采样已经确认跌破，本次收回只代表结构修复，不追溯改判为假跌破"
+                    if reclaimed_from_confirmed
+                    else "- 状态：首次跌破没有延续，确认属于假跌破修复"
+                ),
+                (
+                    "- 动作：先观察重新站稳，原试仓不自动恢复；加仓仍等待闭合小时线确认"
+                    if reclaimed_from_confirmed
+                    else "- 动作：可继续保留试仓观察，但不会自动加仓；加仓仍等待闭合小时线确认"
+                ),
+                f"- 硬失效价：{invalidation_price} USDT",
+            ]
+        )
+    if trial_reason == "trial_invalidation":
+        return "\n".join(
+            [
+                "## BTC 试仓跟踪：信号失效",
+                "",
+                f"- 当前价：{price} USDT，已触及冻结失效价 {invalidation_price} USDT",
+                "- 状态：这不是普通假跌破，原急跌反弹试仓逻辑正式失效",
+                "- 动作：退出试仓，等待新的急跌事件与确认结构",
+            ]
+        )
+
     if is_early_warning:
         return "\n".join(
             [
@@ -144,12 +205,21 @@ def _send_btc_volatility_alert(args: argparse.Namespace, stats: Dict[str, Any]) 
 
         direction = str(stats.get("direction") or "unknown").strip().lower()
         opportunity_price = stats.get("opportunity_price") or stats.get("price") or "unknown"
+        trigger_reason = str(stats.get("trigger_reason") or "volatility").strip().lower()
+        trial_signal_id = stats.get("trial_signal_id")
+        trial_episode = stats.get("tracking_episode")
+        if stats.get("trial_tracking_event"):
+            dedup_key = f"btc-trial:{trial_signal_id}:{trial_episode}:{trigger_reason}"
+            cooldown_key = dedup_key
+        else:
+            dedup_key = f"btc-volatility:{direction}:{opportunity_price}"
+            cooldown_key = "btc-volatility-alert"
         result = NotificationService().send_with_results(
             _format_btc_volatility_alert(stats),
             route_type="alert",
             severity="warning",
-            dedup_key=f"btc-volatility:{direction}:{opportunity_price}",
-            cooldown_key="btc-volatility-alert",
+            dedup_key=dedup_key,
+            cooldown_key=cooldown_key,
         )
         logger.info(
             "[BTCVolatility] 首次波动警报发送: status=%s success=%s",
@@ -1422,7 +1492,58 @@ def main() -> int:
                 })
 
             if getattr(config, 'btc_volatility_monitor_enabled', False):
-                from src.services.btc_volatility_monitor import BTCVolatilityMonitor
+                from src.services.btc_volatility_monitor import (
+                    BTCVolatilityMonitor,
+                    trial_tracking_plan_from_decision_signal,
+                )
+                from src.services.decision_signal_service import DecisionSignalService
+
+                trial_signal_service = None
+
+                def get_trial_signal_service():
+                    nonlocal trial_signal_service
+                    if trial_signal_service is None:
+                        trial_signal_service = DecisionSignalService()
+                    return trial_signal_service
+
+                def load_active_trial_plan():
+                    active_signals = get_trial_signal_service().get_latest_active(
+                        stock_code="BTC",
+                        market="crypto",
+                        limit=20,
+                    ).get("items", [])
+                    for signal in active_signals:
+                        plan = trial_tracking_plan_from_decision_signal(signal)
+                        if plan is not None:
+                            return plan
+                    return None
+
+                def update_trial_tracking_state(signal_id: int, tracking: Dict[str, Any]):
+                    service = get_trial_signal_service()
+                    signal = service.get_signal(signal_id)
+                    metadata = dict(signal.get("metadata") or {})
+                    metadata["post_entry_tracking"] = {
+                        "state": tracking.get("trial_tracking_state"),
+                        "reason": tracking.get("trigger_reason"),
+                        "price": tracking.get("price"),
+                        "confirmation_price": tracking.get("confirmation_price"),
+                        "invalidation_price": tracking.get("invalidation_price"),
+                        "consecutive_break_samples": tracking.get("consecutive_break_samples"),
+                        "confirmation_required": tracking.get("confirmation_required"),
+                        "episode": tracking.get("tracking_episode"),
+                        "provider_timestamp": tracking.get("provider_timestamp"),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    service.update_status(
+                        signal_id,
+                        status=(
+                            "invalidated"
+                            if tracking.get("signal_status") == "invalidated"
+                            else "active"
+                        ),
+                        metadata=metadata,
+                        replace_metadata=True,
+                    )
 
                 quote_fetcher = None
                 if getattr(config, 'btc_volatility_monitor_use_websocket', False):
@@ -1436,9 +1557,16 @@ def main() -> int:
                         )
                     )
                 volatility_monitor = (
-                    BTCVolatilityMonitor(quote_fetcher=quote_fetcher)
+                    BTCVolatilityMonitor(
+                        quote_fetcher=quote_fetcher,
+                        trial_plan_provider=load_active_trial_plan,
+                        trial_state_updater=update_trial_tracking_state,
+                    )
                     if quote_fetcher is not None
-                    else BTCVolatilityMonitor()
+                    else BTCVolatilityMonitor(
+                        trial_plan_provider=load_active_trial_plan,
+                        trial_state_updater=update_trial_tracking_state,
+                    )
                 )
 
                 def btc_volatility_monitor_task():

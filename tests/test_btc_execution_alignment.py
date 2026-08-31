@@ -368,6 +368,286 @@ def test_liquidity_sweep_guard_disables_stale_chase_plan() -> None:
     assert plan["execution_ladder"]["trial_entry"]["enabled"] is False
 
 
+def _selloff_technical_context(*, live_price: float) -> dict:
+    return {
+        "timeframes": {
+            "daily": {},
+            "hourly": {
+                "live_partial_bar": {"price": live_price},
+                "price_action": {"state": "bearish_push"},
+                "volume": {"confirmation": "low"},
+                "volatility": {"atr14": 2.0},
+                "vwap": {"rolling_20": 101.5, "price_position": "below"},
+                "ema": {"ema20": 101.0},
+                "event": {
+                    "type": "selloff_rebound_candidate",
+                    "event_low": 95.0,
+                    "event_bar_high": 100.0,
+                    "trigger_reference": {
+                        "long_confirmation_price": 100.0,
+                        "long_invalidation_price": 94.0,
+                    },
+                    "right_side": {
+                        "state": "selloff_rebound_candidate",
+                        "direction": "long",
+                        "confirmation_price": 100.0,
+                        "invalidation_price": 94.0,
+                        "no_chase_price": 101.0,
+                        "confirmation_source": "event_bar_high",
+                    },
+                },
+            },
+        },
+        "intraday": {
+            "daily_bias": "long",
+            "hourly_bias": "short",
+            "alignment": "countertrend_short",
+        },
+    }
+
+
+def test_selloff_rebound_trial_removes_volume_gate_and_uses_one_close() -> None:
+    result = AnalysisResult(
+        code="BTC",
+        name="Bitcoin",
+        sentiment_score=55,
+        trend_prediction="震荡",
+        report_language="zh",
+        operation_advice="观望",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "long",
+                    "entry_price": 101.5,
+                    "stop_loss": 94.0,
+                    "take_profit": 110.0,
+                    "execution_contract": _contract(),
+                    "execution_ladder": {
+                        "current_action": "wait",
+                        "trial_entry": {"enabled": True, "entry_price": 101.5},
+                        "confirmation_add": {"entry_price": 103.0},
+                        "invalidation": {"price": 94.0},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context=_selloff_technical_context(live_price=100.4),
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    entry = plan["execution_contract"]["entry"]
+    assert plan["enabled"] is True
+    assert plan["direction"] == "long"
+    assert plan["entry_price"] == 100.0
+    assert plan["position_multiplier_cap"] == 0.25
+    assert plan["strategy_class"] == "selloff_rebound_trial"
+    assert entry["signal_class"] == "selloff_rebound_trial"
+    assert entry["conditions"] == [{"type": "close_above", "value": 100.0}]
+    assert entry["confirmation_bars"] == 1
+    assert entry["max_wait_bars"] == 4
+    assert plan["validation_status"] == "passed"
+    assert "量比只影响仓位" in plan["trigger_condition"]
+
+
+def test_monitor_confirmed_selloff_rebound_allows_immediate_capped_trial() -> None:
+    result = AnalysisResult(
+        code="BTC",
+        name="Bitcoin",
+        sentiment_score=60,
+        trend_prediction="震荡",
+        report_language="zh",
+        operation_advice="观望",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": False,
+                    "direction": "wait",
+                    "entry_price": 101.0,
+                    "stop_loss": 94.0,
+                    "take_profit": 110.0,
+                    "execution_contract": _contract(),
+                    "execution_ladder": {
+                        "current_action": "wait",
+                        "trial_entry": {"enabled": False, "entry_price": 101.0},
+                        "confirmation_add": {"entry_price": 103.0},
+                        "invalidation": {"price": 94.0},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        trigger_context={
+            "trigger_source": "btc_volatility",
+            "trigger_reason": "entry_signal",
+            "trade_direction": "long",
+            "entry_price": 99.8,
+            "invalidation_price": 94.0,
+            "price": 100.1,
+            "no_chase_price": 100.8,
+        },
+        technical_context=_selloff_technical_context(live_price=100.1),
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["enabled"] is True
+    assert plan["entry_price"] == 99.8
+    assert plan["execution_ladder"]["current_action"] == "trial"
+    assert plan["execution_ladder"]["trial_entry"]["enabled"] is True
+    assert plan["execution_ladder"]["confirmation_add"]["enabled"] is True
+    assert plan["trigger_execution_state"] == "selloff_rebound_trial_ready"
+
+
+def test_selloff_rebound_beyond_no_chase_is_marked_missed() -> None:
+    result = AnalysisResult(
+        code="BTC",
+        name="Bitcoin",
+        sentiment_score=60,
+        trend_prediction="看多",
+        report_language="zh",
+        operation_advice="观望",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "long",
+                    "entry_price": 100.0,
+                    "stop_loss": 94.0,
+                    "take_profit": 110.0,
+                    "execution_contract": _contract(),
+                    "execution_ladder": {
+                        "current_action": "trial",
+                        "trial_entry": {"enabled": True, "entry_price": 100.0},
+                        "confirmation_add": {"enabled": True, "entry_price": 102.0},
+                        "invalidation": {"price": 94.0},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        technical_context=_selloff_technical_context(live_price=101.2),
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["enabled"] is False
+    assert plan["direction"] == "wait"
+    assert plan["trigger_execution_state"] == "selloff_rebound_missed"
+    assert "机会已错过" in plan["no_trade_reason"]
+
+
+def test_selloff_rebound_does_not_reuse_unrelated_monitor_trigger() -> None:
+    result = AnalysisResult(
+        code="BTC",
+        name="Bitcoin",
+        sentiment_score=55,
+        trend_prediction="震荡",
+        report_language="zh",
+        operation_advice="观望",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "long",
+                    "entry_price": 100.0,
+                    "stop_loss": 94.0,
+                    "take_profit": 110.0,
+                    "execution_contract": _contract(),
+                    "execution_ladder": {
+                        "current_action": "wait",
+                        "trial_entry": {"enabled": True, "entry_price": 100.0},
+                        "confirmation_add": {"entry_price": 103.0},
+                        "invalidation": {"price": 94.0},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        trigger_context={
+            "trigger_source": "btc_volatility",
+            "trigger_reason": "entry_signal",
+            "trade_direction": "long",
+            "entry_price": 96.0,
+            "invalidation_price": 92.0,
+            "price": 100.4,
+        },
+        technical_context=_selloff_technical_context(live_price=100.4),
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["entry_price"] == 100.0
+    assert plan["selloff_rebound_control"]["monitor_preconfirmed"] is False
+    assert plan["selloff_rebound_control"]["confirmation_source"] == "event_bar_high"
+    assert plan["execution_ladder"]["current_action"] == "wait"
+
+
+def test_selloff_guard_does_not_reenable_exhausted_monitor_signal() -> None:
+    result = AnalysisResult(
+        code="BTC",
+        name="Bitcoin",
+        sentiment_score=55,
+        trend_prediction="震荡",
+        report_language="zh",
+        operation_advice="观望",
+        dashboard={
+            "battle_plan": {
+                "intraday_plan": {
+                    "enabled": True,
+                    "direction": "long",
+                    "entry_price": 100.0,
+                    "stop_loss": 94.0,
+                    "take_profit": 110.0,
+                    "execution_contract": _contract(),
+                    "execution_ladder": {
+                        "current_action": "trial",
+                        "trial_entry": {"enabled": True, "entry_price": 100.0},
+                        "confirmation_add": {"enabled": True, "entry_price": 102.0},
+                        "invalidation": {"price": 94.0},
+                    },
+                }
+            }
+        },
+    )
+
+    aligned = align_btc_execution_plans(
+        result,
+        runtime_config=_runtime_config(),
+        trigger_context={
+            "trigger_source": "btc_volatility",
+            "trigger_reason": "entry_signal",
+            "trade_direction": "long",
+            "entry_price": 100.0,
+            "invalidation_price": 94.0,
+            "price": 100.4,
+            "entry_executable_now": 0,
+            "impulse_stage": "exhaustion_candidate",
+        },
+        technical_context=_selloff_technical_context(live_price=100.4),
+    )
+
+    plan = aligned.dashboard["battle_plan"]["intraday_plan"]
+    assert plan["enabled"] is False
+    assert plan["direction"] == "wait"
+    assert plan["trigger_execution_state"] == "selloff_rebound_missed"
+    assert "衰竭" in plan["no_trade_reason"]
+
+
 def test_aligned_timeframes_block_opposed_intraday_plan() -> None:
     result = AnalysisResult(
         code="BTCUSDT",

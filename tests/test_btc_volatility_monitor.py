@@ -9,6 +9,7 @@ from src.services.btc_volatility_monitor import (
     ActiveOpportunity,
     BTCVolatilityMonitor,
     _parse_window_tiers,
+    trial_tracking_plan_from_decision_signal,
 )
 
 
@@ -170,6 +171,123 @@ def test_btc_volatility_monitor_contains_quote_provider_errors() -> None:
     assert result["reason"] == "quote_error"
     assert result["error_type"] == "RuntimeError"
     assert result["triggered"] == 0
+
+
+def _trial_plan(*, tracking_state=None):
+    return {
+        "signal_id": 7,
+        "direction": "long",
+        "confirmation_price": 100.0,
+        "invalidation_price": 94.0,
+        "tracking_state": tracking_state or {},
+    }
+
+
+def test_trial_tracking_plan_requires_ready_selloff_rebound_signal() -> None:
+    signal = {
+        "id": 7,
+        "status": "active",
+        "entry_low": 100.0,
+        "stop_loss": 94.0,
+        "metadata": {
+            "strategy_plan": {
+                "strategy_class": "selloff_rebound_trial",
+                "trigger_execution_state": "selloff_rebound_trial_ready",
+                "direction": "long",
+                "selloff_rebound_control": {
+                    "confirmation_price": 100.0,
+                    "invalidation_price": 94.0,
+                },
+            },
+            "post_entry_tracking": {"state": "breakdown_watch", "episode": 2},
+        },
+    }
+
+    plan = trial_tracking_plan_from_decision_signal(signal)
+
+    assert plan == {
+        "signal_id": 7,
+        "direction": "long",
+        "confirmation_price": 100.0,
+        "invalidation_price": 94.0,
+        "tracking_state": {"state": "breakdown_watch", "episode": 2},
+    }
+    signal["metadata"]["strategy_plan"]["trigger_execution_state"] = (
+        "selloff_rebound_wait_hourly_close"
+    )
+    assert trial_tracking_plan_from_decision_signal(signal) is None
+    signal["metadata"]["strategy_plan"]["trigger_execution_state"] = (
+        "selloff_rebound_trial_ready"
+    )
+    signal["metadata"]["strategy_plan"]["validation_status"] = "failed"
+    assert trial_tracking_plan_from_decision_signal(signal) is None
+
+
+def test_trial_tracking_distinguishes_break_watch_confirmation_and_reclaim() -> None:
+    prices = iter([101.0, 99.8, 99.7, 100.2])
+    times = iter([1000.0, 1060.0, 1120.0, 1180.0])
+    persisted = []
+    monitor = BTCVolatilityMonitor(
+        quote_fetcher=lambda _symbol: {"price": next(prices)},
+        now_provider=lambda: next(times),
+        trial_plan_provider=lambda: _trial_plan(),
+        trial_state_updater=lambda signal_id, state: persisted.append((signal_id, state)),
+    )
+
+    holding = monitor.run_once(_config())
+    watch = monitor.run_once(_config())
+    confirmed = monitor.run_once(_config())
+    reclaimed = monitor.run_once(_config())
+
+    assert holding["reason"] == "warming_up"
+    assert watch["trigger_reason"] == "trial_breakdown_watch"
+    assert watch["consecutive_break_samples"] == 1
+    assert confirmed["trigger_reason"] == "trial_breakdown_confirmed"
+    assert confirmed["consecutive_break_samples"] == 2
+    assert reclaimed["trigger_reason"] == "trial_false_break_reclaimed"
+    assert reclaimed["reclaimed_from_state"] == "breakdown_confirmed"
+    assert [item[1]["trial_tracking_state"] for item in persisted] == [
+        "breakdown_watch",
+        "breakdown_confirmed",
+        "holding_above",
+    ]
+
+
+def test_trial_tracking_reclaim_after_one_sample_is_false_break() -> None:
+    prices = iter([101.0, 99.9, 100.1])
+    times = iter([1000.0, 1060.0, 1120.0])
+    monitor = BTCVolatilityMonitor(
+        quote_fetcher=lambda _symbol: {"price": next(prices)},
+        now_provider=lambda: next(times),
+        trial_plan_provider=lambda: _trial_plan(),
+    )
+
+    monitor.run_once(_config())
+    watch = monitor.run_once(_config())
+    reclaimed = monitor.run_once(_config())
+
+    assert watch["trigger_reason"] == "trial_breakdown_watch"
+    assert reclaimed["trigger_reason"] == "trial_false_break_reclaimed"
+    assert reclaimed["reclaimed_from_state"] == "breakdown_watch"
+
+
+def test_trial_tracking_hard_invalidation_is_immediate_and_terminal() -> None:
+    prices = iter([101.0, 93.9])
+    times = iter([1000.0, 1060.0])
+    persisted = []
+    monitor = BTCVolatilityMonitor(
+        quote_fetcher=lambda _symbol: {"price": next(prices)},
+        now_provider=lambda: next(times),
+        trial_plan_provider=lambda: _trial_plan(),
+        trial_state_updater=lambda signal_id, state: persisted.append((signal_id, state)),
+    )
+
+    monitor.run_once(_config())
+    invalidated = monitor.run_once(_config())
+
+    assert invalidated["trigger_reason"] == "trial_invalidation"
+    assert invalidated["signal_status"] == "invalidated"
+    assert persisted[-1][1]["signal_status"] == "invalidated"
 
 
 def test_parse_window_tiers_sorts_and_drops_invalid_entries() -> None:

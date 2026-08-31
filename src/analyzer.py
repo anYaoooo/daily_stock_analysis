@@ -1873,6 +1873,12 @@ def align_btc_execution_plans(
         technical_context=technical_context,
         language=normalize_report_language(result.report_language),
     )
+    _apply_btc_selloff_rebound_guard(
+        battle_plan,
+        trigger_context=trigger_context,
+        technical_context=technical_context,
+        language=normalize_report_language(result.report_language),
+    )
     _apply_btc_intraday_alignment_guard(
         battle_plan,
         technical_context=technical_context,
@@ -2093,6 +2099,7 @@ def _apply_btc_tradeability_guard(
             continue
         if str(payload.get("direction") or "").strip().lower() != "long":
             continue
+        selloff_trial = payload.get("strategy_class") == "selloff_rebound_trial"
         price_action = text(source, "price_action", "state")
         vwap_position = text(source, "vwap", "price_position")
         volume_state = text(source, "volume", "confirmation")
@@ -2100,7 +2107,7 @@ def _apply_btc_tradeability_guard(
             price_action == "breakout"
             or (source.get("price_action") or {}).get("close_above_resistance") is True
         )
-        if price_action == "bearish_push" and vwap_position == "below":
+        if price_action == "bearish_push" and vwap_position == "below" and not selloff_trial:
             disable(
                 payload,
                 "long_bearish_push_below_vwap",
@@ -2108,13 +2115,27 @@ def _apply_btc_tradeability_guard(
                 "Bearish price action below VWAP blocks the long plan until confirmation improves.",
             )
             continue
-        if volume_state == "low" and not breakout_confirmed:
+        if volume_state == "low" and not breakout_confirmed and not selloff_trial:
             disable(
                 payload,
                 "long_low_volume_without_close_breakout",
                 "量能偏低且没有收盘突破确认，多单降级为等待。",
                 "Low volume without a confirmed close breakout blocks the long plan.",
             )
+        elif selloff_trial and (price_action == "bearish_push" or volume_state == "low"):
+            payload["position_multiplier_cap"] = min(
+                _coerce_position_multiplier_cap(payload.get("position_multiplier_cap")),
+                0.25,
+            )
+            reasons = [
+                str(reason)
+                for reason in (payload.get("tradeability_reasons") or [])
+                if str(reason).strip()
+            ]
+            if "selloff_rebound_weak_context_trial_only" not in reasons:
+                reasons.append("selloff_rebound_weak_context_trial_only")
+            payload["tradeability_reasons"] = reasons
+            payload["tradeability_status"] = "countertrend_limited"
 
     intraday_plan = battle_plan.get("intraday_plan")
     if isinstance(intraday_plan, dict) and intraday_plan.get("enabled") is not False:
@@ -2362,6 +2383,11 @@ def _apply_btc_intraday_alignment_guard(
     intraday_plan = battle_plan.get("intraday_plan")
     if not isinstance(intraday_plan, dict) or intraday_plan.get("enabled") is False:
         return
+    if intraday_plan.get("strategy_class") == "selloff_rebound_trial":
+        # A selloff-rebound trial is intentionally allowed to lead the lagging
+        # hourly bias.  Its deterministic 25% cap, fixed invalidation and
+        # no-chase boundary carry the counter-trend risk instead.
+        return
     direction = str(intraday_plan.get("direction") or "").strip().lower()
     opposed_direction = "short" if alignment == "aligned_long" else "long"
     if direction != opposed_direction:
@@ -2450,6 +2476,378 @@ def _apply_btc_trigger_execution_guard(
         trial_entry = ladder.get("trial_entry")
         if isinstance(trial_entry, dict):
             trial_entry["enabled"] = False
+
+
+def _apply_btc_selloff_rebound_guard(
+    battle_plan: Dict[str, Any],
+    *,
+    trigger_context: Optional[Dict[str, Any]],
+    technical_context: Optional[Dict[str, Any]],
+    language: str,
+) -> None:
+    """Turn a sharp-selloff rebound into an early, bounded trial plan.
+
+    This path is deliberately separate from an ordinary breakout.  The trial
+    trigger is frozen when the event forms, volume is a sizing input rather
+    than a hard gate, and one hourly close is enough for confirmation.  A late
+    report is explicitly marked missed instead of moving the trigger upward.
+    """
+
+    intraday_plan = battle_plan.get("intraday_plan")
+    if not isinstance(intraday_plan, dict) or not isinstance(technical_context, dict):
+        return
+
+    timeframes = technical_context.get("timeframes")
+    hourly = timeframes.get("hourly") if isinstance(timeframes, dict) else None
+    if not isinstance(hourly, dict):
+        return
+    event = hourly.get("event")
+    if not isinstance(event, dict):
+        return
+    event_type = str(event.get("type") or "").strip().lower()
+    if event_type not in {
+        "sharp_selloff_wait_reclaim",
+        "selloff_rebound_candidate",
+        "selloff_rebound_confirmed",
+    }:
+        return
+
+    right_side = event.get("right_side") if isinstance(event.get("right_side"), dict) else {}
+    trigger_reference = (
+        event.get("trigger_reference")
+        if isinstance(event.get("trigger_reference"), dict)
+        else {}
+    )
+
+    def numeric(*values: Any) -> Optional[float]:
+        for value in values:
+            parsed = parse_sniper_value(value)
+            if parsed is not None and parsed > 0:
+                return float(parsed)
+        return None
+
+    trigger = trigger_context if isinstance(trigger_context, dict) else {}
+    monitor_direction = str(
+        trigger.get("trade_direction") or trigger.get("right_side_direction") or ""
+    ).strip().lower()
+    monitor_candidate = (
+        str(trigger.get("trigger_reason") or "").strip().lower() == "entry_signal"
+        and monitor_direction == "long"
+    )
+    monitor_confirmation = numeric(trigger.get("entry_price")) if monitor_candidate else None
+    event_confirmation = numeric(
+        right_side.get("confirmation_price"),
+        trigger_reference.get("long_confirmation_price"),
+        event.get("event_bar_high"),
+    )
+    volatility = hourly.get("volatility") if isinstance(hourly.get("volatility"), dict) else {}
+    atr14 = numeric(volatility.get("atr14"))
+    monitor_tolerance = (
+        max(atr14 * 0.5, event_confirmation * 0.005)
+        if atr14 is not None and event_confirmation is not None
+        else event_confirmation * 0.005 if event_confirmation is not None else None
+    )
+    monitor_preconfirmed = bool(
+        monitor_confirmation is not None
+        and event_confirmation is not None
+        and monitor_tolerance is not None
+        and abs(monitor_confirmation - event_confirmation) <= monitor_tolerance
+    )
+    confirmation_price = monitor_confirmation if monitor_preconfirmed else event_confirmation
+    invalidation_price = numeric(
+        trigger.get("invalidation_price") if monitor_preconfirmed else None,
+        right_side.get("invalidation_price"),
+        trigger_reference.get("long_invalidation_price"),
+        event.get("event_low"),
+    )
+    if confirmation_price is None or invalidation_price is None:
+        return
+
+    calculated_no_chase = (
+        confirmation_price + atr14 * 0.5
+        if atr14 is not None
+        else confirmation_price * 1.003
+    )
+    no_chase_candidates = [calculated_no_chase]
+    for value in (trigger.get("no_chase_price"), right_side.get("no_chase_price")):
+        parsed = numeric(value)
+        if parsed is not None and parsed > confirmation_price:
+            no_chase_candidates.append(parsed)
+    no_chase_price = min(no_chase_candidates)
+
+    live_bar = hourly.get("live_partial_bar") if isinstance(hourly.get("live_partial_bar"), dict) else {}
+    current_price = numeric(
+        live_bar.get("price"),
+        trigger.get("current_price"),
+        trigger.get("price"),
+        intraday_plan.get("entry_price"),
+    )
+    target_price = numeric(intraday_plan.get("take_profit"))
+    remaining_risk_reward = None
+    if (
+        current_price is not None
+        and target_price is not None
+        and current_price > invalidation_price
+        and target_price > current_price
+    ):
+        remaining_risk_reward = (target_price - current_price) / (current_price - invalidation_price)
+
+    missed_reason_key = None
+    trigger_stage = str(trigger.get("impulse_stage") or "").strip().lower()
+    trigger_not_executable = trigger.get("entry_executable_now") in {
+        0,
+        False,
+        "0",
+        "false",
+        "False",
+    }
+    if trigger_not_executable and trigger_stage in {"late_extension", "exhaustion_candidate"}:
+        missed_reason_key = f"selloff_rebound_{trigger_stage}"
+    elif current_price is not None and current_price <= invalidation_price:
+        missed_reason_key = "selloff_rebound_invalidated"
+    elif current_price is not None and current_price > no_chase_price:
+        missed_reason_key = "selloff_rebound_no_chase_exceeded"
+    elif remaining_risk_reward is not None and remaining_risk_reward + 1e-9 < 1.5:
+        missed_reason_key = "selloff_rebound_remaining_rr_below_1_5"
+
+    control = {
+        "version": "btc-selloff-rebound-v1",
+        "event_type": event_type,
+        "confirmation_price": round(confirmation_price, 4),
+        "confirmation_source": "btc_volatility_monitor" if monitor_preconfirmed else (
+            right_side.get("confirmation_source") or "event_bar_high"
+        ),
+        "invalidation_price": round(invalidation_price, 4),
+        "no_chase_price": round(no_chase_price, 4),
+        "no_chase_distance_atr": 0.5,
+        "trial_position_cap": 0.25,
+        "confirmation_bars": 1,
+        "volume_is_soft_filter": True,
+        "minimum_remaining_risk_reward": 1.5,
+        "remaining_risk_reward": (
+            round(remaining_risk_reward, 4) if remaining_risk_reward is not None else None
+        ),
+        "monitor_preconfirmed": monitor_preconfirmed,
+    }
+    intraday_plan["strategy_class"] = "selloff_rebound_trial"
+    intraday_plan["selloff_rebound_control"] = control
+    intraday_plan["position_multiplier_cap"] = min(
+        _coerce_position_multiplier_cap(intraday_plan.get("position_multiplier_cap")),
+        0.25,
+    )
+
+    ladder = intraday_plan.get("execution_ladder")
+    if not isinstance(ladder, dict):
+        ladder = {}
+        intraday_plan["execution_ladder"] = ladder
+    trial_entry = ladder.get("trial_entry")
+    if not isinstance(trial_entry, dict):
+        trial_entry = {}
+        ladder["trial_entry"] = trial_entry
+    confirmation_add = ladder.get("confirmation_add")
+    if not isinstance(confirmation_add, dict):
+        confirmation_add = {}
+        ladder["confirmation_add"] = confirmation_add
+    invalidation = ladder.get("invalidation")
+    if not isinstance(invalidation, dict):
+        invalidation = {}
+        ladder["invalidation"] = invalidation
+
+    if missed_reason_key is not None:
+        if missed_reason_key == "selloff_rebound_late_extension":
+            reason = (
+                "短周期监控已判定急跌反弹过度延伸，本轮机会已错过，等待新结构。"
+                if language == "zh"
+                else "The short-window monitor marked the rebound as a late extension; wait for a new structure."
+            )
+        elif missed_reason_key == "selloff_rebound_exhaustion_candidate":
+            reason = (
+                "短周期监控已判定急跌反弹出现衰竭，本轮试仓信号作废，等待新结构。"
+                if language == "zh"
+                else "The short-window monitor marked the rebound as exhausted; invalidate the trial and wait."
+            )
+        elif missed_reason_key == "selloff_rebound_invalidated":
+            reason = (
+                f"急跌反弹已跌破冻结失效价（当前价 {current_price:.2f}，失效价 {invalidation_price:.2f}），"
+                "原试仓信号作废，等待新事件。"
+                if language == "zh"
+                else (
+                    f"The selloff rebound broke its frozen invalidation (current {current_price:.2f}, "
+                    f"invalidation {invalidation_price:.2f}); wait for a new event."
+                )
+            )
+        elif missed_reason_key == "selloff_rebound_no_chase_exceeded":
+            reason = (
+                f"急跌反弹已越过禁止追价线（当前价 {current_price:.2f}，禁止追价线 {no_chase_price:.2f}），"
+                "本轮机会已错过，等待新结构。"
+                if language == "zh"
+                else (
+                    f"The selloff rebound exceeded its no-chase level (current {current_price:.2f}, "
+                    f"no-chase {no_chase_price:.2f}); wait for a new structure."
+                )
+            )
+        else:
+            reason = (
+                f"急跌反弹按当前价计算的剩余风险收益比仅 1:{remaining_risk_reward:.2f}，低于 1:1.50，"
+                "本轮机会已错过，不再用迟到确认追多。"
+                if language == "zh"
+                else (
+                    f"Remaining reward/risk is only 1:{remaining_risk_reward:.2f}, below 1:1.50; "
+                    "the selloff rebound is missed and must not be chased."
+                )
+            )
+        intraday_plan["enabled"] = False
+        intraday_plan["direction"] = "wait"
+        intraday_plan["no_trade_reason"] = reason
+        intraday_plan["reason"] = reason
+        intraday_plan["trigger_execution_state"] = "selloff_rebound_missed"
+        intraday_plan["tradeability_status"] = "blocked"
+        intraday_plan["tradeability_reasons"] = [missed_reason_key]
+        ladder["current_action"] = "wait"
+        trial_entry["enabled"] = False
+        confirmation_add["enabled"] = False
+        return
+
+    hourly_confirmed = event_type == "selloff_rebound_confirmed"
+    trial_ready = bool(
+        current_price is not None
+        and current_price >= confirmation_price
+        and (monitor_preconfirmed or hourly_confirmed)
+    )
+    confirmation_text = (
+        f"短周期监控已在 {confirmation_price:.2f} 完成确认；当前未越过 {no_chase_price:.2f}，可先用计划仓位的25%试仓。"
+        if monitor_preconfirmed and language == "zh"
+        else (
+            f"等待一根闭合小时线收于冻结确认价 {confirmation_price:.2f} 上方；量比只影响仓位和置信度，不作为试仓硬门槛。"
+            if language == "zh"
+            else (
+                f"The short-window monitor confirmed {confirmation_price:.2f}; a 25% trial is allowed below "
+                f"the {no_chase_price:.2f} no-chase level."
+                if monitor_preconfirmed
+                else (
+                    f"Wait for one hourly close above the frozen {confirmation_price:.2f} trigger; "
+                    "volume affects size and confidence but is not a hard trial gate."
+                )
+            )
+        )
+    )
+    intraday_plan["enabled"] = True
+    intraday_plan["direction"] = "long"
+    intraday_plan["entry_price"] = round(confirmation_price, 4)
+    intraday_plan["stop_loss"] = round(invalidation_price, 4)
+    intraday_plan["entry_zone"] = (
+        f"急跌反弹冻结试仓区：{confirmation_price:.2f}-{no_chase_price:.2f} USDT"
+        if language == "zh"
+        else f"Frozen selloff-rebound trial zone: {confirmation_price:.2f}-{no_chase_price:.2f} USDT"
+    )
+    intraday_plan["trigger_condition"] = confirmation_text
+    intraday_plan["invalidation"] = (
+        f"价格跌破冻结失效价 {invalidation_price:.2f}，立即撤销或退出急跌反弹多单。"
+        if language == "zh"
+        else f"Cancel or exit the rebound long below the frozen {invalidation_price:.2f} invalidation."
+    )
+    intraday_plan["invalid_condition"] = intraday_plan["invalidation"]
+    intraday_plan["no_trade_reason"] = "" if trial_ready else confirmation_text
+    intraday_plan["reason"] = (
+        f"急跌后的早期右侧试仓：确认价冻结在 {confirmation_price:.2f}，不随 EMA/VWAP 上移；"
+        "先小仓验证，一根小时线确认后才加仓。"
+        if language == "zh"
+        else (
+            f"Early right-side selloff trial with a frozen {confirmation_price:.2f} trigger; "
+            "scale only after hourly confirmation."
+        )
+    )
+    intraday_plan["trigger_execution_state"] = (
+        "selloff_rebound_trial_ready" if trial_ready else "selloff_rebound_wait_hourly_close"
+    )
+
+    ladder["scenario"] = "liquidity_sweep_reversal"
+    ladder["current_action"] = "trial" if trial_ready else "wait"
+    trial_entry.update(
+        {
+            "enabled": True,
+            "entry_zone": intraday_plan["entry_zone"],
+            "entry_price": round(confirmation_price, 4),
+            "trigger_condition": confirmation_text,
+            "position_multiplier_cap": 0.25,
+            "position_hint": (
+                "仅使用计划仓位的25%，量能不足时不得放大仓位。"
+                if language == "zh"
+                else "Use only 25% of planned size; weak volume must not increase size."
+            ),
+        }
+    )
+    confirmation_add.update(
+        {
+            "enabled": monitor_preconfirmed,
+            "entry_price": round(confirmation_price, 4),
+            "requires_retest": False,
+            "trigger_condition": (
+                f"已有短周期试仓后，一根闭合小时线继续收于 {confirmation_price:.2f} 上方，才允许第二层加仓。"
+                if language == "zh"
+                else f"After the short-window trial, add only after one hourly close above {confirmation_price:.2f}."
+            ),
+            "position_hint": (
+                "第二层最多再使用计划仓位的25%。"
+                if language == "zh"
+                else "The second layer is capped at another 25% of planned size."
+            ),
+        }
+    )
+    ema = hourly.get("ema") if isinstance(hourly.get("ema"), dict) else {}
+    vwap = hourly.get("vwap") if isinstance(hourly.get("vwap"), dict) else {}
+    retest_reference = numeric(ema.get("ema20"), vwap.get("rolling_20"), confirmation_price)
+    ladder["retest_add"] = {
+        "enabled": True,
+        "entry_price": round(retest_reference or confirmation_price, 4),
+        "requires_retest": True,
+        "trigger_condition": (
+            "仅在小时 EMA20/VWAP 回踩承接成功并重新收回后，才允许第三层加仓。"
+            if language == "zh"
+            else "A third layer requires a successful hourly EMA20/VWAP retest and reclaim."
+        ),
+        "position_hint": (
+            "第三层执行后总仓位仍受原计划风险预算约束。"
+            if language == "zh"
+            else "Total size remains bounded by the original risk budget."
+        ),
+    }
+    invalidation.update(
+        {
+            "price": round(invalidation_price, 4),
+            "condition": intraday_plan["invalidation"],
+            "action": (
+                "撤销未成交试仓；已有仓位全部退出。"
+                if language == "zh"
+                else "Cancel pending trials and exit all existing layers."
+            ),
+        }
+    )
+
+    contract = intraday_plan.get("execution_contract")
+    if not isinstance(contract, dict):
+        contract = {"version": "btc-execution-v1"}
+        intraday_plan["execution_contract"] = contract
+    entry_contract = contract.get("entry")
+    if not isinstance(entry_contract, dict):
+        entry_contract = {}
+        contract["entry"] = entry_contract
+    entry_contract.update(
+        {
+            "setup_type": "breakout",
+            "signal_class": "selloff_rebound_trial",
+            "logic": "all",
+            "conditions": [{"type": "close_above", "value": round(confirmation_price, 4)}],
+            "confirmation_bars": 1,
+            "fill": "next_bar_open",
+            "max_wait_bars": 4,
+        }
+    )
+    exit_contract = contract.get("exit")
+    if not isinstance(exit_contract, dict):
+        exit_contract = {}
+        contract["exit"] = exit_contract
+    exit_contract.setdefault("max_holding_bars", 12)
 
 
 def _apply_btc_right_side_sweep_guard(
@@ -4466,7 +4864,7 @@ class GeminiAnalyzer:
 > BTC 点位字段格式：`entry_price`、`stop_loss`、`take_profit` 只能填写单个正数，不得混入“突破、回踩、站稳、跌破”等说明文字；区间放入 `entry_zone`，确认逻辑放入 `trigger_condition`，失效说明放入 `invalid_condition`。
 > BTC 计划质量门槛：可交易计划必须满足多单 `stop_loss < entry_price < take_profit`、空单 `take_profit < entry_price < stop_loss`；计划风险收益比不得低于 1:{minimum_risk_reward:g}。当前按 taker 双边手续费 {taker_fee_bps:g}bps/边、双边滑点 {2 * slippage_bps:g}bps、中性收益带 {neutral_band_pct:g}% 计算，往返成本约 {round_trip_cost_bps:g}bps（{round_trip_cost_pct:.4f}%），目标毛空间至少先覆盖 {minimum_target_buffer_pct:.4f}%；实际目标还必须满足 `reward_distance >= {minimum_risk_reward:g} * risk_distance`，并在此基础上再覆盖上述成本缓冲，否则设为不交易。
 > BTC 计划选择规则：趋势已经明确但突破追价会让风险收益不足时，优先生成 `pullback` 计划并冻结支撑/压力、止损、目标和有效 bars，不得在后续报告中随着价格上涨持续抬高同一方向的触发价。只有原计划过期、失效或方向反转后才能启用新计划。
-> BTC 量能与确认门槛：`breakout` 计划必须包含 `volume_ratio_gte` 且阈值不得低于 {minimum_volume_ratio:g}，普通突破/跌破使用至少 2 根闭合 K 线确认；`pullback` 计划以触及关键位后收回为硬条件，量能只用于置信度和仓位降权，不强制作为硬门槛。Price Action、VWAP、EMA 未形成可解释结构，或日线/小时线方向处于 `wait_for_*` 等冲突状态时，默认 `enabled=false`/等待确认，不得勉强给出入场计划。
+> BTC 量能与确认门槛：普通 `breakout` 计划必须包含 `volume_ratio_gte` 且阈值不得低于 {minimum_volume_ratio:g}，普通突破/跌破使用至少 2 根闭合 K 线确认；`pullback` 计划以触及关键位后收回为硬条件，量能只用于置信度和仓位降权，不强制作为硬门槛。急跌反弹例外使用 `signal_class=selloff_rebound_trial`：事件低点所在 K 线高点是冻结试仓确认价，短周期监控已确认时可直接 25% 试仓，否则只需一根闭合小时线收于冻结价上方，量比不是硬门槛；超过 0.5×ATR 禁止追价线或剩余风险收益比低于 1:1.5 时写明机会错过。Price Action、VWAP、EMA 未形成可解释结构，或日线/小时线方向处于 `wait_for_*` 等冲突状态时，默认 `enabled=false`/等待确认，不得勉强给出入场计划。
 > BTC `sniper_points` 兼容规则：`dashboard.battle_plan.sniper_points` 只填写最终主方案的点位，并在文字中标明方向；完整的两套点位必须放入 `long_plan` 与 `short_plan`。
 > BTC `decision_type` 兼容规则：JSON 字段仍只能使用 `buy`、`hold`、`sell`；为避免合约语义歧义，`buy` 仅表示 Long / 多单开仓或加多，`sell` 仅表示 Short / 空单开仓、加空或多单风控退出，`hold` 表示 Flat / 空仓等待、持仓观望或区间观察。若建议做空，`operation_advice`、`dashboard.core_conclusion.position_advice` 与 `dashboard.battle_plan.sniper_points` 的文字必须明确写“空单入场/做空开仓”，不要写成单纯“卖出现货”；若是平空或平多，必须在文字中明确写“平空/平多”，不要只依赖 `buy`/`sell`。
 """
@@ -4560,6 +4958,7 @@ class GeminiAnalyzer:
 > BTC 小时线约束：小时线是独立的日内机会层，不再强制服从日线方向。日线偏空但小时线出现多单机会、或日线偏多但小时线出现空单机会时，可以给出逆日线短线计划，但必须明确这是日内/短线机会，止损更严格、仓位更轻、有效期更短，并写清触发价、止损、目标、失效条件和 `daily_constraint`。必须写入 `dashboard.battle_plan.intraday_plan`；若小时线数据缺失或没有日内机会，`enabled=false`、`direction="wait"`，并说明等待条件。
 > BTC 右侧状态机约束：当 `event.right_side.version=btc-right-side-v1` 时，必须按 `state` 与 `direction` 输出双向执行路径。`sweep_detected` 只启动观察，不直接追单；收盘越过 `confirmation_price` 后可进入 `trial_entry`，反抽/回踩不是硬性必需，但若价格未过度延伸，可只用小仓延续试仓；`confirmation_add` 只有在回踩/反抽确认失败后才允许启用。当前价距离确认价超过 `no_chase_distance_atr` 时，必须写为机会错过/等待新结构，不能把远端旧区间继续当作有效入场区。`breakdown_confirmed`/`breakout_confirmed` 允许直接进入对应方向的延续路径，但仍受追价线、风险收益比和失效价约束。
 > BTC 急跌机会约束（含扫高扫低）：当小时线事件类型不是 `none` 时，`dashboard.battle_plan.intraday_plan.trigger_condition` 必须引用具体确认价或延续试仓价；`invalidation` 必须引用方向对应的失效价；`reason` 必须说明这是扫高反转、扫低反转、急跌后的右侧确认或跌破延续，禁止只输出“暂无明确信号”而不给可执行等待价位。
+> BTC 急跌反弹分层约束：`selloff_rebound_candidate/confirmed` 不得套用普通突破的“两根小时 K + 量比”门槛。第一层是冻结确认价附近的 25% 试仓，第二层是一根闭合小时线确认后的加仓，第三层才要求 EMA20/VWAP 回踩承接；后续报告必须沿用最近 4 小时内仍有效的监控确认价和失效价，不得重新抬高同一事件的试仓价。
 > BTC 衍生品约束：Funding/OI 只作为杠杆拥挤度和风控降权信息，不得单独作为入场依据；当 `leverage_pressure` 显示 long/short crowding risk 时，必须在对应方向计划中降低仓位、等待更强价格确认，或解释为什么当前结构足以抵消拥挤风险。
 > BTC 订单流约束：CVD/主动买卖量当前处于影子验证阶段，只能用于降低置信度、要求更强价格确认或解释假突破风险；不得因单个订单流窗口直接反转日线/小时线方向，也不得把缺失订单流解释为中性。
 """

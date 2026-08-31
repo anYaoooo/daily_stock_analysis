@@ -81,6 +81,7 @@ BTC 属于 7x24 双向交易标的，默认策略不得只选择多头。当前�
 - `confirmation_add` 必须在试仓方向验证后执行，且只有出现回踩/反抽确认（或明确的拒绝失败）才可加仓；反抽不是试仓的硬性前置条件。
 - 当前价距离确认价超过 0.75×ATR，或已超过 `no_chase_price`，标记为机会错过并等待新结构，不继续使用已经远离的旧入场区间；状态最多等待 4 根对应周期 K 线。
 - `breakdown_confirmed` 与 `breakout_confirmed` 对空、多方向对称适用，仍须检查失效价、风险收益比和追价边界。
+- 急跌反弹使用独立的 `selloff_rebound_trial` 路径：事件形成时把事件低点所在 K 线高点冻结为试仓确认价，不得随着 EMA/VWAP 上移；短周期监控已确认时可直接使用计划仓位 25% 试仓，否则只需一根闭合小时线收于冻结确认价上方。量比仅影响仓位与置信度，不是试仓硬门槛；超过 0.5×ATR 禁止追价线或剩余风险收益比低于 1:1.5 时必须标记机会错过。
 
 ### 3. 点位贴近现价（可触发性约束）
 - 入场价/试仓价必须落在当前价 ±1.0×ATR（日线 atr14）以内；若符合逻辑的点位距现价过远，不得给出遥远挂单，应改为等待条件并写明触发价位。
@@ -99,7 +100,7 @@ CRYPTO_BATTLE_PLAN_SCHEMA_ZH = """## BTC 作战计划输出结构（必须严格
 
 - `long_plan` 与 `short_plan`（日线级主策略，必须同时输出；即使倾向一边，另一边也要给“仅在何条件触发”的备用计划）：包含 `plan_type`、`direction`（long/short/wait）、`entry_zone`、`entry_price`、`stop_loss`、`take_profit`、`trigger_condition`、`invalidation`、`risk_reward`、`position_hint`、`confidence`、`reason`、`execution_ladder`、`execution_contract`；暂不满足时写清等待条件和 `no_trade_reason`。
 - `intraday_plan`（仅承载小时线日内机会，不得混写日线主策略）：额外包含 `enabled` 与 `daily_constraint`；无日内机会时 `enabled=false`、`direction="wait"` 并写清等待条件。
-- `execution_contract` 结构要求：`entry.setup_type` 取 breakout 或 pullback（突破跟随选 breakout，等回踩承接/反抽拒绝选 pullback）；`entry.conditions` 为 `{"type": ..., "value": ...}` 列表，breakout 用 close_above/close_below 且必须带 volume_ratio_gte，pullback 用 low_lte/high_gte 触碰并搭配收盘确认；确认价 value 必须贴近 entry_price，偏离不超过 0.5%；`confirmation_bars` 一般为 1；`fill` 用 next_bar_open。
+- `execution_contract` 结构要求：`entry.setup_type` 取 breakout 或 pullback（突破跟随选 breakout，等回踩承接/反抽拒绝选 pullback）；`entry.conditions` 为 `{"type": ..., "value": ...}` 列表，普通 breakout 用 close_above/close_below 且必须带 volume_ratio_gte，pullback 用 low_lte/high_gte 触碰并搭配收盘确认；`entry.signal_class=selloff_rebound_trial` 时只用冻结确认价的 close_above、`confirmation_bars=1`，量比不作硬门槛；确认价 value 必须贴近 entry_price，偏离不超过 0.5%；`fill` 用 next_bar_open。
 - 等待与持仓窗口：日线计划按日线K线计，`max_wait_bars` 在 2-5、`exit.max_holding_bars` 在 3-7 内按触发难易取值；日内计划按小时线计，`max_wait_bars` 不超过 8、`exit.max_holding_bars` 不超过 12。
 - `execution_ladder`：关键位轻仓试仓、结构确认后加仓，以及同一失效价触发后的撤销/退出；试仓必须基于回踩承接、扫流动性收回或区间边缘拒绝等明确结构，并遵守 `btc-right-side-v1` 的 25% 试仓、0.75×ATR 禁止追价和 4 根 K 线等待窗口。
 """

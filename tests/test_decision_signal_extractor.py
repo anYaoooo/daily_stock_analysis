@@ -142,6 +142,7 @@ def test_build_payload_prefers_active_intraday_strategy_plan() -> None:
             },
             "intraday_plan": {
                 "plan_type": "intraday",
+                "strategy_class": "selloff_rebound_trial",
                 "enabled": True,
                 "direction": "long",
                 "entry_zone": "1710-1720",
@@ -156,6 +157,11 @@ def test_build_payload_prefers_active_intraday_strategy_plan() -> None:
                 "position_hint": "单笔风险不超过 0.5%",
                 "confidence": "中：等待右侧确认",
                 "reason": "急跌后收复 VWAP，存在日内右侧机会",
+                "trigger_execution_state": "selloff_rebound_trial_ready",
+                "selloff_rebound_control": {
+                    "confirmation_price": 1715,
+                    "invalidation_price": 1688,
+                },
                 "execution_contract": {
                     "version": "btc-execution-v1",
                     "entry": {"setup_type": "pullback"},
@@ -194,6 +200,14 @@ def test_build_payload_prefers_active_intraday_strategy_plan() -> None:
     ]
     assert payload["reason"] == "急跌后收复 VWAP，存在日内右侧机会"
     assert payload["metadata"]["strategy_plan"]["source"] == "intraday_plan"
+    assert payload["metadata"]["strategy_plan"]["strategy_class"] == "selloff_rebound_trial"
+    assert payload["metadata"]["strategy_plan"]["trigger_execution_state"] == (
+        "selloff_rebound_trial_ready"
+    )
+    assert payload["metadata"]["strategy_plan"]["selloff_rebound_control"] == {
+        "confirmation_price": 1715,
+        "invalidation_price": 1688,
+    }
     assert payload["metadata"]["strategy_plan"]["setup_type"] == "pullback"
     assert payload["metadata"]["strategy_plan"]["risk_reward"] == "1:2.1"
     assert payload["evidence"]["strategy_plan"]["setup_type"] == "pullback"

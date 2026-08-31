@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] BTC 急跌反弹试仓信号新增持续价格跟踪，区分疑似假跌破、连续采样有效跌破、重新收回和冻结失效价触发。
+
+- [修复] BTC 急跌反弹确认价改为事件形成时冻结，新增短周期 25% 试仓、一根小时线确认加仓和 EMA/VWAP 回踩加仓三层路径；量比仅降权，超过 0.5×ATR 追价线或剩余风险收益比低于 1:1.5 时明确标记机会错过，并让后续小时报告在四小时内继承仍有效的监控信号，避免反弹末端重复抬高确认门槛。
+
 - [文档] 新增空白 Windows 电脑迁移与 RX 9070 XT 训练环境指南，覆盖 SQLite/配置/训练数据备份、AMD ROCm PyTorch 安装验证、Web 恢复、GPU 冒烟训练、故障排查和回滚。
 - [改进] BTC Transformer Fusion 研究默认提高最小训练窗口至 5000 个样本、训练轮数至 30，并关闭类别加权与 regime 损失的默认反向影响；新增收益预测 Pearson/Spearman IC 诊断，类别加权改为 CLI 显式 opt-in。
 - [改进] BTC Transformer 1h/4h 方向标签默认中性区间调整为 35/70bps，降低短周期噪声边界；结果仍保持离线 research/shadow 模式。

@@ -1742,6 +1742,8 @@ BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=true
 
 为避免一两根垂直大阳/大阴后才给出追价建议，监控会把触发状态标为 `first_impulse_candidate`、`early_continuation`、`late_extension` 或 `exhaustion_candidate`。价格越过确认价超过 `BTC_VOLATILITY_MONITOR_MAX_ENTRY_OVERSHOOT_PCT`（默认 0.3%）时，仍可生成小时线分析，但 `intraday_plan` 会强制降为等待，不会制造一个未触及的理想回踩价冒充当前入场机会。若脉冲已越过确认价、随后在入场前回撤/反抽达到 `BTC_VOLATILITY_MONITOR_EXHAUSTION_RETRACE_PCT`（默认 0.25%），机会会被取消并发送衰竭警报。定标工具：`python scripts/replay_volatility_monitor.py --csv <1m K线 CSV>` 或 `--fetch --exchange okx --symbol BTC/USDT --days 3`，输出检出率、平均检出延迟和误报率，`--compare` 可同时对比单窗口与多级窗口配置。
 
+急跌反弹报告形成可执行的 `selloff_rebound_trial_ready` 试仓信号后，波动监控会继续读取持久化计划并跟踪同一冻结确认价和失效价。首次跌回确认价下方时推送“疑似假跌破”，停止加仓但不立即把单次插针当成硬失效；连续采样次数达到 `max(2, BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES)` 时升级为“短周期有效跌破”，提示退出或减掉试仓；随后重新站回确认价时推送“假跌破已收回”。触及冻结失效价不等待连续采样，立即将信号标为失效并提示退出。该状态机跟踪的是系统给出的试仓信号，不能证明用户已经真实成交，也不会自动下单或自动加仓。
+
 ```env
 BTC_HOURLY_ANALYSIS_INTERVAL_HOURS=4
 BTC_HOURLY_ANALYSIS_AT_MINUTE=5

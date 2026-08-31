@@ -130,6 +130,43 @@ def test_build_crypto_technical_context_flags_selloff_rebound_candidate() -> Non
     assert context["event"]["right_side"]["state"] == "sweep_detected"
 
 
+def test_selloff_rebound_freezes_confirmation_at_event_bar_high() -> None:
+    bars = _btc_bars()
+    bars[["open", "high", "low", "close", "volume"]] = bars[
+        ["open", "high", "low", "close", "volume"]
+    ].astype(float)
+    last_idx = bars.index[-1]
+    reference_high = float(bars.iloc[-7:-1]["high"].max())
+    event_low = reference_high * 0.94
+    event_high = reference_high * 0.955
+    # Keep an older lower support inside the 20-bar sweep window but outside
+    # the 6-bar selloff event window, so this is a shock rebound rather than a
+    # fresh liquidity sweep.
+    bars.loc[last_idx - 10, "low"] = reference_high * 0.90
+    bars.loc[last_idx, "open"] = event_low * 1.004
+    bars.loc[last_idx, "high"] = event_high
+    bars.loc[last_idx, "low"] = event_low
+    bars.loc[last_idx, "close"] = event_low * 1.009
+
+    first = build_crypto_technical_context(bars, "BTC")
+    assert first is not None
+    first_event = first["event"]
+    assert first_event["type"] == "selloff_rebound_candidate"
+    assert first_event["trigger_reference"]["long_confirmation_price"] == round(event_high, 2)
+    assert first_event["trigger_reference"]["long_confirmation_source"] == "event_bar_high"
+    assert first_event["right_side"]["state"] == "selloff_rebound_candidate"
+    assert first_event["right_side"]["direction"] == "long"
+    assert first_event["right_side"]["no_chase_distance_atr"] == 0.5
+
+    bars.loc[last_idx, "close"] = event_high + 1
+    confirmed = build_crypto_technical_context(bars, "BTC")
+    assert confirmed is not None
+    confirmed_event = confirmed["event"]
+    assert confirmed_event["type"] == "selloff_rebound_confirmed"
+    assert confirmed_event["trigger_reference"]["long_confirmation_price"] == round(event_high, 2)
+    assert confirmed_event["right_side"]["confirmation_price"] == round(event_high, 2)
+
+
 def test_build_crypto_technical_context_ignores_regular_stocks() -> None:
     assert build_crypto_technical_context(_btc_bars(), "AAPL") is None
 

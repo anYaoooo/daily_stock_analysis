@@ -247,8 +247,16 @@ def _build_event_context(
         (drop_from_reference_high_pct is not None and drop_from_reference_high_pct <= -3.0)
         or (atr_move is not None and atr_move >= 2.0)
     )
-    reclaim_candidates = [value for value in (event_bar_high, vwap, ema20) if value is not None and value > close]
-    confirmation_price = min(reclaim_candidates) if reclaim_candidates else event_bar_high
+    # Freeze the selloff trial trigger at the event candle high.  EMA/VWAP are
+    # later quality and scale-in references; choosing only levels still above
+    # the current close made the trigger move higher after every reclaim and
+    # turned an early right-side trial into a late, retrospective confirmation.
+    confirmation_price = event_bar_high
+    confirmation_source = "event_bar_high" if event_bar_high is not None else None
+    if confirmation_price is None:
+        fallback_candidates = [value for value in (ema20, vwap) if value is not None]
+        confirmation_price = min(fallback_candidates) if fallback_candidates else None
+        confirmation_source = "ema20_or_vwap_fallback" if confirmation_price is not None else None
     invalidation_buffer = atr14 * 0.3 if atr14 is not None and atr14 > 0 else None
     long_invalidation = (event_low - invalidation_buffer) if event_low is not None and invalidation_buffer is not None else event_low
     short_breakdown = recent_low if recent_low is not None else event_low
@@ -313,8 +321,27 @@ def _build_event_context(
             else None
         )
         right_side_continuation = recent_high
+    elif shock_move and confirmation_price is not None:
+        right_side_state = (
+            "selloff_rebound_confirmed"
+            if close >= confirmation_price
+            else "selloff_rebound_candidate"
+        )
+        right_side_direction = "long"
+        right_side_confirmation = confirmation_price
+        right_side_invalidation = long_invalidation
+        right_side_retest_zone = [
+            _round(confirmation_price - band_buffer),
+            _round(confirmation_price + band_buffer),
+        ]
+        right_side_continuation = confirmation_price
 
-    no_chase_distance = atr14 * 0.75 if atr14 is not None and atr14 > 0 else band_buffer * 3
+    no_chase_distance_atr = 0.5 if shock_move and right_side_direction == "long" else 0.75
+    no_chase_distance = (
+        atr14 * no_chase_distance_atr
+        if atr14 is not None and atr14 > 0
+        else band_buffer * (2 if no_chase_distance_atr == 0.5 else 3)
+    )
     no_chase_price = None
     if right_side_confirmation is not None:
         no_chase_price = (
@@ -331,7 +358,8 @@ def _build_event_context(
         "continuation_price": _round(right_side_continuation),
         "retest_zone": right_side_retest_zone,
         "invalidation_price": _round(right_side_invalidation),
-        "no_chase_distance_atr": 0.75,
+        "confirmation_source": confirmation_source,
+        "no_chase_distance_atr": no_chase_distance_atr,
         "no_chase_price": _round(no_chase_price),
         "max_wait_bars": 4,
         "trial_position_pct": 25,
@@ -385,6 +413,7 @@ def _build_event_context(
         "atr_move": _round(atr_move, 2),
         "trigger_reference": {
             "long_confirmation_price": _round(confirmation_price),
+            "long_confirmation_source": confirmation_source,
             "long_invalidation_price": _round(long_invalidation),
             "short_breakdown_price": _round(short_breakdown),
             "stop_buffer_atr": _round(invalidation_buffer),

@@ -11,6 +11,7 @@ A股自选股智能分析系统 - 核心分析流水线
 4. 提供股票分析的核心功能
 """
 
+import json
 import logging
 import threading
 import time
@@ -712,7 +713,10 @@ class StockAnalysisPipeline:
                 crypto_technical_context=crypto_technical_context,
             )
             enhanced_context["market_phase_context"] = market_phase_context_dict
-            trigger_context = getattr(self, "trigger_context", None)
+            trigger_context = self._resolve_btc_trigger_context(
+                code,
+                current_price=(self._safe_to_dict(realtime_quote) or {}).get("price"),
+            )
             if trigger_context is not None:
                 enhanced_context["trigger_context"] = dict(trigger_context)
             self._attach_daily_market_context(
@@ -1254,7 +1258,10 @@ class StockAnalysisPipeline:
             }
             if isinstance(portfolio_context, dict):
                 initial_context["portfolio_context"] = dict(portfolio_context)
-            trigger_context = getattr(self, "trigger_context", None)
+            trigger_context = self._resolve_btc_trigger_context(
+                code,
+                current_price=(self._safe_to_dict(realtime_quote) or {}).get("price"),
+            )
             if trigger_context is not None:
                 initial_context["trigger_context"] = dict(trigger_context)
             if self.analysis_skills is not None:
@@ -2342,6 +2349,88 @@ class StockAnalysisPipeline:
         if self.analysis_skills is not None:
             snapshot["skills"] = list(self.analysis_skills)
         return snapshot
+
+    def _resolve_btc_trigger_context(
+        self,
+        code: str,
+        *,
+        current_price: Any = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the current trigger or a recent still-valid BTC entry signal.
+
+        Scheduled hourly reports used to discard a monitor-confirmed entry and
+        rebuild a later trigger from indicators.  Reuse is intentionally
+        bounded to four hours and only accepts an explicit monitor entry signal
+        that has not crossed its frozen invalidation price.
+        """
+
+        current = getattr(self, "trigger_context", None)
+        if isinstance(current, dict):
+            return dict(current)
+        if not is_crypto_code(code) or getattr(self, "analysis_mode", "daily") != "hourly":
+            return None
+
+        try:
+            rows = self.db.get_analysis_history(code=code, days=1, limit=12)
+        except Exception as exc:
+            logger.debug("[%s] recent BTC trigger lookup failed: %s", code, exc)
+            return None
+
+        now = datetime.now()
+        for row in rows:
+            created_at = getattr(row, "created_at", None)
+            if not isinstance(created_at, datetime):
+                continue
+            if created_at.tzinfo is not None:
+                created_at = created_at.astimezone().replace(tzinfo=None)
+            age = now - created_at
+            if age < timedelta(0) or age > timedelta(hours=4):
+                continue
+            raw_snapshot = getattr(row, "context_snapshot", None)
+            if not raw_snapshot:
+                continue
+            try:
+                snapshot = json.loads(raw_snapshot) if isinstance(raw_snapshot, str) else raw_snapshot
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(snapshot, dict):
+                continue
+            enhanced = snapshot.get("enhanced_context")
+            trigger = enhanced.get("trigger_context") if isinstance(enhanced, dict) else None
+            if not isinstance(trigger, dict):
+                continue
+            if str(trigger.get("trigger_source") or "").strip().lower() != "btc_volatility":
+                continue
+            if str(trigger.get("trigger_reason") or "").strip().lower() != "entry_signal":
+                continue
+            direction = str(trigger.get("trade_direction") or "").strip().lower()
+            if direction not in {"long", "short"}:
+                continue
+            try:
+                invalidation = float(trigger.get("invalidation_price"))
+            except (TypeError, ValueError):
+                invalidation = None
+            signal_price = None
+            try:
+                signal_price = float(current_price)
+            except (TypeError, ValueError):
+                try:
+                    signal_price = float(trigger.get("price"))
+                except (TypeError, ValueError):
+                    pass
+            if invalidation is not None and signal_price is not None:
+                if (direction == "long" and signal_price <= invalidation) or (
+                    direction == "short" and signal_price >= invalidation
+                ):
+                    continue
+            inherited = dict(trigger)
+            if signal_price is not None:
+                inherited["current_price"] = signal_price
+            inherited["inherited_from_history"] = True
+            inherited["inherited_analysis_history_id"] = getattr(row, "id", None)
+            inherited["inherited_age_minutes"] = round(age.total_seconds() / 60.0, 1)
+            return inherited
+        return None
 
     def _extract_decision_signal_after_history_save(
         self,

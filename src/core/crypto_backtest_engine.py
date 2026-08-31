@@ -127,12 +127,13 @@ class CryptoBacktestEngine:
         if str(config.engine_version).strip().lower() != "btc-plan-v5":
             return []
 
+        signal_class = str((contract.get("entry") or {}).get("signal_class") or "").strip().lower()
         errors = cls._plan_quality_errors(
             plan=plan,
             contract=contract,
             entry_price=float(plan.entry_price),
             config=config,
-            require_volume_gate=True,
+            require_volume_gate=signal_class != "selloff_rebound_trial",
         )
         confirmation_entry = cls._confirmation_entry_boundary(
             contract=contract,
@@ -299,12 +300,13 @@ class CryptoBacktestEngine:
         instrument = contract["instrument"]
 
         if is_quality_gate_engine:
+            signal_class = str((contract.get("entry") or {}).get("signal_class") or "").strip().lower()
             quality_errors = cls._plan_quality_errors(
                 plan=plan,
                 contract=contract,
                 entry_price=float(plan.entry_price),
                 config=config,
-                require_volume_gate=True,
+                require_volume_gate=signal_class != "selloff_rebound_trial",
             )
             if quality_errors:
                 result = cls._skipped(plan, "invalid_plan_quality")
@@ -670,6 +672,9 @@ class CryptoBacktestEngine:
         if setup_type not in {"breakout", "pullback"}:
             errors.append("unsupported_setup_type")
             setup_type = "breakout"
+        signal_class = str(entry.get("signal_class") or "").strip().lower()
+        if signal_class not in {"", "selloff_rebound_trial"}:
+            errors.append("unsupported_signal_class")
         if not 1 <= confirmation_bars <= 3:
             errors.append("confirmation_bars_out_of_range")
         if max_wait_bars < 1 or max_holding_bars < 1:
@@ -680,6 +685,7 @@ class CryptoBacktestEngine:
             "instrument": instrument.to_contract() if instrument is not None else {},
             "entry": {
                 "setup_type": setup_type,
+                "signal_class": signal_class or None,
                 "logic": "all",
                 "conditions": normalized_conditions,
                 "confirmation_bars": confirmation_bars,

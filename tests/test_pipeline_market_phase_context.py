@@ -3,8 +3,9 @@
 
 import os
 import sys
+import json
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -233,6 +234,97 @@ class PipelineMarketPhaseContextTestCase(unittest.TestCase):
         self.assertEqual(
             snapshot["enhanced_context"]["trigger_context"]["confirmation_count"],
             2,
+        )
+
+    def test_hourly_btc_analysis_inherits_recent_monitor_entry_signal(self):
+        pipeline = _make_pipeline(agent_mode=False, save_context_snapshot=True)
+        pipeline.analysis_mode = "hourly"
+        pipeline.trigger_context = None
+        pipeline.db = MagicMock()
+        pipeline.db.get_analysis_history.return_value = [
+            SimpleNamespace(
+                id=88,
+                created_at=datetime.now() - timedelta(hours=2),
+                context_snapshot=json.dumps(
+                    {
+                        "enhanced_context": {
+                            "trigger_context": {
+                                "trigger_source": "btc_volatility",
+                                "trigger_reason": "entry_signal",
+                                "trade_direction": "long",
+                                "price": 100.2,
+                                "entry_price": 100.0,
+                                "invalidation_price": 95.0,
+                            }
+                        }
+                    }
+                ),
+            )
+        ]
+
+        trigger = pipeline._resolve_btc_trigger_context("BTC")
+
+        self.assertIsNotNone(trigger)
+        self.assertEqual(trigger["entry_price"], 100.0)
+        self.assertTrue(trigger["inherited_from_history"])
+        self.assertEqual(trigger["inherited_analysis_history_id"], 88)
+
+    def test_hourly_btc_analysis_does_not_inherit_stale_monitor_signal(self):
+        pipeline = _make_pipeline(agent_mode=False, save_context_snapshot=True)
+        pipeline.analysis_mode = "hourly"
+        pipeline.trigger_context = None
+        pipeline.db = MagicMock()
+        pipeline.db.get_analysis_history.return_value = [
+            SimpleNamespace(
+                id=77,
+                created_at=datetime.now() - timedelta(hours=5),
+                context_snapshot=json.dumps(
+                    {
+                        "enhanced_context": {
+                            "trigger_context": {
+                                "trigger_source": "btc_volatility",
+                                "trigger_reason": "entry_signal",
+                                "trade_direction": "long",
+                                "price": 100.2,
+                                "entry_price": 100.0,
+                                "invalidation_price": 95.0,
+                            }
+                        }
+                    }
+                ),
+            )
+        ]
+
+        self.assertIsNone(pipeline._resolve_btc_trigger_context("BTC"))
+
+    def test_hourly_btc_analysis_does_not_inherit_invalidated_signal(self):
+        pipeline = _make_pipeline(agent_mode=False, save_context_snapshot=True)
+        pipeline.analysis_mode = "hourly"
+        pipeline.trigger_context = None
+        pipeline.db = MagicMock()
+        pipeline.db.get_analysis_history.return_value = [
+            SimpleNamespace(
+                id=66,
+                created_at=datetime.now() - timedelta(hours=1),
+                context_snapshot=json.dumps(
+                    {
+                        "enhanced_context": {
+                            "trigger_context": {
+                                "trigger_source": "btc_volatility",
+                                "trigger_reason": "entry_signal",
+                                "trade_direction": "long",
+                                "price": 100.2,
+                                "entry_price": 100.0,
+                                "invalidation_price": 95.0,
+                            }
+                        }
+                    }
+                ),
+            )
+        ]
+
+        self.assertIsNone(
+            pipeline._resolve_btc_trigger_context("BTC", current_price=94.5)
         )
 
     def test_agent_analysis_artifacts_helper_maps_initial_context_zero_fetch(self):

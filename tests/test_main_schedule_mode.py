@@ -420,6 +420,9 @@ class MainScheduleModeTestCase(unittest.TestCase):
             exit_code = main.main()
             self.assertEqual(exit_code, 0)
             monitor_cls.assert_called_once()
+            monitor_kwargs = monitor_cls.call_args.kwargs
+            self.assertTrue(callable(monitor_kwargs["trial_plan_provider"]))
+            self.assertTrue(callable(monitor_kwargs["trial_state_updater"]))
             run_full_analysis.assert_not_called()
             self.assertEqual(len(scheduled_call["background_tasks"]), 2)
             self._assert_btc_hourly_background_task(scheduled_call["background_tasks"][0])
@@ -586,6 +589,69 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertIn("空单确认价：64221.3 USDT", content)
         self.assertIn("空头失效价：64671.75 USDT", content)
 
+    def test_btc_trial_alert_distinguishes_possible_false_break_and_invalidation(self) -> None:
+        watch = main._format_btc_volatility_alert(
+            {
+                "trigger_reason": "trial_breakdown_watch",
+                "price": 77980,
+                "confirmation_price": 78000,
+                "invalidation_price": 77400,
+                "consecutive_break_samples": 1,
+                "confirmation_required": 2,
+            }
+        )
+        invalidated = main._format_btc_volatility_alert(
+            {
+                "trigger_reason": "trial_invalidation",
+                "price": 77390,
+                "confirmation_price": 78000,
+                "invalidation_price": 77400,
+            }
+        )
+        reclaimed_after_confirmed = main._format_btc_volatility_alert(
+            {
+                "trigger_reason": "trial_false_break_reclaimed",
+                "reclaimed_from_state": "breakdown_confirmed",
+                "price": 78020,
+                "confirmation_price": 78000,
+                "invalidation_price": 77400,
+            }
+        )
+
+        self.assertIn("疑似假跌破", watch)
+        self.assertIn("停止加仓", watch)
+        self.assertIn("信号失效", invalidated)
+        self.assertIn("退出试仓", invalidated)
+        self.assertIn("有效跌破后重新收回", reclaimed_after_confirmed)
+        self.assertIn("不追溯改判为假跌破", reclaimed_after_confirmed)
+
+    def test_btc_trial_alert_uses_transition_scoped_dedup_key(self) -> None:
+        args = self._make_args()
+        notifier = MagicMock()
+        notifier.send_with_results.return_value = SimpleNamespace(
+            status="sent",
+            success=True,
+        )
+        stats = {
+            "trial_tracking_event": 1,
+            "trial_signal_id": 7,
+            "tracking_episode": 2,
+            "trigger_reason": "trial_false_break_reclaimed",
+            "price": 78020,
+            "confirmation_price": 78000,
+            "invalidation_price": 77400,
+        }
+
+        with patch("src.notification.NotificationService", return_value=notifier):
+            main._send_btc_volatility_alert(args, stats)
+
+        call_kwargs = notifier.send_with_results.call_args.kwargs
+        self.assertEqual(
+            call_kwargs["dedup_key"],
+            "btc-trial:7:2:trial_false_break_reclaimed",
+        )
+        self.assertEqual(call_kwargs["cooldown_key"], call_kwargs["dedup_key"])
+
     def test_schedule_mode_uses_websocket_quote_fetcher_when_enabled(self) -> None:
         args = self._make_args(schedule=True)
         config = self._make_config(
@@ -622,7 +688,11 @@ class MainScheduleModeTestCase(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         ws_cls.assert_called_once_with(stale_after_seconds=20)
-        monitor_cls.assert_called_once_with(quote_fetcher=quote_fetcher)
+        monitor_cls.assert_called_once()
+        monitor_kwargs = monitor_cls.call_args.kwargs
+        self.assertIs(monitor_kwargs["quote_fetcher"], quote_fetcher)
+        self.assertTrue(callable(monitor_kwargs["trial_plan_provider"]))
+        self.assertTrue(callable(monitor_kwargs["trial_state_updater"]))
         self.assertEqual(scheduled_call["background_tasks"][1]["name"], "btc_volatility_monitor")
 
     def test_check_notify_returns_before_other_modes(self) -> None:

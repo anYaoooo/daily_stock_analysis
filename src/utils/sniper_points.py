@@ -15,6 +15,7 @@ STRATEGY_PLAN_KEYS = (
     "timeframe",
     "analysis_timeframe",
     "plan_type",
+    "strategy_class",
     "direction",
     "entry_price",
     "entry_zone",
@@ -32,11 +33,14 @@ STRATEGY_PLAN_KEYS = (
     "reason",
     "validation_status",
     "validation_note",
+    "trigger_execution_state",
+    "selloff_rebound_control",
 )
 INTRADAY_PLAN_KEYS = (
     "timeframe",
     "analysis_timeframe",
     "plan_type",
+    "strategy_class",
     "enabled",
     "direction",
     "entry_price",
@@ -56,6 +60,8 @@ INTRADAY_PLAN_KEYS = (
     "reason",
     "validation_status",
     "validation_note",
+    "trigger_execution_state",
+    "selloff_rebound_control",
 )
 
 
@@ -199,7 +205,11 @@ def _normalize_strategy_plan(value: Any) -> Optional[Dict[str, Any]]:
             raw_value = value.get(camel_key)
         if raw_value is None:
             continue
-        if key in {"execution_contract", "execution_ladder"} and isinstance(raw_value, Mapping):
+        if key in {
+            "execution_contract",
+            "execution_ladder",
+            "selloff_rebound_control",
+        } and isinstance(raw_value, Mapping):
             normalized[key] = dict(raw_value)
             continue
         text = str(raw_value).strip()
@@ -228,7 +238,11 @@ def _normalize_intraday_plan(value: Any) -> Optional[Dict[str, Any]]:
             raw_value = value.get(camel_key)
         if raw_value is None:
             continue
-        if key in {"execution_contract", "execution_ladder"} and isinstance(raw_value, Mapping):
+        if key in {
+            "execution_contract",
+            "execution_ladder",
+            "selloff_rebound_control",
+        } and isinstance(raw_value, Mapping):
             normalized[key] = dict(raw_value)
             continue
         if key == "enabled" and isinstance(raw_value, bool):

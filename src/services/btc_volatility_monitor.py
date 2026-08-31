@@ -8,7 +8,7 @@ import math
 import statistics
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from data_provider.crypto_fetcher import CryptoFetcher
 
@@ -51,6 +51,84 @@ class ActiveOpportunity:
     trough_price: Optional[float] = None
 
 
+@dataclass
+class TrialTrackingState:
+    """Runtime state for one persisted selloff-rebound trial signal."""
+
+    signal_id: int
+    direction: str
+    confirmation_price: float
+    invalidation_price: float
+    state: str = "holding_above"
+    consecutive_break_samples: int = 0
+    episode: int = 0
+
+
+def trial_tracking_plan_from_decision_signal(
+    signal: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Extract the frozen post-entry levels from an active BTC trial signal."""
+
+    if str(signal.get("status") or "").strip().lower() != "active":
+        return None
+    metadata = signal.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+    strategy = metadata.get("strategy_plan")
+    strategy = dict(strategy) if isinstance(strategy, Mapping) else {}
+    if str(strategy.get("strategy_class") or "").strip().lower() != "selloff_rebound_trial":
+        return None
+    if str(strategy.get("trigger_execution_state") or "").strip().lower() != "selloff_rebound_trial_ready":
+        return None
+    if str(strategy.get("validation_status") or "").strip().lower() == "failed":
+        return None
+
+    direction = str(strategy.get("direction") or "").strip().lower()
+    if direction not in {"long", "short"}:
+        return None
+    control = strategy.get("selloff_rebound_control")
+    control = dict(control) if isinstance(control, Mapping) else {}
+
+    def positive_number(*values: Any) -> Optional[float]:
+        for value in values:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(parsed) and parsed > 0:
+                return parsed
+        return None
+
+    confirmation_price = positive_number(
+        control.get("confirmation_price"),
+        signal.get("entry_low"),
+        signal.get("entry_high"),
+    )
+    invalidation_price = positive_number(
+        control.get("invalidation_price"),
+        signal.get("stop_loss"),
+    )
+    try:
+        signal_id = int(signal.get("id"))
+    except (TypeError, ValueError):
+        return None
+    if signal_id <= 0 or confirmation_price is None or invalidation_price is None:
+        return None
+    if direction == "long" and invalidation_price >= confirmation_price:
+        return None
+    if direction == "short" and invalidation_price <= confirmation_price:
+        return None
+
+    persisted = metadata.get("post_entry_tracking")
+    persisted = dict(persisted) if isinstance(persisted, Mapping) else {}
+    return {
+        "signal_id": signal_id,
+        "direction": direction,
+        "confirmation_price": confirmation_price,
+        "invalidation_price": invalidation_price,
+        "tracking_state": persisted,
+    }
+
+
 def _parse_window_tiers(raw: Any) -> List[WindowTier]:
     """Parse "1:0.4,3:0.7,5:1.0" (minutes:threshold_pct) into sorted tiers.
 
@@ -85,6 +163,8 @@ class BTCVolatilityMonitor:
         *,
         quote_fetcher: Optional[Callable[[str], Any]] = None,
         now_provider: Optional[Callable[[], float]] = None,
+        trial_plan_provider: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+        trial_state_updater: Optional[Callable[[int, Dict[str, Any]], None]] = None,
     ) -> None:
         self._rest_fetcher = CryptoFetcher()
         self.quote_fetcher = quote_fetcher or self._rest_fetcher.get_realtime_quote
@@ -102,6 +182,9 @@ class BTCVolatilityMonitor:
         # moves; feeds adaptive thresholds and the velocity baseline.
         self._stat_samples: List[Tuple[float, float, float]] = []
         self._last_stat_snapshot: Optional[PriceSnapshot] = None
+        self.trial_plan_provider = trial_plan_provider
+        self.trial_state_updater = trial_state_updater
+        self._trial_tracking: Optional[TrialTrackingState] = None
 
     def run_once(self, config: Any) -> Dict[str, Any]:
         """Check one quote and return trigger metadata for the scheduler."""
@@ -239,6 +322,14 @@ class BTCVolatilityMonitor:
         self._prune(now=now, window_seconds=window_seconds)
         if adaptive_enabled or velocity_enabled:
             self._record_sample_stats(snapshot=snapshot, now=now, lookback_seconds=adaptive_lookback_seconds)
+
+        trial_stats = self._evaluate_tracked_trial(
+            snapshot=snapshot,
+            confirmation_samples=max(2, confirmation_samples),
+        )
+        if trial_stats is not None:
+            stats.update(trial_stats)
+            return stats
 
         active_stats = self._evaluate_active_opportunity(
             snapshot=snapshot,
@@ -415,6 +506,194 @@ class BTCVolatilityMonitor:
             )
         )
         return stats
+
+    def _evaluate_tracked_trial(
+        self,
+        *,
+        snapshot: PriceSnapshot,
+        confirmation_samples: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Emit transition-only alerts after a selloff-rebound trial signal.
+
+        The first cross back through the frozen confirmation level is treated
+        as a possible false break.  Persistence across samples upgrades it to
+        an effective break, while a reclaim identifies the break as repaired.
+        The frozen invalidation remains the immediate hard exit boundary.
+        """
+
+        tracking = self._refresh_trial_tracking()
+        if tracking is None:
+            return None
+
+        direction = tracking.direction
+        price = snapshot.price
+        invalidated = (
+            price <= tracking.invalidation_price
+            if direction == "long"
+            else price >= tracking.invalidation_price
+        )
+        breached = (
+            price < tracking.confirmation_price
+            if direction == "long"
+            else price > tracking.confirmation_price
+        )
+
+        if invalidated:
+            if tracking.state == "invalidated":
+                return None
+            tracking.state = "invalidated"
+            tracking.consecutive_break_samples = max(
+                tracking.consecutive_break_samples + 1,
+                confirmation_samples,
+            )
+            fields = self._trial_tracking_fields(
+                snapshot=snapshot,
+                tracking=tracking,
+                reason="trial_invalidation",
+                confirmation_samples=confirmation_samples,
+                signal_status="invalidated",
+            )
+            self._persist_trial_tracking(fields)
+            return fields
+
+        if breached:
+            if tracking.state == "holding_above":
+                tracking.episode += 1
+                tracking.consecutive_break_samples = 1
+                tracking.state = "breakdown_watch"
+                fields = self._trial_tracking_fields(
+                    snapshot=snapshot,
+                    tracking=tracking,
+                    reason="trial_breakdown_watch",
+                    confirmation_samples=confirmation_samples,
+                )
+                self._persist_trial_tracking(fields)
+                return fields
+            if tracking.state == "breakdown_watch":
+                tracking.consecutive_break_samples += 1
+                if tracking.consecutive_break_samples >= confirmation_samples:
+                    tracking.state = "breakdown_confirmed"
+                    fields = self._trial_tracking_fields(
+                        snapshot=snapshot,
+                        tracking=tracking,
+                        reason="trial_breakdown_confirmed",
+                        confirmation_samples=confirmation_samples,
+                    )
+                    self._persist_trial_tracking(fields)
+                    return fields
+            return None
+
+        if tracking.state in {"breakdown_watch", "breakdown_confirmed"}:
+            previous_state = tracking.state
+            tracking.state = "holding_above"
+            tracking.consecutive_break_samples = 0
+            fields = self._trial_tracking_fields(
+                snapshot=snapshot,
+                tracking=tracking,
+                reason="trial_false_break_reclaimed",
+                confirmation_samples=confirmation_samples,
+            )
+            fields["reclaimed_from_state"] = previous_state
+            self._persist_trial_tracking(fields)
+            return fields
+        return None
+
+    def _refresh_trial_tracking(self) -> Optional[TrialTrackingState]:
+        provider = self.trial_plan_provider
+        if provider is None:
+            return None
+        try:
+            raw_plan = provider()
+        except Exception as exc:
+            logger.debug("BTC 试仓跟踪计划读取失败，本轮沿用内存状态: %s", exc)
+            return self._trial_tracking
+        if not isinstance(raw_plan, dict):
+            self._trial_tracking = None
+            return None
+        try:
+            signal_id = int(raw_plan.get("signal_id"))
+            confirmation_price = float(raw_plan.get("confirmation_price"))
+            invalidation_price = float(raw_plan.get("invalidation_price"))
+        except (TypeError, ValueError):
+            return self._trial_tracking
+        direction = str(raw_plan.get("direction") or "").strip().lower()
+        valid_levels = (
+            signal_id > 0
+            and math.isfinite(confirmation_price)
+            and math.isfinite(invalidation_price)
+            and confirmation_price > 0
+            and invalidation_price > 0
+            and (
+                (direction == "long" and invalidation_price < confirmation_price)
+                or (direction == "short" and invalidation_price > confirmation_price)
+            )
+        )
+        if not valid_levels:
+            return self._trial_tracking
+        if self._trial_tracking is not None and self._trial_tracking.signal_id == signal_id:
+            return self._trial_tracking
+
+        persisted = raw_plan.get("tracking_state")
+        persisted = dict(persisted) if isinstance(persisted, Mapping) else {}
+        state = str(persisted.get("state") or "holding_above").strip().lower()
+        if state not in {"holding_above", "breakdown_watch", "breakdown_confirmed", "invalidated"}:
+            state = "holding_above"
+        try:
+            break_samples = max(0, int(persisted.get("consecutive_break_samples") or 0))
+            episode = max(0, int(persisted.get("episode") or 0))
+        except (TypeError, ValueError):
+            break_samples = 0
+            episode = 0
+        self._trial_tracking = TrialTrackingState(
+            signal_id=signal_id,
+            direction=direction,
+            confirmation_price=confirmation_price,
+            invalidation_price=invalidation_price,
+            state=state,
+            consecutive_break_samples=break_samples,
+            episode=episode,
+        )
+        return self._trial_tracking
+
+    @classmethod
+    def _trial_tracking_fields(
+        cls,
+        *,
+        snapshot: PriceSnapshot,
+        tracking: TrialTrackingState,
+        reason: str,
+        confirmation_samples: int,
+        signal_status: str = "active",
+    ) -> Dict[str, Any]:
+        direction = "down" if tracking.direction == "long" else "up"
+        return {
+            **cls._snapshot_fields(snapshot),
+            "reason": reason,
+            "trigger_reason": reason,
+            "event_detected": 1,
+            "triggered": 0,
+            "trial_tracking_event": 1,
+            "trial_signal_id": tracking.signal_id,
+            "trial_tracking_state": tracking.state,
+            "trade_direction": tracking.direction,
+            "direction": direction,
+            "entry_price": round(tracking.confirmation_price, 4),
+            "confirmation_price": round(tracking.confirmation_price, 4),
+            "invalidation_price": round(tracking.invalidation_price, 4),
+            "confirmation_required": confirmation_samples,
+            "consecutive_break_samples": tracking.consecutive_break_samples,
+            "tracking_episode": tracking.episode,
+            "signal_status": signal_status,
+        }
+
+    def _persist_trial_tracking(self, fields: Dict[str, Any]) -> None:
+        updater = self.trial_state_updater
+        if updater is None:
+            return
+        try:
+            updater(int(fields["trial_signal_id"]), dict(fields))
+        except Exception as exc:
+            logger.warning("BTC 试仓跟踪状态保存失败，不影响价格监控: %s", exc)
 
     def _evaluate_tiered_windows(
         self,
