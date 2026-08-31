@@ -24,7 +24,7 @@ from src.services.btc_transformer import (  # noqa: E402
     walk_forward_sequence_splits,
 )
 from src.services.btc_transformer.dataset import SequenceData  # noqa: E402
-from src.services.btc_transformer.trainer import _fit_target_scales, _inverse_target, _scale_targets  # noqa: E402
+from src.services.btc_transformer.trainer import _correlation_metrics, _fit_target_scales, _inverse_target, _scale_targets  # noqa: E402
 
 from scripts.train_btc_transformer import build_arg_parser  # noqa: E402
 
@@ -185,7 +185,13 @@ def test_trade_signal_abstains_until_cost_confidence_and_direction_agree() -> No
 
 def test_training_config_exposes_cost_aware_signal_defaults() -> None:
     config = TransformerTrainingConfig()
-    assert config.class_weighted_loss is True
+    assert config.class_weighted_loss is False
+    assert config.min_train_samples == 5000
+    assert config.epochs == 30
+    assert config.return_loss_weight == 1.0
+    assert config.volatility_loss_weight == 0.3
+    assert config.direction_loss_weight == 0.5
+    assert config.regime_loss_weight == 0.0
     assert config.trading_cost_bps == 10.0
     assert config.min_signal_edge_bps == 5.0
     assert config.signal_confidence_threshold == 0.55
@@ -205,6 +211,25 @@ def test_transformer_cli_exposes_neutral_band() -> None:
 def test_transformer_cli_exposes_horizon_neutral_bands() -> None:
     args = build_arg_parser().parse_args(["--neutral-band-bps-by-horizon", "1h:25,24h:100"])
     assert args.neutral_band_bps_by_horizon == {"1h": 25.0, "24h": 100.0}
+
+
+def test_transformer_cli_enables_class_weighting_explicitly() -> None:
+    assert build_arg_parser().parse_args([]).class_weighted_loss is False
+    assert build_arg_parser().parse_args(["--class-weighted-loss"]).class_weighted_loss is True
+
+
+def test_default_neutral_bands_are_wider_for_short_horizons() -> None:
+    config = TransformerFeatureConfig()
+    assert config.neutral_band_for("1h") == pytest.approx(0.0035)
+    assert config.neutral_band_for("4h") == pytest.approx(0.007)
+    assert config.neutral_band_for("24h") == pytest.approx(0.01)
+
+
+def test_correlation_metrics_report_linear_and_rank_relationships() -> None:
+    pearson, spearman = _correlation_metrics([1, 2, 3, 4], [2, 4, 6, 8])
+    assert pearson == pytest.approx(1.0)
+    assert spearman == pytest.approx(1.0)
+    assert _correlation_metrics([1, 1], [2, 3]) == (None, None)
 
 
 def test_transformer_cli_exposes_target_clip() -> None:

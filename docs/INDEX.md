@@ -44,6 +44,7 @@
 | [BTC 交易助手路线图](btc-trading-assistant-roadmap.md) | BTC-only 收敛、结构化交易计划、一键回测、回测体验、风控和真实交易灰度路线 |
 | [BTC 多任务训练基线](btc-training-baseline.md) | 闭合 OHLCV 特征、收益分布/波动/状态标签及 purged walk-forward 离线评估 |
 | [BTC Transformer 研究模块](btc-transformer-research.md) | PatchTST、iTransformer、表征融合、多任务训练和 walk-forward 实验 |
+| [Windows 新电脑迁移与 RX 9070 XT 训练环境](windows-rx9070xt-migration.md) | 从旧机备份到空白 Windows 新机恢复项目、数据库、Web 页面及 AMD ROCm/PyTorch GPU 训练环境 |
 | [实时告警中心](alerts.md) | EventMonitor 基线、Web 规则管理、通知结果、冷却状态和 Phase 边界 |
 | [分析上下文包契约、运行态消费与可见性](analysis-context-pack.md) | AnalysisContextPack 首版范围、字段质量状态、P1/P2 内部契约、P3 Prompt 摘要消费、P4 历史/API/Web 低敏可见性、P5 数据质量评分、P6 迁移回滚与源码锚点；完整指南补充 #1386 阶段感知分析、迁移与回滚入口 |
 | [图片识别 Prompt](image-extract-prompt.md) | 图片识别股票信息的 Prompt 与使用边界 |

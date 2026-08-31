@@ -25,10 +25,10 @@ def test_online_cli_defaults_to_all_architectures_and_24h_holdout() -> None:
     args = build_arg_parser().parse_args([])
     assert args.architecture == "all"
     assert args.holdout_hours == 24
-    assert args.epochs == 20
+    assert args.epochs == 30
     assert args.folds == 6
     assert args.validation_samples == 168
-    assert args.min_train_samples == 1008
+    assert args.min_train_samples == 5000
     assert args.sequence_length == 256
     assert args.d_model == 128
     assert args.heads == 8

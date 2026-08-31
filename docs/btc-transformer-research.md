@@ -18,16 +18,16 @@ python scripts/train_btc_transformer.py --architecture fusion --target-clip-sigm
 # GPU 机器可显式指定设备；默认仍为 CPU
 python scripts/train_btc_transformer.py --architecture fusion --device cuda:0
 # 使用最新 CSV 做 cutoff 后样本外在线式验证；默认评估三种架构
-python scripts/validate_btc_transformer_online.py --epochs 20 --output artifacts/btc-transformer-online-validation.json
+python scripts/validate_btc_transformer_online.py --epochs 30 --output artifacts/btc-transformer-online-validation.json
 # 为不同预测跨度设置不同中性区间（基点）
-python scripts/train_btc_transformer.py --architecture fusion --neutral-band-bps-by-horizon 1h:20,4h:40,24h:100
+python scripts/train_btc_transformer.py --architecture fusion --neutral-band-bps-by-horizon 1h:35,4h:70,24h:100
 ```
 
-默认参数是 `sequence_length=256`、`patch_length=16`、`stride=8`、`d_model=128`、`8` 个 attention heads、`3` 层 encoder、`20` 个 epoch、`12` 个 walk-forward 折、每折 `168` 个验证样本和至少 `1008` 个训练样本。它们面向可重复的离线评估，不代表生产资源配置；可显式指定设备、epoch、batch size，并保存外部实验产物。
+默认参数是 `sequence_length=256`、`patch_length=16`、`stride=8`、`d_model=128`、`8` 个 attention heads、`3` 层 encoder、`30` 个 epoch、`12` 个 walk-forward 折、每折 `168` 个验证样本和至少 `5000` 个训练样本。提高首折训练下限是为了避免极小训练集和大 batch 形成没有代表性的评估；这些参数仍面向可重复的离线评估，不代表生产资源配置。
 
-JSON 结果会在 `training_config` 中记录本次实际使用的序列长度、模型规模、训练轮数、折数、purge 参数、设备、交易过滤参数和每个 horizon 的中性区间。可用 `--neutral-band-bps-by-horizon` 覆盖默认的 `1h:20,4h:40,24h:100`；未列出的 horizon 使用 `--neutral-band-bps`。
+JSON 结果会在 `training_config` 中记录本次实际使用的序列长度、模型规模、训练轮数、折数、purge 参数、设备、交易过滤参数和每个 horizon 的中性区间。可用 `--neutral-band-bps-by-horizon` 覆盖默认的 `1h:35,4h:70,24h:100`；未列出的 horizon 使用 `--neutral-band-bps`。
 
-训练默认对方向和 regime 分类按训练折的逆频率计算类别权重，避免模型只输出多数类，并提高方向任务在多任务损失中的权重。收益和波动率目标使用训练折内第 90 百分位绝对值做稳健尺度，超出 `--target-clip-sigma`（默认 5）时裁剪；评估和最新预测会还原到原始 log-return/volatility 单位，避免极端行情把回归头推到不可信的数值。收益-方向一致性约束默认关闭（`--direction-consistency-weight 0`），长周期数据可按实验结果再开启。训练窗口会随机打乱以改善优化，但验证仍保持时间顺序。每个验证 horizon 还会输出多数类方向基线、方向 Brier 分数，以及加入往返成本和最小收益缓冲后的交易统计（信号率、净收益、胜率、profit factor、最大回撤）。最新预测中的 `trade_signal` 只有在方向置信度、预期收益超过成本缓冲、以及收益回归与方向分类一致时才会给出 `long` 或 `short`，否则为 `hold` 并记录原因。
+训练默认不启用方向和 regime 的逆频率类别权重（使用 `--class-weighted-loss` 才显式启用），先保留未加权基线以便识别类别塌缩是否来自权重。默认多任务损失权重为收益 `1.0`、波动率 `0.3`、方向 `0.5`、regime `0.0`；regime head 仍输出诊断结果，但第一轮不让它反向干扰共享表示。收益和波动率目标使用训练折内第 90 百分位绝对值做稳健尺度，超出 `--target-clip-sigma`（默认 5）时裁剪；评估和最新预测会还原到原始 log-return/volatility 单位，避免极端行情把回归头推到不可信的数值。收益-方向一致性约束默认关闭（`--direction-consistency-weight 0`），长周期数据可按实验结果再开启。训练窗口会随机打乱以改善优化，但验证仍保持时间顺序。每个验证 horizon 还会输出多数类方向基线、方向 Brier 分数、收益预测的 Pearson/Spearman IC，以及加入往返成本和最小收益缓冲后的交易统计（信号率、净收益、胜率、profit factor、最大回撤）。IC 仅用于判断排序/强弱信息，不代表可交易收益。最新预测中的 `trade_signal` 只有在方向置信度、预期收益超过成本缓冲、以及收益回归与方向分类一致时才会给出 `long` 或 `short`，否则为 `hold` 并记录原因。
 
 ## 组件
 

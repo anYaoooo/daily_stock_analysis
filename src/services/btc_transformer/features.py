@@ -12,7 +12,7 @@ import pandas as pd
 
 
 DEFAULT_TRANSFORMER_HORIZONS = {"15m": 3, "1h": 12, "4h": 48}
-DEFAULT_NEUTRAL_BANDS = {"1h": 0.002, "4h": 0.004, "24h": 0.01}
+DEFAULT_NEUTRAL_BANDS = {"1h": 0.0035, "4h": 0.007, "24h": 0.01}
 FEATURE_SET_VERSION = "btc-transformer-available-features-v2"
 REGIME_LABELS = ("trend_up", "trend_down", "high_volatility", "sideways")
 
@@ -27,7 +27,7 @@ class TransformerFeatureConfig:
 
     horizons: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_TRANSFORMER_HORIZONS))
     sequence_length: int = 256
-    neutral_band: float = 0.002
+    neutral_band: float = 0.0035
     neutral_bands: Mapping[str, float] = field(default_factory=lambda: dict(DEFAULT_NEUTRAL_BANDS))
     regime_volatility_threshold: float = 0.02
     bar_hours: float = 1.0 / 12.0

@@ -64,7 +64,7 @@ const BtcTrainingPage: React.FC = () => {
   const { t } = useUiLanguage();
   const [config, setConfig] = useState<BtcTrainingConfig | null>(null);
   const [architecture, setArchitecture] = useState<BtcTrainingArchitecture>('patchtst');
-  const [epochs, setEpochs] = useState(20);
+  const [epochs, setEpochs] = useState(30);
   const [seeds, setSeeds] = useState('7,13,29,43,71');
   const [sequenceLength, setSequenceLength] = useState(256);
   const [ablationFeatures, setAblationFeatures] = useState<string[]>([]);

@@ -96,7 +96,7 @@ def get_btc_training_config() -> BtcTrainingConfigResponse:
     status_code=202,
     response_model=BtcTrainingTaskAccepted,
     summary="提交 BTC 多 seed 训练与消融研究",
-    description="固定标签和验证窗口，至少五个 seed、二十个 epoch；结果仅用于离线研究。",
+    description="固定标签和验证窗口，至少五个 seed、默认三十个 epoch；结果仅用于离线研究。",
 )
 def start_btc_training(request: BtcTrainingRunRequest) -> BtcTrainingTaskAccepted:
     _validate_request(request)

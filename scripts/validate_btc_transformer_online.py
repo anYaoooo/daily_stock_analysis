@@ -79,23 +79,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--heads", type=int, default=8)
     parser.add_argument("--layers", type=int, default=3)
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--folds", type=int, default=6)
-    parser.add_argument("--min-train-samples", type=int, default=1008)
+    parser.add_argument("--min-train-samples", type=int, default=5000)
     parser.add_argument("--validation-samples", type=int, default=168)
     parser.add_argument("--purge-samples", type=int, default=48)
-    parser.add_argument("--neutral-band-bps", type=float, default=20.0)
+    parser.add_argument("--neutral-band-bps", type=float, default=35.0)
     parser.add_argument(
         "--neutral-band-bps-by-horizon",
         type=_parse_neutral_bands,
         default=dict(DEFAULT_NEUTRAL_BANDS_BPS),
-        help="按 horizon 覆盖中性区间，例如 1h:20,4h:40,24h:100。",
+        help="按 horizon 覆盖中性区间，例如 1h:35,4h:70,24h:100。",
     )
     parser.add_argument("--target-clip-sigma", type=float, default=5.0)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--class-weighted-loss", action="store_true", help="显式启用方向/regime 逆频率类别权重；默认关闭。")
     return parser
 
 
@@ -226,6 +227,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             target_clip_sigma=args.target_clip_sigma,
             device=args.device,
             seed=args.seed,
+            class_weighted_loss=args.class_weighted_loss,
             direction_consistency_weight=0.0,
         )
         print(f"[{architecture}] train through {cutoff.isoformat()} ...", flush=True)

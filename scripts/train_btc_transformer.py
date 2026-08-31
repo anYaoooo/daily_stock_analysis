@@ -82,21 +82,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--heads", type=int, default=8)
     parser.add_argument("--layers", type=int, default=3)
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--min-train-samples", type=int, default=1008)
+    parser.add_argument("--min-train-samples", type=int, default=5000)
     parser.add_argument("--validation-samples", type=int, default=168)
     parser.add_argument("--purge-samples", type=int, default=48)
     parser.add_argument("--folds", type=int, default=12)
     parser.add_argument("--bar-hours", type=float, default=1.0, help="每根 K 线覆盖小时数，5m 数据为 0.0833333。")
-    parser.add_argument("--neutral-band-bps", type=float, default=20.0, help="方向标签的中性区间（基点），区间内不产生多空标签。")
+    parser.add_argument("--neutral-band-bps", type=float, default=35.0, help="方向标签的中性区间（基点），区间内不产生多空标签。")
     parser.add_argument(
         "--neutral-band-bps-by-horizon",
         type=_parse_neutral_bands,
         default=dict(DEFAULT_NEUTRAL_BANDS_BPS),
-        help="按 horizon 覆盖中性区间，例如 1h:20,4h:40,24h:100；未列出的 horizon 使用 --neutral-band-bps。",
+        help="按 horizon 覆盖中性区间，例如 1h:35,4h:70,24h:100；未列出的 horizon 使用 --neutral-band-bps。",
     )
+    parser.add_argument("--class-weighted-loss", action="store_true", help="显式启用方向/regime 逆频率类别权重；默认关闭，便于先观察未加权基线。")
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="cpu", help="PyTorch 设备，例如 cpu、cuda 或 cuda:0；默认 cpu。")
     parser.add_argument("--target-clip-sigma", type=float, default=5.0, help="回归目标按训练折稳健缩放后的裁剪范围，默认 ±5。")
@@ -140,6 +141,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             folds=args.folds,
             seed=args.seed,
             device=args.device,
+            class_weighted_loss=args.class_weighted_loss,
             target_clip_sigma=args.target_clip_sigma,
             trading_cost_bps=args.trading_cost_bps,
             min_signal_edge_bps=args.min_signal_edge_bps,

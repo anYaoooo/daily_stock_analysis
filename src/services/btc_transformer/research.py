@@ -183,6 +183,8 @@ def run_research_experiment(
                 "available_runs": sum(item.get("data_quality") == "available" for item in selected),
                 "mean_direction_accuracy": _metric_mean_from_runs(selected, "direction_accuracy"),
                 "mean_return_mae": _metric_mean_from_runs(selected, "return_mae"),
+                "mean_pearson_ic": _metric_mean_from_runs(selected, "pearson_ic"),
+                "mean_spearman_ic": _metric_mean_from_runs(selected, "spearman_ic"),
             }
 
     return {

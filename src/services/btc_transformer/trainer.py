@@ -39,22 +39,22 @@ class TransformerTrainingConfig:
     n_heads: int = 8
     layers: int = 3
     dropout: float = 0.1
-    epochs: int = 20
+    epochs: int = 30
     batch_size: int = 128
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
     folds: int = 12
-    min_train_samples: int = 1008
+    min_train_samples: int = 5000
     validation_samples: int = 168
     purge_samples: int = 48
     seed: int = 7
     device: str = "cpu"
-    class_weighted_loss: bool = True
+    class_weighted_loss: bool = False
     target_clip_sigma: float = 5.0
-    return_loss_weight: float = 0.25
-    volatility_loss_weight: float = 0.1
-    direction_loss_weight: float = 1.0
-    regime_loss_weight: float = 0.25
+    return_loss_weight: float = 1.0
+    volatility_loss_weight: float = 0.3
+    direction_loss_weight: float = 0.5
+    regime_loss_weight: float = 0.0
     direction_consistency_weight: float = 0.0
     trading_cost_bps: float = 10.0
     min_signal_edge_bps: float = 5.0
@@ -221,6 +221,23 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
     values = values - values.max(axis=1, keepdims=True)
     probabilities = np.exp(values)
     return probabilities / np.clip(probabilities.sum(axis=1, keepdims=True), 1e-12, None)
+
+
+def _correlation_metrics(actual: Sequence[float], predicted: Sequence[float]) -> tuple[Optional[float], Optional[float]]:
+    """Return Pearson and Spearman IC, or ``None`` for degenerate samples."""
+
+    actual_values = np.asarray(actual, dtype=float)
+    predicted_values = np.asarray(predicted, dtype=float)
+    valid = np.isfinite(actual_values) & np.isfinite(predicted_values)
+    actual_values = actual_values[valid]
+    predicted_values = predicted_values[valid]
+    if len(actual_values) < 2 or np.ptp(actual_values) <= 1e-12 or np.ptp(predicted_values) <= 1e-12:
+        return None, None
+    pearson = float(np.corrcoef(actual_values, predicted_values)[0, 1])
+    actual_rank = pd.Series(actual_values).rank(method="average").to_numpy(dtype=float)
+    predicted_rank = pd.Series(predicted_values).rank(method="average").to_numpy(dtype=float)
+    spearman = float(np.corrcoef(actual_rank, predicted_rank)[0, 1])
+    return round(pearson, 8), round(spearman, 8)
 
 
 def derive_trade_signal(
@@ -630,6 +647,8 @@ class WalkForwardTransformerTrainer:
                 current["fold_count"] += 1
                 current["samples"] += int(len(validation_indices))
                 current.setdefault("return_mae", []).extend(np.abs(predicted_return - actual_return).tolist())
+                current.setdefault("actual_returns", []).extend(actual_return.tolist())
+                current.setdefault("predicted_returns", []).extend(predicted_return.tolist())
                 current.setdefault("volatility_mae", []).extend(np.abs(predicted_vol - actual_vol).tolist())
                 current.setdefault("direction_correct", []).extend((direction == actual_direction).tolist())
                 current.setdefault("regime_correct", []).extend((regime == actual_regime).tolist())
@@ -671,6 +690,9 @@ class WalkForwardTransformerTrainer:
                     for offset, sample_index in enumerate(validation_indices)
                 )
         for horizon, summary in evaluations.items():
+            actual_returns = summary.pop("actual_returns", [])
+            predicted_returns = summary.pop("predicted_returns", [])
+            pearson_ic, spearman_ic = _correlation_metrics(actual_returns, predicted_returns)
             for key, output_key in (
                 ("return_mae", "return_mae"),
                 ("volatility_mae", "volatility_mae"),
@@ -681,6 +703,8 @@ class WalkForwardTransformerTrainer:
             ):
                 values = summary.pop(key, [])
                 summary[output_key] = round(float(np.mean(values)), 8) if values else None
+            summary["pearson_ic"] = pearson_ic
+            summary["spearman_ic"] = spearman_ic
             trade_returns = summary.pop("trade_net_returns", [])
             trade_mask = summary.pop("trade_signal_mask", [])
             summary["trading"] = _summarize_trading(trade_returns, trade_mask)

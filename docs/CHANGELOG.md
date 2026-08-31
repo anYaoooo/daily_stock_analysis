@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [文档] 新增空白 Windows 电脑迁移与 RX 9070 XT 训练环境指南，覆盖 SQLite/配置/训练数据备份、AMD ROCm PyTorch 安装验证、Web 恢复、GPU 冒烟训练、故障排查和回滚。
+- [改进] BTC Transformer Fusion 研究默认提高最小训练窗口至 5000 个样本、训练轮数至 30，并关闭类别加权与 regime 损失的默认反向影响；新增收益预测 Pearson/Spearman IC 诊断，类别加权改为 CLI 显式 opt-in。
+- [改进] BTC Transformer 1h/4h 方向标签默认中性区间调整为 35/70bps，降低短周期噪声边界；结果仍保持离线 research/shadow 模式。
 - [改进] BTC Transformer 兼容 OKX `funding_rates`、标记价和成交价字段；稀疏衍生品数据采用因果填充并记录缺失掩码，方向标签支持按 horizon 设置中性区间。
 - [改进] BTC Transformer 默认训练轮数、walk-forward 折数和验证窗口提升，并将 PatchTST 时间 patch 改为按变量独立编码后再汇聚，降低特征混合造成的表示损失。
 - [修复] BTC Transformer 训练对收益/波动目标按训练折做稳健尺度拟合与异常值裁剪，并在评估和预测时还原真实单位；同时改进多任务损失权重与训练窗口打乱，避免回归头输出异常值压低 PatchTST、iTransformer 和 Fusion 的方向表现。

@@ -54,6 +54,8 @@ export interface BtcTrainingRunResult {
     samples?: number;
     directionAccuracy?: number | null;
     returnMae?: number | null;
+    pearsonIc?: number | null;
+    spearmanIc?: number | null;
   }>;
 }
 
@@ -86,6 +88,8 @@ export interface BtcTrainingResearchResult {
     availableRuns: number;
     meanDirectionAccuracy?: number | null;
     meanReturnMae?: number | null;
+    meanPearsonIc?: number | null;
+    meanSpearmanIc?: number | null;
   }> >;
   runs: BtcTrainingRunResult[];
 }
