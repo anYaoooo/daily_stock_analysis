@@ -17,6 +17,8 @@ python scripts/train_btc_transformer.py --architecture fusion --neutral-band-bps
 python scripts/train_btc_transformer.py --architecture fusion --target-clip-sigma 4
 # GPU 机器可显式指定设备；默认仍为 CPU
 python scripts/train_btc_transformer.py --architecture fusion --device cuda:0
+# 先做短周期筛选，确认类别平衡/损失权重方向后再跑正式 12 折训练
+python scripts/train_btc_transformer.py --architecture fusion --device cuda:0 --epochs 3 --folds 2 --d-model 64 --heads 4 --layers 2 --output artifacts/btc-fusion-screen.json
 # 使用最新 CSV 做 cutoff 后样本外在线式验证；默认评估三种架构
 python scripts/validate_btc_transformer_online.py --epochs 30 --output artifacts/btc-transformer-online-validation.json
 # 为不同预测跨度设置不同中性区间（基点）
@@ -27,7 +29,7 @@ python scripts/train_btc_transformer.py --architecture fusion --neutral-band-bps
 
 JSON 结果会在 `training_config` 中记录本次实际使用的序列长度、模型规模、训练轮数、折数、purge 参数、设备、交易过滤参数和每个 horizon 的中性区间。可用 `--neutral-band-bps-by-horizon` 覆盖默认的 `1h:35,4h:70,24h:100`；未列出的 horizon 使用 `--neutral-band-bps`。
 
-训练默认不启用方向和 regime 的逆频率类别权重（使用 `--class-weighted-loss` 才显式启用），先保留未加权基线以便识别类别塌缩是否来自权重。默认多任务损失权重为收益 `1.0`、波动率 `0.3`、方向 `0.5`、regime `0.0`；regime head 仍输出诊断结果，但第一轮不让它反向干扰共享表示。收益和波动率目标使用训练折内第 90 百分位绝对值做稳健尺度，超出 `--target-clip-sigma`（默认 5）时裁剪；评估和最新预测会还原到原始 log-return/volatility 单位，避免极端行情把回归头推到不可信的数值。收益-方向一致性约束默认关闭（`--direction-consistency-weight 0`），长周期数据可按实验结果再开启。训练窗口会随机打乱以改善优化，但验证仍保持时间顺序。每个验证 horizon 还会输出多数类方向基线、方向 Brier 分数、收益预测的 Pearson/Spearman IC，以及加入往返成本和最小收益缓冲后的交易统计（信号率、净收益、胜率、profit factor、最大回撤）。IC 仅用于判断排序/强弱信息，不代表可交易收益。最新预测中的 `trade_signal` 只有在方向置信度、预期收益超过成本缓冲、以及收益回归与方向分类一致时才会给出 `long` 或 `short`，否则为 `hold` 并记录原因。
+训练默认启用方向和 regime 的逆频率类别权重（可用 `--no-class-weighted-loss` 关闭），用于降低 1h/4h 中性类别塌缩；默认多任务损失权重为收益 `1.0`、波动率 `0.3`、方向 `1.0`、regime `0.0`。也可通过 `--return-loss-weight`、`--volatility-loss-weight`、`--direction-loss-weight` 和 `--regime-loss-weight` 做短实验调节；regime head 默认仍只输出诊断，不反向干扰共享表示。收益和波动率目标使用训练折内第 90 百分位绝对值做稳健尺度，超出 `--target-clip-sigma`（默认 5）时裁剪；评估和最新预测会还原到原始 log-return/volatility 单位，避免极端行情把回归头推到不可信的数值。收益-方向一致性约束默认关闭（`--direction-consistency-weight 0`），长周期数据可按实验结果再开启。训练窗口会随机打乱以改善优化，但验证仍保持时间顺序。每个验证 horizon 还会输出多数类方向基线、方向 Brier 分数、收益预测的 Pearson/Spearman IC，以及加入往返成本和最小收益缓冲后的交易统计（信号率、净收益、胜率、profit factor、最大回撤）。交易统计按 horizon 的 bar 数抽取非重叠决策点，避免 4h/24h 的重叠未来窗口被当作独立交易；当前验证折只使用更早验证折拟合的温度校准概率，最新预测才使用全部历史 OOF 折校准。IC 仅用于判断排序/强弱信息，不代表可交易收益。最新预测中的 `trade_signal` 只有在方向置信度、预期收益超过成本缓冲、以及收益回归与方向分类一致时才会给出 `long` 或 `short`，否则为 `hold` 并记录原因。
 
 ## 组件
 

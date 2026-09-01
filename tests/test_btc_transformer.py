@@ -24,7 +24,14 @@ from src.services.btc_transformer import (  # noqa: E402
     walk_forward_sequence_splits,
 )
 from src.services.btc_transformer.dataset import SequenceData  # noqa: E402
-from src.services.btc_transformer.trainer import _correlation_metrics, _fit_target_scales, _inverse_target, _scale_targets  # noqa: E402
+from src.services.btc_transformer.trainer import (  # noqa: E402
+    _correlation_metrics,
+    _fit_target_scales,
+    _inverse_target,
+    _scale_targets,
+    _summarize_trading,
+    _trading_metrics,
+)
 
 from scripts.train_btc_transformer import build_arg_parser  # noqa: E402
 
@@ -183,14 +190,58 @@ def test_trade_signal_abstains_until_cost_confidence_and_direction_agree() -> No
     assert invalid_return == {"action": "hold", "reason": "invalid_predicted_return"}
 
 
+def test_trading_metrics_use_non_overlapping_decision_stride() -> None:
+    logits = np.tile(np.array([[0.0, -2.0, 2.0]]), (8, 1))
+    actual_returns = np.full(8, 0.01, dtype=float)
+    predicted_returns = np.full(8, 0.02, dtype=float)
+    net_returns, signal_mask = _trading_metrics(
+        actual_returns,
+        predicted_returns,
+        logits,
+        trading_cost_bps=10.0,
+        min_signal_edge_bps=5.0,
+        confidence_threshold=0.55,
+        decision_stride=4,
+    )
+    summary = _summarize_trading(net_returns, signal_mask)
+    assert len(net_returns) == 2
+    assert summary["decision_samples"] == 2
+    assert summary["trades"] == 2
+
+
+def test_trading_metrics_can_apply_prior_fold_temperature() -> None:
+    logits = np.array([[0.0, 0.0, 2.0]], dtype=float)
+    actual_returns = np.array([0.01], dtype=float)
+    predicted_returns = np.array([0.02], dtype=float)
+    _, uncalibrated_mask = _trading_metrics(
+        actual_returns,
+        predicted_returns,
+        logits,
+        trading_cost_bps=10.0,
+        min_signal_edge_bps=5.0,
+        confidence_threshold=0.65,
+    )
+    _, calibrated_mask = _trading_metrics(
+        actual_returns,
+        predicted_returns,
+        logits,
+        trading_cost_bps=10.0,
+        min_signal_edge_bps=5.0,
+        confidence_threshold=0.65,
+        probability_temperature=3.0,
+    )
+    assert bool(uncalibrated_mask[0]) is True
+    assert bool(calibrated_mask[0]) is False
+
+
 def test_training_config_exposes_cost_aware_signal_defaults() -> None:
     config = TransformerTrainingConfig()
-    assert config.class_weighted_loss is False
+    assert config.class_weighted_loss is True
     assert config.min_train_samples == 5000
     assert config.epochs == 30
     assert config.return_loss_weight == 1.0
     assert config.volatility_loss_weight == 0.3
-    assert config.direction_loss_weight == 0.5
+    assert config.direction_loss_weight == 1.0
     assert config.regime_loss_weight == 0.0
     assert config.trading_cost_bps == 10.0
     assert config.min_signal_edge_bps == 5.0
@@ -214,8 +265,28 @@ def test_transformer_cli_exposes_horizon_neutral_bands() -> None:
 
 
 def test_transformer_cli_enables_class_weighting_explicitly() -> None:
-    assert build_arg_parser().parse_args([]).class_weighted_loss is False
+    assert build_arg_parser().parse_args([]).class_weighted_loss is True
     assert build_arg_parser().parse_args(["--class-weighted-loss"]).class_weighted_loss is True
+    assert build_arg_parser().parse_args(["--no-class-weighted-loss"]).class_weighted_loss is False
+
+
+def test_transformer_cli_exposes_loss_weights() -> None:
+    args = build_arg_parser().parse_args(
+        [
+            "--return-loss-weight",
+            "0.5",
+            "--volatility-loss-weight",
+            "0.2",
+            "--direction-loss-weight",
+            "1.5",
+            "--regime-loss-weight",
+            "0.1",
+        ]
+    )
+    assert args.return_loss_weight == 0.5
+    assert args.volatility_loss_weight == 0.2
+    assert args.direction_loss_weight == 1.5
+    assert args.regime_loss_weight == 0.1
 
 
 def test_default_neutral_bands_are_wider_for_short_horizons() -> None:

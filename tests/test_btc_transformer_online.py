@@ -33,6 +33,14 @@ def test_online_cli_defaults_to_all_architectures_and_24h_holdout() -> None:
     assert args.d_model == 128
     assert args.heads == 8
     assert args.layers == 3
+    assert args.class_weighted_loss is True
+    assert args.direction_loss_weight == 1.0
+
+
+def test_online_cli_can_disable_class_weighting() -> None:
+    args = build_arg_parser().parse_args(["--no-class-weighted-loss", "--direction-loss-weight", "1.5"])
+    assert args.class_weighted_loss is False
+    assert args.direction_loss_weight == 1.5
 
 
 def test_realized_targets_use_only_bars_after_cutoff() -> None:

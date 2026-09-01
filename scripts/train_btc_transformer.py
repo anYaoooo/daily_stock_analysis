@@ -97,7 +97,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=dict(DEFAULT_NEUTRAL_BANDS_BPS),
         help="按 horizon 覆盖中性区间，例如 1h:35,4h:70,24h:100；未列出的 horizon 使用 --neutral-band-bps。",
     )
-    parser.add_argument("--class-weighted-loss", action="store_true", help="显式启用方向/regime 逆频率类别权重；默认关闭，便于先观察未加权基线。")
+    parser.add_argument(
+        "--class-weighted-loss",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="启用方向/regime 逆频率类别权重；默认开启以降低中性类别塌缩，可用 --no-class-weighted-loss 关闭。",
+    )
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="cpu", help="PyTorch 设备，例如 cpu、cuda 或 cuda:0；默认 cpu。")
     parser.add_argument("--target-clip-sigma", type=float, default=5.0, help="回归目标按训练折稳健缩放后的裁剪范围，默认 ±5。")
@@ -105,6 +110,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-signal-edge-bps", type=float, default=5.0, help="除交易成本外要求的最小预期收益缓冲（基点）。")
     parser.add_argument("--signal-confidence-threshold", type=float, default=0.55, help="方向概率进入交易信号所需的最低置信度。")
     parser.add_argument("--direction-consistency-weight", type=float, default=0.0, help="收益回归与方向概率一致性损失的权重；默认关闭，避免长周期噪声压制方向分类。")
+    parser.add_argument("--return-loss-weight", type=float, default=1.0, help="收益回归损失权重。")
+    parser.add_argument("--volatility-loss-weight", type=float, default=0.3, help="波动率回归损失权重。")
+    parser.add_argument("--direction-loss-weight", type=float, default=1.0, help="方向分类损失权重。")
+    parser.add_argument("--regime-loss-weight", type=float, default=0.0, help="regime 分类损失权重，默认仅输出诊断不反向训练。")
     parser.add_argument("--research", action="store_true", help="运行至少 5 个 seed 的固定窗口研究并保存 OOF 预测。")
     parser.add_argument("--seeds", type=_parse_seeds, default=list(DEFAULT_RESEARCH_SEEDS), help="研究模式 seed 列表，至少 5 个不同值。")
     parser.add_argument("--ablation-features", type=_parse_ablation_features, default=[], help="研究模式下按逗号指定单变量消融特征。")
@@ -147,6 +156,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             min_signal_edge_bps=args.min_signal_edge_bps,
             signal_confidence_threshold=args.signal_confidence_threshold,
             direction_consistency_weight=args.direction_consistency_weight,
+            return_loss_weight=args.return_loss_weight,
+            volatility_loss_weight=args.volatility_loss_weight,
+            direction_loss_weight=args.direction_loss_weight,
+            regime_loss_weight=args.regime_loss_weight,
         )
         if args.research:
             result = run_research_experiment(

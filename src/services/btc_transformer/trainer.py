@@ -49,11 +49,11 @@ class TransformerTrainingConfig:
     purge_samples: int = 48
     seed: int = 7
     device: str = "cpu"
-    class_weighted_loss: bool = False
+    class_weighted_loss: bool = True
     target_clip_sigma: float = 5.0
     return_loss_weight: float = 1.0
     volatility_loss_weight: float = 0.3
-    direction_loss_weight: float = 0.5
+    direction_loss_weight: float = 1.0
     regime_loss_weight: float = 0.0
     direction_consistency_weight: float = 0.0
     trading_cost_bps: float = 10.0
@@ -294,15 +294,24 @@ def _trading_metrics(
     trading_cost_bps: float,
     min_signal_edge_bps: float,
     confidence_threshold: float,
+    decision_stride: int = 1,
+    probability_temperature: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Score an abstaining, cost-aware strategy on one validation fold."""
+    """Score an abstaining, cost-aware strategy on one validation fold.
 
-    probabilities = _softmax(direction_logits)
+    ``decision_stride`` prevents overlapping forecast windows from being
+    counted as independent trades.  ``probability_temperature`` lets callers
+    use a calibration fit on data strictly preceding the scored fold.
+    """
+
+    stride = max(1, int(decision_stride))
+    temperature = max(float(probability_temperature), 1e-6)
+    probabilities = _softmax(np.asarray(direction_logits, dtype=float)[::stride] / temperature)
     classes = probabilities.argmax(axis=1)
     confidence = probabilities.max(axis=1)
     required_return = (max(0.0, float(trading_cost_bps)) + max(0.0, float(min_signal_edge_bps))) / 10000.0
-    predicted_returns = np.asarray(predicted_returns, dtype=float)
-    actual_returns = np.asarray(actual_returns, dtype=float)
+    predicted_returns = np.asarray(predicted_returns, dtype=float)[::stride]
+    actual_returns = np.asarray(actual_returns, dtype=float)[::stride]
     agreement = ((classes == 2) & (predicted_returns > 0)) | ((classes == 0) & (predicted_returns < 0))
     signal_mask = (classes != 1) & (confidence >= confidence_threshold) & (np.abs(predicted_returns) >= required_return) & agreement
     positions = np.where(classes == 2, 1.0, -1.0)
@@ -322,6 +331,7 @@ def _summarize_trading(net_returns: Sequence[float], signal_mask: Sequence[bool]
     drawdown = peak[1:] - equity if len(equity) else np.asarray([], dtype=float)
     return {
         "trades": trades,
+        "decision_samples": int(len(mask)),
         "signal_rate": round(float(trades / len(mask)), 8) if len(mask) else 0.0,
         "net_return": round(float(returns.sum()), 8) if len(returns) else 0.0,
         "avg_net_return": round(float(selected.mean()), 8) if trades else None,
@@ -372,8 +382,19 @@ def _loss(
     return torch.stack(losses).sum() / max(normalizer, 1e-8)
 
 
-def _targets_to_device(targets: Mapping[str, Mapping[str, Any]], device: Any) -> dict[str, dict[str, Any]]:
-    return {horizon: {name: value.to(device) for name, value in values.items()} for horizon, values in targets.items()}
+def _targets_to_device(
+    targets: Mapping[str, Mapping[str, Any]],
+    device: Any,
+    *,
+    non_blocking: bool = False,
+) -> dict[str, dict[str, Any]]:
+    return {
+        horizon: {
+            name: value.to(device, non_blocking=non_blocking)
+            for name, value in values.items()
+        }
+        for horizon, values in targets.items()
+    }
 
 
 class WalkForwardTransformerTrainer:
@@ -413,12 +434,22 @@ class WalkForwardTransformerTrainer:
         _require_torch()
         model = model or self._new_model(len(train_data.feature_names), train_data.horizons)
         model.train()
-        loader = DataLoader(SequenceDataset(train_data, train_indices), batch_size=self.config.batch_size, shuffle=True)
+        pin_memory = str(self.config.device).startswith(("cuda", "xpu"))
+        loader = DataLoader(
+            SequenceDataset(train_data, train_indices),
+            batch_size=self.config.batch_size,
+            shuffle=True,
+            pin_memory=pin_memory,
+        )
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.config.learning_rate, weight_decay=self.config.weight_decay)
         for _ in range(self.config.epochs):
             for inputs, targets in loader:
-                inputs = inputs.to(self.config.device)
-                targets = _targets_to_device(targets, self.config.device)
+                inputs = inputs.to(self.config.device, non_blocking=pin_memory)
+                targets = _targets_to_device(
+                    targets,
+                    self.config.device,
+                    non_blocking=pin_memory,
+                )
                 optimizer.zero_grad(set_to_none=True)
                 loss = _loss(
                     model(inputs),
@@ -440,12 +471,19 @@ class WalkForwardTransformerTrainer:
     @staticmethod
     def _predict(model: MultiTaskTransformer, data: SequenceData, indices: Sequence[int]) -> dict[str, dict[str, np.ndarray]]:
         _require_torch()
-        loader = DataLoader(SequenceDataset(data, indices), batch_size=512, shuffle=False)
+        device = next(model.parameters()).device
+        pin_memory = device.type in {"cuda", "xpu"}
+        loader = DataLoader(
+            SequenceDataset(data, indices),
+            batch_size=512,
+            shuffle=False,
+            pin_memory=pin_memory,
+        )
         model.eval()
         collected: dict[str, dict[str, list[np.ndarray]]] = {horizon: {name: [] for name in ("return", "volatility", "direction", "regime")} for horizon in data.horizons}
         with torch.no_grad():
             for inputs, _ in loader:
-                outputs = model(inputs.to(next(model.parameters()).device))
+                outputs = model(inputs.to(device, non_blocking=pin_memory))
                 for horizon in data.horizons:
                     collected[horizon]["return"].append(outputs["return"][horizon].cpu().numpy())
                     collected[horizon]["volatility"].append(outputs["volatility"][horizon].cpu().numpy())
@@ -520,6 +558,15 @@ class WalkForwardTransformerTrainer:
                 "entry": "only when direction confidence, expected return and return/class agreement all pass",
                 "cost_model": "round_trip_bps",
                 "abstain_on_conflict": True,
+            },
+            "evaluation_policy": {
+                "trading_decisions": "non_overlapping_by_horizon",
+                "decision_stride_bars": {
+                    horizon: int(bars)
+                    for horizon, bars in self.config.feature.horizons.items()
+                },
+                "probability_calibration": "prior_validation_folds_only",
+                "calibration_for_latest_forecast": "all_historical_oof_folds",
             },
         }
         if frame.empty:
@@ -633,6 +680,14 @@ class WalkForwardTransformerTrainer:
                 regime = predictions[horizon]["regime"].argmax(axis=1)
                 probabilities = _softmax(predictions[horizon]["direction"])
                 majority_label = int(np.bincount(data.directions[horizon][train_indices], minlength=3).argmax())
+                calibration_temperature = 1.0
+                if calibration_logits[horizon]:
+                    fold_calibrator = ProbabilityCalibrator()
+                    fold_calibrator.fit(
+                        np.concatenate(calibration_logits[horizon], axis=0),
+                        np.concatenate(calibration_labels[horizon], axis=0),
+                    )
+                    calibration_temperature = fold_calibrator.temperature
                 net_returns, signal_mask = _trading_metrics(
                     actual_return,
                     predicted_return,
@@ -640,6 +695,8 @@ class WalkForwardTransformerTrainer:
                     trading_cost_bps=self.config.trading_cost_bps,
                     min_signal_edge_bps=self.config.min_signal_edge_bps,
                     confidence_threshold=self.config.signal_confidence_threshold,
+                    decision_stride=self.config.feature.horizons[horizon],
+                    probability_temperature=calibration_temperature,
                 )
                 calibration_logits[horizon].append(predictions[horizon]["direction"])
                 calibration_labels[horizon].append(actual_direction)
@@ -667,6 +724,9 @@ class WalkForwardTransformerTrainer:
                 )
                 current.setdefault("trade_net_returns", []).extend(net_returns.tolist())
                 current.setdefault("trade_signal_mask", []).extend(signal_mask.tolist())
+                current.setdefault("trading_calibration_temperatures", []).append(
+                    round(float(calibration_temperature), 8)
+                )
                 # Keep one JSON-compatible row per validation sample.  This is
                 # deliberately collected before aggregate metrics are reduced
                 # so downstream analysis can reproduce any slice or ablation.
@@ -708,6 +768,9 @@ class WalkForwardTransformerTrainer:
             trade_returns = summary.pop("trade_net_returns", [])
             trade_mask = summary.pop("trade_signal_mask", [])
             summary["trading"] = _summarize_trading(trade_returns, trade_mask)
+            summary["trading"]["calibration_temperatures"] = summary.pop(
+                "trading_calibration_temperatures", []
+            )
         if data.sample_count < self.config.min_train_samples:
             return {**base, "data_quality": "insufficient", "source_sample_count": data.sample_count, "feature_count": len(feature_columns), "feature_columns": list(feature_columns), "forecasts": {}, "evaluations": evaluations, "oof_predictions": oof_predictions, "walk_forward": {"folds": fold_summaries}}
 

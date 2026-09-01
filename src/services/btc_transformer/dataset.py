@@ -124,6 +124,18 @@ class SequenceDataset(Dataset):
         _require_torch()
         self.data = data
         self.indices = np.arange(data.sample_count, dtype=np.int64) if indices is None else np.asarray(indices, dtype=np.int64)
+        # Materialize tensors once; constructing a new tensor for every
+        # __getitem__ call adds a large CPU copy cost to long GPU runs.
+        self.feature_tensor = torch.from_numpy(np.asarray(data.features, dtype=np.float32))
+        self.target_tensors = {
+            horizon: {
+                "return": torch.from_numpy(np.asarray(data.returns[horizon], dtype=np.float32)),
+                "volatility": torch.from_numpy(np.asarray(data.volatilities[horizon], dtype=np.float32)),
+                "direction": torch.from_numpy(np.asarray(data.directions[horizon], dtype=np.int64)),
+                "regime": torch.from_numpy(np.asarray(data.regimes[horizon], dtype=np.int64)),
+            }
+            for horizon in data.horizons
+        }
 
     def __len__(self) -> int:
         return int(len(self.indices))
@@ -132,14 +144,12 @@ class SequenceDataset(Dataset):
         position = int(self.indices[index])
         targets = {
             horizon: {
-                "return": torch.tensor(self.data.returns[horizon][position], dtype=torch.float32),
-                "volatility": torch.tensor(self.data.volatilities[horizon][position], dtype=torch.float32),
-                "direction": torch.tensor(self.data.directions[horizon][position], dtype=torch.long),
-                "regime": torch.tensor(self.data.regimes[horizon][position], dtype=torch.long),
+                name: values[position]
+                for name, values in target_values.items()
             }
-            for horizon in self.data.horizons
+            for horizon, target_values in self.target_tensors.items()
         }
-        return torch.tensor(self.data.features[position], dtype=torch.float32), targets
+        return self.feature_tensor[position], targets
 
 
 def latest_sequence(

@@ -96,7 +96,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-clip-sigma", type=float, default=5.0)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--class-weighted-loss", action="store_true", help="显式启用方向/regime 逆频率类别权重；默认关闭。")
+    parser.add_argument(
+        "--class-weighted-loss",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="启用方向/regime 逆频率类别权重；默认开启，可用 --no-class-weighted-loss 关闭。",
+    )
+    parser.add_argument("--return-loss-weight", type=float, default=1.0)
+    parser.add_argument("--volatility-loss-weight", type=float, default=0.3)
+    parser.add_argument("--direction-loss-weight", type=float, default=1.0)
+    parser.add_argument("--regime-loss-weight", type=float, default=0.0)
     return parser
 
 
@@ -229,6 +238,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             seed=args.seed,
             class_weighted_loss=args.class_weighted_loss,
             direction_consistency_weight=0.0,
+            return_loss_weight=args.return_loss_weight,
+            volatility_loss_weight=args.volatility_loss_weight,
+            direction_loss_weight=args.direction_loss_weight,
+            regime_loss_weight=args.regime_loss_weight,
         )
         print(f"[{architecture}] train through {cutoff.isoformat()} ...", flush=True)
         try:
