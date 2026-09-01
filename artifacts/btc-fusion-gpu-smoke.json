@@ -1,0 +1,2106 @@
+{
+  "model_version": "btc-transformer-multitask-wf-v5-available-features",
+  "feature_set_version": "btc-transformer-available-features-v2",
+  "architecture": "fusion",
+  "mode": "offline_research",
+  "participates_in_decision": false,
+  "research_only": true,
+  "eligible_for_promotion": false,
+  "promotion_eligible": false,
+  "training_config": {
+    "horizons": {
+      "1h": 1,
+      "4h": 4,
+      "24h": 24
+    },
+    "bar_hours": 1.0,
+    "neutral_band": 0.0035,
+    "neutral_bands": {
+      "1h": 0.0035,
+      "4h": 0.007,
+      "24h": 0.01
+    },
+    "sequence_length": 64,
+    "patch_length": 16,
+    "stride": 8,
+    "d_model": 32,
+    "n_heads": 4,
+    "layers": 1,
+    "epochs": 1,
+    "batch_size": 64,
+    "learning_rate": 0.0001,
+    "folds": 1,
+    "min_train_samples": 1008,
+    "validation_samples": 32,
+    "purge_samples": 48,
+    "seed": 7,
+    "device": "cuda:0",
+    "class_weighted_loss": false,
+    "target_clip_sigma": 5.0,
+    "return_loss_weight": 1.0,
+    "volatility_loss_weight": 0.3,
+    "direction_loss_weight": 0.5,
+    "regime_loss_weight": 0.0,
+    "direction_consistency_weight": 0.0,
+    "trading_cost_bps": 10.0,
+    "min_signal_edge_bps": 5.0,
+    "signal_confidence_threshold": 0.55
+  },
+  "leakage_guard": {
+    "random_split": false,
+    "scaler_fit_scope": "train_only",
+    "scheme": "purged_expanding_walk_forward"
+  },
+  "trading_policy": {
+    "entry": "only when direction confidence, expected return and return/class agreement all pass",
+    "cost_model": "round_trip_bps",
+    "abstain_on_conflict": true
+  },
+  "data_quality": "available",
+  "source_sample_count": 57396,
+  "feature_count": 57,
+  "feature_columns": [
+    "feature_log_return_1",
+    "feature_open_close_return",
+    "feature_high_low_range",
+    "feature_upper_wick",
+    "feature_lower_wick",
+    "feature_volume_log1p",
+    "feature_volume_change",
+    "feature_rsi_14",
+    "feature_atr_pct_14",
+    "feature_macd",
+    "feature_macd_signal",
+    "feature_ema_slope_12",
+    "feature_return_mean_3",
+    "feature_return_std_3",
+    "feature_momentum_3",
+    "feature_volume_zscore_3",
+    "feature_range_position_3",
+    "feature_return_mean_6",
+    "feature_return_std_6",
+    "feature_momentum_6",
+    "feature_volume_zscore_6",
+    "feature_range_position_6",
+    "feature_return_mean_12",
+    "feature_return_std_12",
+    "feature_momentum_12",
+    "feature_volume_zscore_12",
+    "feature_range_position_12",
+    "feature_return_mean_24",
+    "feature_return_std_24",
+    "feature_momentum_24",
+    "feature_volume_zscore_24",
+    "feature_range_position_24",
+    "feature_return_mean_48",
+    "feature_return_std_48",
+    "feature_momentum_48",
+    "feature_volume_zscore_48",
+    "feature_range_position_48",
+    "feature_return_mean_96",
+    "feature_return_std_96",
+    "feature_momentum_96",
+    "feature_volume_zscore_96",
+    "feature_range_position_96",
+    "feature_return_mean_192",
+    "feature_return_std_192",
+    "feature_momentum_192",
+    "feature_volume_zscore_192",
+    "feature_range_position_192",
+    "feature_vwap_deviation_24",
+    "feature_bollinger_position_24",
+    "feature_mark_close",
+    "feature_mark_close_missing",
+    "feature_mark_close_change",
+    "feature_mark_close_basis",
+    "feature_execution_close",
+    "feature_execution_close_missing",
+    "feature_execution_close_change",
+    "feature_execution_close_basis"
+  ],
+  "target_scales": {
+    "1h": {
+      "return": 0.008921534288674593,
+      "volatility": 0.008921534288674593
+    },
+    "4h": {
+      "return": 0.018794044852256775,
+      "volatility": 0.009595580399036407
+    },
+    "24h": {
+      "return": 0.04790140315890312,
+      "volatility": 0.009352982509881258
+    }
+  },
+  "forecasts": {
+    "1h": {
+      "return": 0.0006436248156728164,
+      "volatility": 0.0029041762463748455,
+      "direction_probabilities": [
+        0.042964524417307595,
+        0.9180483565540142,
+        0.03898711902867824
+      ],
+      "direction": "neutral",
+      "regime": "trend_up",
+      "calibration_temperature": 0.6,
+      "trade_signal": {
+        "action": "hold",
+        "direction": "neutral",
+        "confidence": 0.9180483565540142,
+        "expected_return": 0.0006436248156728164,
+        "required_return": 0.0015,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "confidence_threshold": 0.55,
+        "reason": "neutral_direction"
+      },
+      "as_of": "2026-08-31 12:00:00+00:00"
+    },
+    "4h": {
+      "return": -0.0018050942456595553,
+      "volatility": 0.003361272858455777,
+      "direction_probabilities": [
+        0.25849130477438137,
+        0.4952239837813045,
+        0.24628471144431408
+      ],
+      "direction": "neutral",
+      "regime": "trend_down",
+      "calibration_temperature": 2.6,
+      "trade_signal": {
+        "action": "hold",
+        "direction": "neutral",
+        "confidence": 0.4952239837813045,
+        "expected_return": -0.0018050942456595553,
+        "required_return": 0.0015,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "confidence_threshold": 0.55,
+        "reason": "low_confidence"
+      },
+      "as_of": "2026-08-31 12:00:00+00:00"
+    },
+    "24h": {
+      "return": 0.00025667085517364074,
+      "volatility": 0.004147928673774004,
+      "direction_probabilities": [
+        0.25069034207342045,
+        0.5325719951829373,
+        0.21673766274364217
+      ],
+      "direction": "neutral",
+      "regime": "high_volatility",
+      "calibration_temperature": 0.7,
+      "trade_signal": {
+        "action": "hold",
+        "direction": "neutral",
+        "confidence": 0.5325719951829374,
+        "expected_return": 0.00025667085517364074,
+        "required_return": 0.0015,
+        "trading_cost_bps": 10.0,
+        "min_signal_edge_bps": 5.0,
+        "confidence_threshold": 0.55,
+        "reason": "low_confidence"
+      },
+      "as_of": "2026-08-31 12:00:00+00:00"
+    }
+  },
+  "evaluations": {
+    "1h": {
+      "fold_count": 1,
+      "samples": 32,
+      "direction_confusion_matrix": [
+        [
+          0,
+          7,
+          0
+        ],
+        [
+          0,
+          21,
+          0
+        ],
+        [
+          0,
+          4,
+          0
+        ]
+      ],
+      "predicted_direction_counts": [
+        0,
+        32,
+        0
+      ],
+      "actual_direction_counts": [
+        7,
+        21,
+        4
+      ],
+      "return_mae": 0.00633768,
+      "volatility_mae": 0.01024811,
+      "direction_accuracy": 0.65625,
+      "regime_accuracy": 0.34375,
+      "majority_direction_accuracy": 0.65625,
+      "direction_brier": 0.18232625,
+      "pearson_ic": 0.11924853,
+      "spearman_ic": 0.00623167,
+      "trading": {
+        "trades": 0,
+        "signal_rate": 0.0,
+        "net_return": 0.0,
+        "avg_net_return": null,
+        "win_rate": null,
+        "profit_factor": null,
+        "max_drawdown": 0.0
+      }
+    },
+    "4h": {
+      "fold_count": 1,
+      "samples": 32,
+      "direction_confusion_matrix": [
+        [
+          0,
+          11,
+          0
+        ],
+        [
+          0,
+          13,
+          0
+        ],
+        [
+          0,
+          8,
+          0
+        ]
+      ],
+      "predicted_direction_counts": [
+        0,
+        32,
+        0
+      ],
+      "actual_direction_counts": [
+        11,
+        13,
+        8
+      ],
+      "return_mae": 0.0155106,
+      "volatility_mae": 0.01231367,
+      "direction_accuracy": 0.40625,
+      "regime_accuracy": 0.40625,
+      "majority_direction_accuracy": 0.40625,
+      "direction_brier": 0.22725285,
+      "pearson_ic": 0.02815558,
+      "spearman_ic": 0.06671554,
+      "trading": {
+        "trades": 0,
+        "signal_rate": 0.0,
+        "net_return": 0.0,
+        "avg_net_return": null,
+        "win_rate": null,
+        "profit_factor": null,
+        "max_drawdown": 0.0
+      }
+    },
+    "24h": {
+      "fold_count": 1,
+      "samples": 32,
+      "direction_confusion_matrix": [
+        [
+          23,
+          0,
+          1
+        ],
+        [
+          8,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "predicted_direction_counts": [
+        31,
+        0,
+        1
+      ],
+      "actual_direction_counts": [
+        24,
+        8,
+        0
+      ],
+      "return_mae": 0.04877703,
+      "volatility_mae": 0.0028802,
+      "direction_accuracy": 0.71875,
+      "regime_accuracy": 0.03125,
+      "majority_direction_accuracy": 0.75,
+      "direction_brier": 0.19272898,
+      "pearson_ic": -0.01201168,
+      "spearman_ic": 0.05021994,
+      "trading": {
+        "trades": 3,
+        "signal_rate": 0.09375,
+        "net_return": 0.06881682,
+        "avg_net_return": 0.02293894,
+        "win_rate": 1.0,
+        "profit_factor": null,
+        "max_drawdown": 0.0
+      }
+    }
+  },
+  "oof_predictions": {
+    "1h": [
+      {
+        "fold": 1,
+        "sample_index": 1056,
+        "timestamp": "2020-03-26 15:00:00+00:00",
+        "actual_return": 0.0030166390351951122,
+        "predicted_return": -0.005005388123970714,
+        "actual_volatility": 0.0030166390351951122,
+        "predicted_volatility": 0.012257641181349754,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.19578537010471794,
+          0.5203701568644273,
+          0.2838444730308547
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1057,
+        "timestamp": "2020-03-26 16:00:00+00:00",
+        "actual_return": -0.000979409902356565,
+        "predicted_return": 0.0007049437730835334,
+        "actual_volatility": 0.000979409902356565,
+        "predicted_volatility": 0.009594223462045193,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.28955160497650745,
+          0.4061570886425113,
+          0.30429130638098123
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1058,
+        "timestamp": "2020-03-26 17:00:00+00:00",
+        "actual_return": 0.002168479608371854,
+        "predicted_return": -0.0016712777068355511,
+        "actual_volatility": 0.002168479608371854,
+        "predicted_volatility": 0.012057141400873661,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.28193217777703544,
+          0.4634613489977238,
+          0.25460647322524077
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1059,
+        "timestamp": "2020-03-26 18:00:00+00:00",
+        "actual_return": 0.0014730864204466343,
+        "predicted_return": -0.0010234037214804878,
+        "actual_volatility": 0.0014730864204466343,
+        "predicted_volatility": 0.014361253008246422,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.17595349067569777,
+          0.5141995814364408,
+          0.3098469278878615
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1060,
+        "timestamp": "2020-03-26 19:00:00+00:00",
+        "actual_return": 0.009701049886643887,
+        "predicted_return": 0.0013396249732371755,
+        "actual_volatility": 0.009701049886643887,
+        "predicted_volatility": 0.011646820232272148,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.24944159610514843,
+          0.45753266214139593,
+          0.2930257417534556
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1061,
+        "timestamp": "2020-03-26 20:00:00+00:00",
+        "actual_return": -0.0011311713606119156,
+        "predicted_return": -0.0026957086355336576,
+        "actual_volatility": 0.0011311713606119156,
+        "predicted_volatility": 0.010614437982439995,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.22030371343876645,
+          0.5503796614641697,
+          0.22931662509706385
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1062,
+        "timestamp": "2020-03-26 21:00:00+00:00",
+        "actual_return": -0.002325894543901086,
+        "predicted_return": -0.008522156897599326,
+        "actual_volatility": 0.002325894543901086,
+        "predicted_volatility": 0.01416301541030407,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.2680610138754987,
+          0.4962839660036144,
+          0.23565502012088693
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1063,
+        "timestamp": "2020-03-26 22:00:00+00:00",
+        "actual_return": 0.004586959257721901,
+        "predicted_return": -0.01078504199199247,
+        "actual_volatility": 0.004586959257721901,
+        "predicted_volatility": 0.011172819882631302,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.22573743999420237,
+          0.5513481939784058,
+          0.22291436602739173
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1064,
+        "timestamp": "2020-03-26 23:00:00+00:00",
+        "actual_return": 0.011787433177232742,
+        "predicted_return": -0.009090116129724908,
+        "actual_volatility": 0.011787433177232742,
+        "predicted_volatility": 0.009425250813364983,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.27125995507975403,
+          0.505617779907459,
+          0.2231222650127868
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1065,
+        "timestamp": "2020-03-27 00:00:00+00:00",
+        "actual_return": -0.001293072011321783,
+        "predicted_return": -0.0030505810499845266,
+        "actual_volatility": 0.001293072011321783,
+        "predicted_volatility": 0.008743028156459332,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "high_volatility",
+        "direction_probabilities": [
+          0.2439576596382156,
+          0.5132293162955412,
+          0.24281302406624314
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1066,
+        "timestamp": "2020-03-27 01:00:00+00:00",
+        "actual_return": -0.0009561847546137869,
+        "predicted_return": -0.0020911193170466205,
+        "actual_volatility": 0.0009561847546137869,
+        "predicted_volatility": 0.009459788911044598,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "high_volatility",
+        "direction_probabilities": [
+          0.21616793761518513,
+          0.5124774785299248,
+          0.27135458385489003
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1067,
+        "timestamp": "2020-03-27 02:00:00+00:00",
+        "actual_return": 7.358514267252758e-05,
+        "predicted_return": -0.00482699261592097,
+        "actual_volatility": 7.358514267252758e-05,
+        "predicted_volatility": 0.011688203550875187,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.15138166320710067,
+          0.6617782203747158,
+          0.18684011641818357
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1068,
+        "timestamp": "2020-03-27 03:00:00+00:00",
+        "actual_return": -0.008141838945448399,
+        "predicted_return": -0.0017582928608059335,
+        "actual_volatility": 0.008141838945448399,
+        "predicted_volatility": 0.010951938107609749,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "high_volatility",
+        "direction_probabilities": [
+          0.20164736822422294,
+          0.4923452479063563,
+          0.3060073838694207
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1069,
+        "timestamp": "2020-03-27 04:00:00+00:00",
+        "actual_return": -0.012736553326249123,
+        "predicted_return": -0.00507049165629159,
+        "actual_volatility": 0.012736553326249123,
+        "predicted_volatility": 0.012504355981945992,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "high_volatility",
+        "direction_probabilities": [
+          0.29160249573029307,
+          0.4307895728874348,
+          0.2776079313822721
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1070,
+        "timestamp": "2020-03-27 05:00:00+00:00",
+        "actual_return": 0.002461391966789961,
+        "predicted_return": -0.00019670390821373577,
+        "actual_volatility": 0.002461391966789961,
+        "predicted_volatility": 0.013338403776288033,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.18315258761935183,
+          0.5831140485682372,
+          0.233733363812411
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1071,
+        "timestamp": "2020-03-27 06:00:00+00:00",
+        "actual_return": 0.004173497669398785,
+        "predicted_return": -0.0018549214441449427,
+        "actual_volatility": 0.004173497669398785,
+        "predicted_volatility": 0.013857672922313213,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2324615835471128,
+          0.522069080691916,
+          0.24546933576097119
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1072,
+        "timestamp": "2020-03-27 07:00:00+00:00",
+        "actual_return": -0.0035441145300865173,
+        "predicted_return": -0.005572743579686228,
+        "actual_volatility": 0.0035441145300865173,
+        "predicted_volatility": 0.012983179651200771,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.21893091993774624,
+          0.5306074701007799,
+          0.2504616099614738
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1073,
+        "timestamp": "2020-03-27 08:00:00+00:00",
+        "actual_return": -0.0037822548765689135,
+        "predicted_return": -0.0021521691329321707,
+        "actual_volatility": 0.0037822548765689135,
+        "predicted_volatility": 0.01280919834971428,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.33052142647579374,
+          0.3981390301618608,
+          0.27133954336234545
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1074,
+        "timestamp": "2020-03-27 09:00:00+00:00",
+        "actual_return": -0.001098330831155181,
+        "predicted_return": 0.0020053641219172982,
+        "actual_volatility": 0.001098330831155181,
+        "predicted_volatility": 0.012603211216628551,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2524424677462935,
+          0.4556200696597075,
+          0.2919374625939991
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1075,
+        "timestamp": "2020-03-27 10:00:00+00:00",
+        "actual_return": -0.003936805296689272,
+        "predicted_return": -0.0033022303337781026,
+        "actual_volatility": 0.003936805296689272,
+        "predicted_volatility": 0.013131653890013695,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.17628761377725807,
+          0.5689361897042069,
+          0.25477619651853495
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1076,
+        "timestamp": "2020-03-27 11:00:00+00:00",
+        "actual_return": 0.0018421217100694776,
+        "predicted_return": -0.006651898696110607,
+        "actual_volatility": 0.0018421217100694776,
+        "predicted_volatility": 0.01326153613626957,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.2640806110875478,
+          0.4214162582203534,
+          0.3145031306920989
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1077,
+        "timestamp": "2020-03-27 12:00:00+00:00",
+        "actual_return": -0.0055669154971838,
+        "predicted_return": -0.002947821454272861,
+        "actual_volatility": 0.0055669154971838,
+        "predicted_volatility": 0.01686982996761799,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.2933946070395398,
+          0.3565746250763211,
+          0.35003076788413906
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1078,
+        "timestamp": "2020-03-27 13:00:00+00:00",
+        "actual_return": 0.0034527177922427654,
+        "predicted_return": -0.007917043026827747,
+        "actual_volatility": 0.0034527177922427654,
+        "predicted_volatility": 0.015152635984122753,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.2578147568855402,
+          0.4908404506852546,
+          0.25134479242920504
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1079,
+        "timestamp": "2020-03-27 14:00:00+00:00",
+        "actual_return": 0.0013596400385722518,
+        "predicted_return": -0.0056886652058922,
+        "actual_volatility": 0.0013596400385722518,
+        "predicted_volatility": 0.013901556842029095,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.09141493852318097,
+          0.7163474946551901,
+          0.1922375668216289
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1080,
+        "timestamp": "2020-03-27 15:00:00+00:00",
+        "actual_return": 0.0023824614472687244,
+        "predicted_return": -0.007092853289736838,
+        "actual_volatility": 0.0023824614472687244,
+        "predicted_volatility": 0.01577814668416977,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.17246350086396453,
+          0.5804665725568529,
+          0.24706992657918242
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1081,
+        "timestamp": "2020-03-27 16:00:00+00:00",
+        "actual_return": -0.0006930424715392292,
+        "predicted_return": 0.001606991880667431,
+        "actual_volatility": 0.0006930424715392292,
+        "predicted_volatility": 0.01279356423765421,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.27401458399110257,
+          0.42886937148521137,
+          0.2971160445236861
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1082,
+        "timestamp": "2020-03-27 17:00:00+00:00",
+        "actual_return": 0.0015060016885399818,
+        "predicted_return": -0.0022752548836321843,
+        "actual_volatility": 0.0015060016885399818,
+        "predicted_volatility": 0.01285075955092907,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "high_volatility",
+        "direction_probabilities": [
+          0.23534459540261876,
+          0.4375259216385385,
+          0.32712948295884275
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1083,
+        "timestamp": "2020-03-27 18:00:00+00:00",
+        "actual_return": 0.001323407981544733,
+        "predicted_return": -0.0022195827128138183,
+        "actual_volatility": 0.001323407981544733,
+        "predicted_volatility": 0.013251754455268383,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "high_volatility",
+        "direction_probabilities": [
+          0.128295240228322,
+          0.561965793163137,
+          0.30973896660854106
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1084,
+        "timestamp": "2020-03-27 19:00:00+00:00",
+        "actual_return": 0.003181036561727524,
+        "predicted_return": -0.0015526831275248577,
+        "actual_volatility": 0.003181036561727524,
+        "predicted_volatility": 0.01257176324725151,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.1996278069513161,
+          0.4465419251569712,
+          0.3538302678917126
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1085,
+        "timestamp": "2020-03-27 20:00:00+00:00",
+        "actual_return": 0.0,
+        "predicted_return": -0.0025895217352611705,
+        "actual_volatility": 0.0,
+        "predicted_volatility": 0.012910198420286179,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.2887061200284306,
+          0.4021110510111552,
+          0.3091828289604142
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1086,
+        "timestamp": "2020-03-27 21:00:00+00:00",
+        "actual_return": -0.002369811525568366,
+        "predicted_return": -0.004064851115527371,
+        "actual_volatility": 0.002369811525568366,
+        "predicted_volatility": 0.014960280619561672,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "high_volatility",
+        "direction_probabilities": [
+          0.18783770603399327,
+          0.5594248543272283,
+          0.25273743963877854
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1087,
+        "timestamp": "2020-03-27 22:00:00+00:00",
+        "actual_return": -0.04598599672317505,
+        "predicted_return": -0.00716971545375698,
+        "actual_volatility": 0.04598599672317505,
+        "predicted_volatility": 0.011855557560920715,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "high_volatility",
+        "predicted_regime": "high_volatility",
+        "direction_probabilities": [
+          0.20752952785016004,
+          0.44513514033505214,
+          0.3473353318147878
+        ]
+      }
+    ],
+    "4h": [
+      {
+        "fold": 1,
+        "sample_index": 1056,
+        "timestamp": "2020-03-26 15:00:00+00:00",
+        "actual_return": 0.005678795278072357,
+        "predicted_return": 0.0081301807432223,
+        "actual_volatility": 0.002057403791695833,
+        "predicted_volatility": 0.01825553923845291,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.1521435031838509,
+          0.6948080944701066,
+          0.15304840234604244
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1057,
+        "timestamp": "2020-03-26 16:00:00+00:00",
+        "actual_return": 0.012363205663859844,
+        "predicted_return": 0.003714244769049952,
+        "actual_volatility": 0.005048314109444618,
+        "predicted_volatility": 0.01799095794558525,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.1472976748928513,
+          0.5840409457351426,
+          0.2686613793720061
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1058,
+        "timestamp": "2020-03-26 17:00:00+00:00",
+        "actual_return": 0.012211444787681103,
+        "predicted_return": 0.0033378615339037417,
+        "actual_volatility": 0.005056238733232021,
+        "predicted_volatility": 0.017863228917121887,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.20138920254557338,
+          0.5283093684449848,
+          0.27030142900944176
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1059,
+        "timestamp": "2020-03-26 18:00:00+00:00",
+        "actual_return": 0.007717070635408163,
+        "predicted_return": 0.004557968464716012,
+        "actual_volatility": 0.005073699168860912,
+        "predicted_volatility": 0.015348924323916435,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.18910651078659232,
+          0.5709684580963578,
+          0.23992503111705002
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1060,
+        "timestamp": "2020-03-26 19:00:00+00:00",
+        "actual_return": 0.01083094347268343,
+        "predicted_return": 0.0036355900769692866,
+        "actual_volatility": 0.005519055761396885,
+        "predicted_volatility": 0.018383009359240532,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.27682208719005574,
+          0.510938847410598,
+          0.21223906539934626
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1061,
+        "timestamp": "2020-03-26 20:00:00+00:00",
+        "actual_return": 0.012917326763272285,
+        "predicted_return": 0.004178923483662473,
+        "actual_volatility": 0.006455096881836653,
+        "predicted_volatility": 0.01852954551577568,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2088657687934224,
+          0.47071924171710444,
+          0.32041498948947317
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1062,
+        "timestamp": "2020-03-26 21:00:00+00:00",
+        "actual_return": 0.01275542564690113,
+        "predicted_return": 0.004597122666597531,
+        "actual_volatility": 0.006462692748755217,
+        "predicted_volatility": 0.018062883988022804,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2814205472455161,
+          0.4552300993454125,
+          0.2633493534090714
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1063,
+        "timestamp": "2020-03-26 22:00:00+00:00",
+        "actual_return": 0.014125135727226734,
+        "predicted_return": 0.003650042211328281,
+        "actual_volatility": 0.006375148892402649,
+        "predicted_volatility": 0.01676209084689617,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2864904453193048,
+          0.483807452908637,
+          0.2297021017720581
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1064,
+        "timestamp": "2020-03-26 23:00:00+00:00",
+        "actual_return": 0.009611762128770351,
+        "predicted_return": 0.00803849123616683,
+        "actual_volatility": 0.005948430858552456,
+        "predicted_volatility": 0.01613827794790268,
+        "actual_direction": 1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_up",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.18142801780218387,
+          0.6688851304625946,
+          0.14968685173522167
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1065,
+        "timestamp": "2020-03-27 00:00:00+00:00",
+        "actual_return": -0.010317510925233364,
+        "predicted_return": -0.0016584834393953824,
+        "actual_volatility": 0.004149737302213907,
+        "predicted_volatility": 0.018405411392450333,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2036812805361489,
+          0.5344773172547177,
+          0.2618414022091335
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1066,
+        "timestamp": "2020-03-27 01:00:00+00:00",
+        "actual_return": -0.02176099270582199,
+        "predicted_return": 0.0036968770780428433,
+        "actual_volatility": 0.007573457434773445,
+        "predicted_volatility": 0.018328599631786346,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.17519951597220199,
+          0.4262988889501907,
+          0.3985015950776074
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1067,
+        "timestamp": "2020-03-27 02:00:00+00:00",
+        "actual_return": -0.01834341511130333,
+        "predicted_return": 0.005066646402083664,
+        "actual_volatility": 0.007657891139388084,
+        "predicted_volatility": 0.016482513397932053,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.20985657471122288,
+          0.4327955521448968,
+          0.35734787314388045
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1068,
+        "timestamp": "2020-03-27 03:00:00+00:00",
+        "actual_return": -0.014243503101170063,
+        "predicted_return": 0.0007546088598429855,
+        "actual_volatility": 0.007937030866742134,
+        "predicted_volatility": 0.01376662403345108,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.1600653346719853,
+          0.4582320742344304,
+          0.3817025910935844
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1069,
+        "timestamp": "2020-03-27 04:00:00+00:00",
+        "actual_return": -0.009645777754485607,
+        "predicted_return": -0.009270972571432336,
+        "actual_volatility": 0.007040189113467932,
+        "predicted_volatility": 0.018658628687262535,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.18911832025747202,
+          0.5949003369460765,
+          0.21598134279645154
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1070,
+        "timestamp": "2020-03-27 05:00:00+00:00",
+        "actual_return": -0.0006914797704666853,
+        "predicted_return": 0.013023646297019345,
+        "actual_volatility": 0.003547630738466978,
+        "predicted_volatility": 0.021437644958496094,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.19373611302271926,
+          0.5120477124280044,
+          0.29421617454927645
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1071,
+        "timestamp": "2020-03-27 06:00:00+00:00",
+        "actual_return": -0.004251202568411827,
+        "predicted_return": 0.0014258870044774152,
+        "actual_volatility": 0.0033723365049809217,
+        "predicted_volatility": 0.019537493586540222,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2605746053533647,
+          0.49120794439831056,
+          0.24821745024832473
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1072,
+        "timestamp": "2020-03-27 07:00:00+00:00",
+        "actual_return": -0.012361505068838596,
+        "predicted_return": -0.005875823189057872,
+        "actual_volatility": 0.003300415351986885,
+        "predicted_volatility": 0.014968865551054478,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2418934948059691,
+          0.49211069261828316,
+          0.2659958125757477
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1073,
+        "timestamp": "2020-03-27 08:00:00+00:00",
+        "actual_return": -0.006975269410759211,
+        "predicted_return": 0.00645442372383211,
+        "actual_volatility": 0.0029327303636819124,
+        "predicted_volatility": 0.016420496627688408,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.18783380116697163,
+          0.6098655388359724,
+          0.2023006599970559
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1074,
+        "timestamp": "2020-03-27 09:00:00+00:00",
+        "actual_return": -0.008759929798543453,
+        "predicted_return": 0.009707079735565284,
+        "actual_volatility": 0.0035738188307732344,
+        "predicted_volatility": 0.016311563551425934,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "trend_down",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.21202584969039767,
+          0.5806879360964886,
+          0.2072862142131137
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1075,
+        "timestamp": "2020-03-27 10:00:00+00:00",
+        "actual_return": -0.004208880942314863,
+        "predicted_return": 0.0011370320367266055,
+        "actual_volatility": 0.003930765204131603,
+        "predicted_volatility": 0.015784161165356636,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.21170336250712424,
+          0.5637842443094501,
+          0.22451239318342567
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1076,
+        "timestamp": "2020-03-27 11:00:00+00:00",
+        "actual_return": 0.0010875641601160169,
+        "predicted_return": 0.002340777347126555,
+        "actual_volatility": 0.003469648538157344,
+        "predicted_volatility": 0.01567191816866398,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.27277998509108003,
+          0.5492681034747572,
+          0.17795191143416286
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1077,
+        "timestamp": "2020-03-27 12:00:00+00:00",
+        "actual_return": 0.001627903780899942,
+        "predicted_return": 0.007998493678992165,
+        "actual_volatility": 0.00355093483813107,
+        "predicted_volatility": 0.015487785451114178,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.22009618159599525,
+          0.5977457010416514,
+          0.1821581173623535
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1078,
+        "timestamp": "2020-03-27 13:00:00+00:00",
+        "actual_return": 0.006501777097582817,
+        "predicted_return": 0.007118414735930596,
+        "actual_volatility": 0.0022319448180496693,
+        "predicted_volatility": 0.018129056319594383,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.273582115685336,
+          0.5776954370398838,
+          0.14872244727478023
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1079,
+        "timestamp": "2020-03-27 14:00:00+00:00",
+        "actual_return": 0.004555060528218746,
+        "predicted_return": -0.0006949176623898983,
+        "actual_volatility": 0.00160258321557194,
+        "predicted_volatility": 0.015958184376358986,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.18800235496830972,
+          0.5675851845591376,
+          0.2444124604725526
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1080,
+        "timestamp": "2020-03-27 15:00:00+00:00",
+        "actual_return": 0.004518828354775906,
+        "predicted_return": -0.0013099765394669785,
+        "actual_volatility": 0.0015949828084558249,
+        "predicted_volatility": 0.015808984637260437,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.18317034359808446,
+          0.6434506616895532,
+          0.17337899471236232
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1081,
+        "timestamp": "2020-03-27 16:00:00+00:00",
+        "actual_return": 0.005317403934895992,
+        "predicted_return": 0.014524864957606356,
+        "actual_volatility": 0.0019117237534373999,
+        "predicted_volatility": 0.01780659146606922,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2308287439688967,
+          0.5457223345515935,
+          0.22344892147950984
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1082,
+        "timestamp": "2020-03-27 17:00:00+00:00",
+        "actual_return": 0.006010446231812239,
+        "predicted_return": -0.00843194362057752,
+        "actual_volatility": 0.0018800561083480716,
+        "predicted_volatility": 0.016455871984362602,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.3247778726185138,
+          0.4795411615054973,
+          0.19568096587598874
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1083,
+        "timestamp": "2020-03-27 18:00:00+00:00",
+        "actual_return": 0.002134633017703891,
+        "predicted_return": -0.01236094695542347,
+        "actual_volatility": 0.002090837573632598,
+        "predicted_volatility": 0.012337848544120789,
+        "actual_direction": 0,
+        "predicted_direction": 0,
+        "actual_regime": "sideways",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.19694308959371043,
+          0.5849286283831734,
+          0.2181282820231162
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1084,
+        "timestamp": "2020-03-27 19:00:00+00:00",
+        "actual_return": -0.045174770057201385,
+        "predicted_return": 0.005616683930502276,
+        "actual_volatility": 0.02307838201522827,
+        "predicted_volatility": 0.012939933687448502,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "high_volatility",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.17799128489158342,
+          0.6545430046996592,
+          0.16746571040875743
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1085,
+        "timestamp": "2020-03-27 20:00:00+00:00",
+        "actual_return": -0.057533010840415955,
+        "predicted_return": 0.009235345584954448,
+        "actual_volatility": 0.023476311936974525,
+        "predicted_volatility": 0.01417901273816824,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "high_volatility",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.268473484246132,
+          0.5766580714210063,
+          0.15486844433286162
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1086,
+        "timestamp": "2020-03-27 21:00:00+00:00",
+        "actual_return": -0.06203383207321167,
+        "predicted_return": 0.007259356594182171,
+        "actual_volatility": 0.023583926260471344,
+        "predicted_volatility": 0.01430934015661478,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "high_volatility",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.26276607951533654,
+          0.49452195903430946,
+          0.24271196145035395
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1087,
+        "timestamp": "2020-03-27 22:00:00+00:00",
+        "actual_return": -0.06301699578762054,
+        "predicted_return": -0.006289416083994316,
+        "actual_volatility": 0.02361372858285904,
+        "predicted_volatility": 0.01203455962240696,
+        "actual_direction": -1,
+        "predicted_direction": 0,
+        "actual_regime": "high_volatility",
+        "predicted_regime": "sideways",
+        "direction_probabilities": [
+          0.2268861613448461,
+          0.5963956070240644,
+          0.17671823163108943
+        ]
+      }
+    ],
+    "24h": [
+      {
+        "fold": 1,
+        "sample_index": 1056,
+        "timestamp": "2020-03-26 15:00:00+00:00",
+        "actual_return": 0.0006040562293492258,
+        "predicted_return": -0.018632895514808036,
+        "actual_volatility": 0.005099091213196516,
+        "predicted_volatility": 0.013670098967850208,
+        "actual_direction": 0,
+        "predicted_direction": -1,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.45786039886705177,
+          0.2517378503292763,
+          0.29040175080367187
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1057,
+        "timestamp": "2020-03-26 16:00:00+00:00",
+        "actual_return": -3.0121389499981888e-05,
+        "predicted_return": -0.006130547179171392,
+        "actual_volatility": 0.005085082724690437,
+        "predicted_volatility": 0.009155391715466976,
+        "actual_direction": 0,
+        "predicted_direction": -1,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5041784323491401,
+          0.21886446659122233,
+          0.2769571010596377
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1058,
+        "timestamp": "2020-03-26 17:00:00+00:00",
+        "actual_return": 0.00025624598492868245,
+        "predicted_return": 0.005646741882228985,
+        "actual_volatility": 0.005083119962364435,
+        "predicted_volatility": 0.011903326027095318,
+        "actual_direction": 0,
+        "predicted_direction": -1,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5409639454705781,
+          0.2102356384933557,
+          0.24880041603606617
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1059,
+        "timestamp": "2020-03-26 18:00:00+00:00",
+        "actual_return": -0.0004062319057993591,
+        "predicted_return": 0.009708731824238743,
+        "actual_volatility": 0.005073133390396833,
+        "predicted_volatility": 0.014062592759728432,
+        "actual_direction": 0,
+        "predicted_direction": -1,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5797283580482964,
+          0.19503266223821128,
+          0.22523897971349235
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1060,
+        "timestamp": "2020-03-26 19:00:00+00:00",
+        "actual_return": -0.0005559103447012603,
+        "predicted_return": -0.0189829932068169,
+        "actual_volatility": 0.005071414168924093,
+        "predicted_volatility": 0.012353933416306973,
+        "actual_direction": 0,
+        "predicted_direction": -1,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5295272375148511,
+          0.17295043153695408,
+          0.2975223309481948
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1061,
+        "timestamp": "2020-03-26 20:00:00+00:00",
+        "actual_return": -0.00707592349499464,
+        "predicted_return": -0.019704966295228544,
+        "actual_volatility": 0.00471376720815897,
+        "predicted_volatility": 0.010046139359474182,
+        "actual_direction": 0,
+        "predicted_direction": -1,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.4944387906802836,
+          0.23279843024210756,
+          0.2727627790776089
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1062,
+        "timestamp": "2020-03-26 21:00:00+00:00",
+        "actual_return": -0.005944752600044012,
+        "predicted_return": -0.025392784021713036,
+        "actual_volatility": 0.004708108492195606,
+        "predicted_volatility": 0.00930600892752409,
+        "actual_direction": 0,
+        "predicted_direction": -1,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5759604962781433,
+          0.20422509784550436,
+          0.21981440587635234
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1063,
+        "timestamp": "2020-03-26 22:00:00+00:00",
+        "actual_return": -0.005988669581711292,
+        "predicted_return": -0.022798504645652785,
+        "actual_volatility": 0.004709020722657442,
+        "predicted_volatility": 0.010178559459745884,
+        "actual_direction": 0,
+        "predicted_direction": -1,
+        "actual_regime": "sideways",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5716538095663077,
+          0.20755890810366484,
+          0.2207872823300275
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1064,
+        "timestamp": "2020-03-26 23:00:00+00:00",
+        "actual_return": -0.05656162649393082,
+        "predicted_return": 0.007273183870762179,
+        "actual_volatility": 0.010459980927407742,
+        "predicted_volatility": 0.010466832667589188,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.39313561970818056,
+          0.2549782343842532,
+          0.3518861459075662
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1065,
+        "timestamp": "2020-03-27 00:00:00+00:00",
+        "actual_return": -0.0775262638926506,
+        "predicted_return": -0.026719462030624364,
+        "actual_volatility": 0.010350415483117104,
+        "predicted_volatility": 0.010306823067367077,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.4305627759485072,
+          0.23613023294066787,
+          0.33330699111082485
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1066,
+        "timestamp": "2020-03-27 01:00:00+00:00",
+        "actual_return": -0.0807340145111084,
+        "predicted_return": 0.00695832329307034,
+        "actual_volatility": 0.010387755930423737,
+        "predicted_volatility": 0.008581581525504589,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.3897227942958748,
+          0.25392158535382603,
+          0.3563556203502992
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1067,
+        "timestamp": "2020-03-27 02:00:00+00:00",
+        "actual_return": -0.08313079923391342,
+        "predicted_return": -0.012246924236428336,
+        "actual_volatility": 0.010408449918031693,
+        "predicted_volatility": 0.009402915835380554,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5434403752722037,
+          0.20938658447439196,
+          0.24717304025340422
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1068,
+        "timestamp": "2020-03-27 03:00:00+00:00",
+        "actual_return": -0.10462332516908646,
+        "predicted_return": 0.0038355285627973417,
+        "actual_volatility": 0.011289422400295734,
+        "predicted_volatility": 0.008483681827783585,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.4153578627949738,
+          0.28628849219220986,
+          0.29835364501281625
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1069,
+        "timestamp": "2020-03-27 04:00:00+00:00",
+        "actual_return": -0.08871771395206451,
+        "predicted_return": -0.0010370492579320836,
+        "actual_volatility": 0.011278320103883743,
+        "predicted_volatility": 0.012693197466433048,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.4253832849287909,
+          0.1993186424524417,
+          0.37529807261876735
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1070,
+        "timestamp": "2020-03-27 05:00:00+00:00",
+        "actual_return": -0.07718165963888168,
+        "predicted_return": -0.02047878482386132,
+        "actual_volatility": 0.010977312922477722,
+        "predicted_volatility": 0.009561518207192421,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.4411459024895838,
+          0.18124367273027658,
+          0.3776104247801397
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1071,
+        "timestamp": "2020-03-27 06:00:00+00:00",
+        "actual_return": -0.07938336580991745,
+        "predicted_return": -0.030025330241519724,
+        "actual_volatility": 0.010965936817228794,
+        "predicted_volatility": 0.00914496835321188,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5000986294384001,
+          0.15706249556800064,
+          0.34283887499359933
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1072,
+        "timestamp": "2020-03-27 07:00:00+00:00",
+        "actual_return": -0.08059144765138626,
+        "predicted_return": -0.03125321721560894,
+        "actual_volatility": 0.010949539951980114,
+        "predicted_volatility": 0.012180845253169537,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5024818418829821,
+          0.22255130373685406,
+          0.2749668543801639
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1073,
+        "timestamp": "2020-03-27 08:00:00+00:00",
+        "actual_return": -0.06511294096708298,
+        "predicted_return": -0.00048394092505520543,
+        "actual_volatility": 0.01119390968233347,
+        "predicted_volatility": 0.01235601119697094,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.483862629968738,
+          0.192197064291177,
+          0.3239403057400851
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1074,
+        "timestamp": "2020-03-27 09:00:00+00:00",
+        "actual_return": -0.06214643269777298,
+        "predicted_return": 0.0204265878190276,
+        "actual_volatility": 0.011168495751917362,
+        "predicted_volatility": 0.011809919029474258,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.4379414497943592,
+          0.1624111781238323,
+          0.3996473720818085
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1075,
+        "timestamp": "2020-03-27 10:00:00+00:00",
+        "actual_return": -0.060264334082603455,
+        "predicted_return": 0.004445078870869351,
+        "actual_volatility": 0.011167391203343868,
+        "predicted_volatility": 0.011294365860521793,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.5969054029801071,
+          0.13238483882516486,
+          0.2707097581947281
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1076,
+        "timestamp": "2020-03-27 11:00:00+00:00",
+        "actual_return": -0.05988340079784393,
+        "predicted_return": -0.008743367797162605,
+        "actual_volatility": 0.011162064969539642,
+        "predicted_volatility": 0.015933465212583542,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.598692094302234,
+          0.17572752469977806,
+          0.22558038099798797
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1077,
+        "timestamp": "2020-03-27 12:00:00+00:00",
+        "actual_return": -0.06159716472029686,
+        "predicted_return": -0.004032275838822258,
+        "actual_volatility": 0.011155759915709496,
+        "predicted_volatility": 0.014271305873990059,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.49255509802391734,
+          0.20083431802457402,
+          0.3066105839515087
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1078,
+        "timestamp": "2020-03-27 13:00:00+00:00",
+        "actual_return": -0.057186078280210495,
+        "predicted_return": -0.03120355423335537,
+        "actual_volatility": 0.011100241914391518,
+        "predicted_volatility": 0.0133668826892972,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.49596258818503636,
+          0.13280576802332375,
+          0.37123164379163986
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1079,
+        "timestamp": "2020-03-27 14:00:00+00:00",
+        "actual_return": -0.05860093981027603,
+        "predicted_return": -0.052150008227783665,
+        "actual_volatility": 0.011085652746260166,
+        "predicted_volatility": 0.011834319680929184,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.4588290482657805,
+          0.24337343142976067,
+          0.29779752030445883
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1080,
+        "timestamp": "2020-03-27 15:00:00+00:00",
+        "actual_return": -0.06404045224189758,
+        "predicted_return": -0.04286920981143849,
+        "actual_volatility": 0.011113425716757774,
+        "predicted_volatility": 0.012823835015296936,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.45241707567231865,
+          0.23920110759544871,
+          0.3083818167322327
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1081,
+        "timestamp": "2020-03-27 16:00:00+00:00",
+        "actual_return": -0.06372255086898804,
+        "predicted_return": -0.02642317440461286,
+        "actual_volatility": 0.011116454377770424,
+        "predicted_volatility": 0.008718321099877357,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.44428412690705466,
+          0.25435225143229634,
+          0.3013636216606489
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1082,
+        "timestamp": "2020-03-27 17:00:00+00:00",
+        "actual_return": -0.09638987481594086,
+        "predicted_return": -0.020414583610863648,
+        "actual_volatility": 0.013035602867603302,
+        "predicted_volatility": 0.011223290115594864,
+        "actual_direction": -1,
+        "predicted_direction": 1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.36774612510018595,
+          0.19287895974958383,
+          0.4393749151502303
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1083,
+        "timestamp": "2020-03-27 18:00:00+00:00",
+        "actual_return": -0.0749916061758995,
+        "predicted_return": -0.012783458710519991,
+        "actual_volatility": 0.013845251873135567,
+        "predicted_volatility": 0.012181856669485569,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.4200012296325801,
+          0.24190184813888702,
+          0.3380969222285328
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1084,
+        "timestamp": "2020-03-27 19:00:00+00:00",
+        "actual_return": -0.06925161182880402,
+        "predicted_return": 0.012868930271921642,
+        "actual_volatility": 0.013917502015829086,
+        "predicted_volatility": 0.01426254864782095,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.44307400893047705,
+          0.22063423526614795,
+          0.33629175580337495
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1085,
+        "timestamp": "2020-03-27 20:00:00+00:00",
+        "actual_return": -0.06626682728528976,
+        "predicted_return": 0.015244284159641665,
+        "actual_volatility": 0.01395920105278492,
+        "predicted_volatility": 0.011545088142156601,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.46278066648979005,
+          0.1753765921982379,
+          0.3618427413119721
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1086,
+        "timestamp": "2020-03-27 21:00:00+00:00",
+        "actual_return": -0.07077506184577942,
+        "predicted_return": -0.02375452601548498,
+        "actual_volatility": 0.01398950070142746,
+        "predicted_volatility": 0.009564749896526337,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_down",
+        "direction_probabilities": [
+          0.4729028019908558,
+          0.15650989381230163,
+          0.37058730419684255
+        ]
+      },
+      {
+        "fold": 1,
+        "sample_index": 1087,
+        "timestamp": "2020-03-27 22:00:00+00:00",
+        "actual_return": -0.06880732625722885,
+        "predicted_return": -0.0012118271923821104,
+        "actual_volatility": 0.013981375843286514,
+        "predicted_volatility": 0.012100141495466232,
+        "actual_direction": -1,
+        "predicted_direction": -1,
+        "actual_regime": "trend_down",
+        "predicted_regime": "trend_up",
+        "direction_probabilities": [
+          0.46095567763641854,
+          0.18826095706473148,
+          0.35078336529884996
+        ]
+      }
+    ]
+  },
+  "walk_forward": {
+    "folds": [
+      {
+        "train_start": 0,
+        "train_end": 1008,
+        "validation_start": 1056,
+        "validation_end": 1088,
+        "purge_samples": 48,
+        "fold": 1,
+        "train_samples": 1008,
+        "validation_samples": 32
+      }
+    ]
+  },
+  "ensemble_note": "Use ensemble_forecasts with separately trained, calibrated model forecasts; horizons are not model names."
+}
