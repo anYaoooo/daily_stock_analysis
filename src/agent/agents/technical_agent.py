@@ -19,6 +19,14 @@ from src.agent.runner import try_parse_json
 
 logger = logging.getLogger(__name__)
 
+# P0-4: Import crypto indicators module
+try:
+    from src.indicators.crypto_indicators import compute_crypto_indicators, CryptoIndicatorsSummary
+    CRYPTO_INDICATORS_AVAILABLE = True
+except ImportError:
+    CRYPTO_INDICATORS_AVAILABLE = False
+    logger.warning("Crypto indicators module not available, crypto-specific analysis disabled")
+
 
 class TechnicalAgent(BaseAgent):
     agent_name = "technical"
@@ -79,8 +87,78 @@ Return **only** a JSON object (no markdown fences):
         parts = [f"Perform technical analysis on stock **{ctx.stock_code}**"]
         if ctx.stock_name:
             parts[0] += f" ({ctx.stock_name})"
-        parts.append("Use your tools to fetch any missing data, then output the JSON opinion.")
+
+        # P0-4: Add crypto-specific indicators for BTC analysis
+        if ctx.stock_code.upper() in ["BTC", "BTCUSDT", "BTC-USD", "BTC/USD"]:
+            crypto_summary = self._get_crypto_indicators_summary(ctx)
+            if crypto_summary:
+                parts.append("\n## Crypto-Specific Market Indicators")
+                parts.append(crypto_summary)
+                parts.append("\nIncorporate these crypto-specific indicators into your technical analysis.")
+
+        parts.append("\nUse your tools to fetch any missing data, then output the JSON opinion.")
         return "\n".join(parts)
+
+    def _get_crypto_indicators_summary(self, ctx: AgentContext) -> Optional[str]:
+        """Get crypto-specific indicators summary for BTC analysis.
+
+        Returns:
+            Formatted string with crypto indicators or None if unavailable
+        """
+        if not CRYPTO_INDICATORS_AVAILABLE:
+            return None
+
+        config = ctx.meta.get("config")
+        if not config or not getattr(config, "btc_crypto_indicators_enabled", False):
+            logger.debug("Crypto indicators disabled in config")
+            return None
+
+        try:
+            # Extract market data from context
+            quote_data = ctx.get_data("realtime_quote")
+            if not quote_data:
+                logger.debug("No realtime quote data available for crypto indicators")
+                return None
+
+            current_price = float(quote_data.get("price", 0))
+            if current_price <= 0:
+                return None
+
+            # Get 24h price change
+            daily_history = ctx.get_data("daily_history")
+            price_change_24h_pct = 0.0
+            if daily_history and len(daily_history) >= 2:
+                try:
+                    prev_close = float(daily_history[-2].get("close", current_price))
+                    if prev_close > 0:
+                        price_change_24h_pct = ((current_price - prev_close) / prev_close) * 100
+                except (KeyError, ValueError, IndexError):
+                    pass
+
+            # TODO: Fetch actual crypto-specific data from data provider
+            # For now, use placeholder values - integrate with crypto_fetcher in future
+            indicators = compute_crypto_indicators(
+                funding_rates=[0.0001, 0.0002, 0.00015],  # Sample data - replace with actual
+                current_oi=5000000000.0,
+                oi_24h_ago=4800000000.0,
+                oi_7d_ago=4500000000.0,
+                price_change_24h_pct=price_change_24h_pct,
+                long_accounts=55000,
+                short_accounts=45000,
+                current_price=current_price,
+                liquidation_map={
+                    current_price * 1.02: 500000000,
+                    current_price * 0.98: 600000000,
+                },
+            )
+
+            summary = indicators.generate_summary()
+            logger.info(f"Crypto indicators computed for {ctx.stock_code}: {indicators.overall_sentiment}")
+            return summary
+
+        except Exception as exc:
+            logger.warning(f"Failed to compute crypto indicators: {exc}", exc_info=True)
+            return None
 
     def post_process(self, ctx: AgentContext, raw_text: str) -> Optional[AgentOpinion]:
         """Parse the JSON opinion from the LLM response."""

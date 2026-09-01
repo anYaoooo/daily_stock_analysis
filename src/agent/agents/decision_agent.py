@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.agent.agents.base_agent import BaseAgent
+from src.agent.decision_weights import DecisionWeights, load_weights_from_config
 from src.agent.protocols import AgentContext, AgentOpinion, normalize_decision_signal
 from src.report_language import normalize_report_language
 
@@ -27,6 +28,23 @@ class DecisionAgent(BaseAgent):
     agent_name = "decision"
     max_steps = 3  # pure synthesis, should not need many tool calls
     tool_names: Optional[List[str]] = []  # no tool access — works from context only
+
+    def __init__(self, *args, **kwargs):
+        """Initialize with decision weights configuration."""
+        super().__init__(*args, **kwargs)
+        self._weights: Optional[DecisionWeights] = None
+
+    def _load_decision_weights(self, ctx: AgentContext) -> DecisionWeights:
+        """Load decision weights from configuration."""
+        if self._weights is None:
+            config = ctx.meta.get("config")
+            if config:
+                self._weights = load_weights_from_config(config)
+                logger.info(f"Loaded decision weights: {self._weights}")
+            else:
+                self._weights = DecisionWeights()
+                logger.warning("No config available, using default decision weights")
+        return self._weights
 
     @staticmethod
     def _is_chat_mode(ctx: AgentContext) -> bool:
@@ -150,6 +168,15 @@ limitation must be reflected in ``confidence_reason`` or ``data_limitations``.
                 "",
             ]
 
+        # P0-3: Load and display decision weights
+        weights = self._load_decision_weights(ctx)
+        parts.append("## Decision Weights Configuration")
+        parts.append(f"- Technical analysis weight: {weights.technical:.2f}")
+        parts.append(f"- Fundamental analysis weight: {weights.fundamental:.2f}")
+        parts.append(f"- Market sentiment weight: {weights.sentiment:.2f}")
+        parts.append(f"- Risk management weight: {weights.risk:.2f}")
+        parts.append("")
+
         # Feed prior opinions
         if ctx.opinions:
             parts.append("## Agent Opinions")
@@ -212,6 +239,38 @@ limitation must be reflected in ``confidence_reason`` or ``data_limitations``.
             dashboard["decision_type"] = normalize_decision_signal(
                 dashboard.get("decision_type", "hold")
             )
+
+            # P0-3: Compute and log weighted scores with transparency
+            weights = self._load_decision_weights(ctx)
+            technical_score, fundamental_score, sentiment_score, risk_score = self._extract_dimension_scores(ctx)
+
+            weighted_result = weights.compute_weighted_score(
+                technical_score=technical_score,
+                fundamental_score=fundamental_score,
+                sentiment_score=sentiment_score,
+                risk_score=risk_score,
+            )
+
+            # Log for transparency and audit trail
+            logger.info(f"Decision weights applied for {ctx.stock_code}: {weights}")
+            logger.info(f"Dimension scores - Technical: {technical_score:.1f}, Fundamental: {fundamental_score:.1f}, "
+                       f"Sentiment: {sentiment_score:.1f}, Risk: {risk_score:.1f}")
+            logger.info(f"Weighted contributions - Technical: {weighted_result['technical_contribution']:.2f}, "
+                       f"Fundamental: {weighted_result['fundamental_contribution']:.2f}, "
+                       f"Sentiment: {weighted_result['sentiment_contribution']:.2f}, "
+                       f"Risk: {weighted_result['risk_contribution']:.2f}")
+            logger.info(f"Final weighted score: {weighted_result['final_score']:.2f}")
+
+            # Add weight transparency to dashboard
+            dashboard["weight_breakdown"] = {
+                "technical_contribution": weighted_result["technical_contribution"],
+                "fundamental_contribution": weighted_result["fundamental_contribution"],
+                "sentiment_contribution": weighted_result["sentiment_contribution"],
+                "risk_contribution": weighted_result["risk_contribution"],
+                "final_weighted_score": weighted_result["final_score"],
+            }
+            dashboard["weights_config"] = weights.to_dict()
+
             ctx.set_data("final_dashboard", dashboard)
             try:
                 _raw_score = dashboard.get("sentiment_score", 50) or 50
@@ -230,3 +289,33 @@ limitation must be reflected in ``confidence_reason`` or ``data_limitations``.
             ctx.set_data("final_dashboard_raw", raw_text)
             logger.warning("[DecisionAgent] failed to parse dashboard JSON")
             return None
+
+    def _extract_dimension_scores(self, ctx: AgentContext) -> tuple:
+        """Extract scores from agent opinions for weighted calculation.
+
+        Returns:
+            Tuple of (technical_score, fundamental_score, sentiment_score, risk_score)
+            All scores are in 0-100 range.
+        """
+        technical_score = 50.0
+        fundamental_score = 50.0
+        sentiment_score = 50.0
+        risk_score = 50.0
+
+        for opinion in ctx.opinions:
+            agent_name = opinion.agent_name.lower()
+            # Convert confidence (0-1) to score (0-100)
+            confidence_score = opinion.confidence * 100
+
+            if "technical" in agent_name:
+                technical_score = confidence_score
+            elif "intel" in agent_name or "sentiment" in agent_name:
+                sentiment_score = confidence_score
+            elif "risk" in agent_name:
+                # Risk agent: higher confidence means higher risk detected
+                # For scoring, we want higher score for lower risk
+                risk_score = 100 - confidence_score
+            # Note: fundamental_score would come from fundamental agent if available
+            # Currently defaults to 50.0 (neutral) for BTC-only mode
+
+        return technical_score, fundamental_score, sentiment_score, risk_score
