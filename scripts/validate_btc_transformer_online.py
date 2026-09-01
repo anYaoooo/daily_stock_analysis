@@ -102,10 +102,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=True,
         help="启用方向/regime 逆频率类别权重；默认开启，可用 --no-class-weighted-loss 关闭。",
     )
+    parser.add_argument(
+        "--class-weight-power",
+        type=float,
+        default=0.5,
+        help="类别逆频率权重的幂次；默认使用平方根权重。",
+    )
     parser.add_argument("--return-loss-weight", type=float, default=1.0)
     parser.add_argument("--volatility-loss-weight", type=float, default=0.3)
     parser.add_argument("--direction-loss-weight", type=float, default=1.0)
     parser.add_argument("--regime-loss-weight", type=float, default=0.0)
+    parser.add_argument("--direction-consistency-weight", type=float, default=0.0)
     return parser
 
 
@@ -237,7 +244,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             device=args.device,
             seed=args.seed,
             class_weighted_loss=args.class_weighted_loss,
-            direction_consistency_weight=0.0,
+            class_weight_power=args.class_weight_power,
+            direction_consistency_weight=args.direction_consistency_weight,
             return_loss_weight=args.return_loss_weight,
             volatility_loss_weight=args.volatility_loss_weight,
             direction_loss_weight=args.direction_loss_weight,

@@ -12,7 +12,10 @@ import pandas as pd
 
 
 DEFAULT_TRANSFORMER_HORIZONS = {"15m": 3, "1h": 12, "4h": 48}
-DEFAULT_NEUTRAL_BANDS = {"1h": 0.0035, "4h": 0.007, "24h": 0.01}
+# Keep the short-horizon labels directional often enough to be learnable while
+# retaining a buffer above the default 15 bps trading threshold.  The bands
+# remain configurable per horizon for datasets with different volatility.
+DEFAULT_NEUTRAL_BANDS = {"1h": 0.002, "4h": 0.004, "24h": 0.01}
 FEATURE_SET_VERSION = "btc-transformer-available-features-v2"
 REGIME_LABELS = ("trend_up", "trend_down", "high_volatility", "sideways")
 

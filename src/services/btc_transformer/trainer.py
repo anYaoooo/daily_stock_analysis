@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
@@ -24,7 +25,7 @@ except ImportError:  # pragma: no cover
     DataLoader = None  # type: ignore[assignment]
 
 
-MODEL_VERSION = "btc-transformer-multitask-wf-v5-available-features"
+MODEL_VERSION = "btc-transformer-multitask-wf-v6-direction-calibrated"
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class TransformerTrainingConfig:
     seed: int = 7
     device: str = "cpu"
     class_weighted_loss: bool = True
+    class_weight_power: float = 0.5
     target_clip_sigma: float = 5.0
     return_loss_weight: float = 1.0
     volatility_loss_weight: float = 0.3
@@ -69,6 +71,7 @@ class TransformerTrainingConfig:
         object.__setattr__(self, "learning_rate", max(1e-8, float(self.learning_rate)))
         object.__setattr__(self, "weight_decay", max(0.0, float(self.weight_decay)))
         object.__setattr__(self, "class_weighted_loss", bool(self.class_weighted_loss))
+        object.__setattr__(self, "class_weight_power", min(1.0, max(0.0, float(self.class_weight_power))))
         object.__setattr__(self, "target_clip_sigma", max(1.0, float(self.target_clip_sigma)))
         for name in ("return_loss_weight", "volatility_loss_weight", "direction_loss_weight", "regime_loss_weight"):
             object.__setattr__(self, name, max(0.0, float(getattr(self, name))))
@@ -203,17 +206,64 @@ def _inverse_target(values: np.ndarray, scale: float, *, clip_sigma: float) -> n
     return np.clip(np.asarray(values, dtype=np.float64), -float(clip_sigma), float(clip_sigma)) * float(scale)
 
 
-def _class_weights(labels: np.ndarray, class_count: int) -> Any:
-    """Return bounded inverse-frequency weights fitted on a training fold only."""
+def _class_weights(labels: np.ndarray, class_count: int, *, power: float = 0.5) -> Any:
+    """Return softened inverse-frequency weights fitted on a training fold only."""
 
     counts = np.bincount(np.asarray(labels, dtype=np.int64), minlength=class_count).astype(np.float64)
     present = counts > 0
     weights = np.ones(class_count, dtype=np.float32)
     if present.any():
-        weights[present] = counts[present].sum() / (float(present.sum()) * counts[present])
+        inverse_frequency = counts[present].sum() / (float(present.sum()) * counts[present])
+        weights[present] = np.power(inverse_frequency, min(1.0, max(0.0, float(power))))
         weights[present] = np.clip(weights[present], 0.25, 4.0)
         weights[present] /= max(float(weights[present].mean()), 1e-8)
     return torch.tensor(weights, dtype=torch.float32)
+
+
+def _prior_correct_direction_logits(
+    logits: np.ndarray,
+    class_weights: Optional[Any] = None,
+) -> np.ndarray:
+    """Undo weighted-CE class-prior distortion before natural-probability scoring.
+
+    Weighted cross entropy optimizes probabilities proportional to
+    ``class_weight * p(class|x)``. Subtracting ``log(class_weight)`` restores
+    the natural-prior posterior used by ordinary accuracy and Brier metrics.
+    """
+
+    values = np.asarray(logits, dtype=np.float64)
+    if class_weights is None:
+        return values
+    if hasattr(class_weights, "detach"):
+        weights = class_weights.detach().cpu().numpy()
+    else:
+        weights = np.asarray(class_weights, dtype=np.float64)
+    weights = np.asarray(weights, dtype=np.float64).reshape(-1)
+    if values.ndim != 2 or weights.shape != (values.shape[1],):
+        return values
+    return values - np.log(np.clip(weights, 1e-8, None))[None, :]
+
+
+def _direction_summary_metrics(confusion_matrix: Sequence[Sequence[int]]) -> dict[str, Any]:
+    """Return class-balanced direction metrics from an actual/predicted matrix."""
+
+    matrix = np.asarray(confusion_matrix, dtype=np.float64)
+    if matrix.shape != (3, 3) or matrix.sum() <= 0:
+        return {"balanced_accuracy": None, "macro_f1": None}
+    recall = np.diag(matrix) / np.clip(matrix.sum(axis=1), 1.0, None)
+    precision = np.diag(matrix) / np.clip(matrix.sum(axis=0), 1.0, None)
+    f1 = 2.0 * precision * recall / np.clip(precision + recall, 1e-12, None)
+    return {
+        "balanced_accuracy": round(float(recall.mean()), 8),
+        "macro_f1": round(float(f1.mean()), 8),
+    }
+
+
+def _frame_fingerprint(frame: pd.DataFrame) -> str:
+    """Create a deterministic fingerprint for the feature/label snapshot."""
+
+    hashed = pd.util.hash_pandas_object(frame, index=False).to_numpy(dtype=np.uint64)
+    return hashlib.sha256(hashed.tobytes()).hexdigest()
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -514,6 +564,7 @@ class WalkForwardTransformerTrainer:
             else build_transformer_feature_frame(bars, config=self.config.feature, as_of=as_of)
         )
         base: dict[str, Any] = {
+            "artifact_schema_version": 2,
             "model_version": MODEL_VERSION,
             "feature_set_version": FEATURE_SET_VERSION,
             "architecture": self.config.architecture,
@@ -543,6 +594,7 @@ class WalkForwardTransformerTrainer:
                 "seed": self.config.seed,
                 "device": self.config.device,
                 "class_weighted_loss": self.config.class_weighted_loss,
+                "class_weight_power": self.config.class_weight_power,
                 "target_clip_sigma": self.config.target_clip_sigma,
                 "return_loss_weight": self.config.return_loss_weight,
                 "volatility_loss_weight": self.config.volatility_loss_weight,
@@ -623,6 +675,15 @@ class WalkForwardTransformerTrainer:
                 "oof_predictions": {},
             }
         self.feature_columns = data.feature_names
+        base.update(
+            {
+                "artifact_schema_version": 2,
+                "source_bar_count": int(len(frame)),
+                "source_date_start": str(frame["date"].iloc[0]) if "date" in frame.columns else None,
+                "source_date_end": str(frame["date"].iloc[-1]) if "date" in frame.columns else None,
+                "input_fingerprint": _frame_fingerprint(frame),
+            }
+        )
         splits = walk_forward_sequence_splits(data.sample_count, min_train_samples=self.config.min_train_samples, validation_samples=self.config.validation_samples, folds=self.config.folds, purge_samples=self.config.purge_samples)
         evaluations: dict[str, Any] = {
             horizon: {"fold_count": 0, "samples": 0}
@@ -646,11 +707,19 @@ class WalkForwardTransformerTrainer:
                 features=_scale(data.features, mean, scale), returns=target_data.returns, volatilities=target_data.volatilities, directions=data.directions, regimes=data.regimes, timestamps=data.timestamps, feature_names=data.feature_names, horizons=data.horizons
             )
             direction_weights = {
-                horizon: _class_weights(data.directions[horizon][train_indices], 3)
+                horizon: _class_weights(
+                    data.directions[horizon][train_indices],
+                    3,
+                    power=self.config.class_weight_power,
+                )
                 for horizon in data.horizons
             } if self.config.class_weighted_loss else None
             regime_weights = {
-                horizon: _class_weights(data.regimes[horizon][train_indices], 4)
+                horizon: _class_weights(
+                    data.regimes[horizon][train_indices],
+                    4,
+                    power=self.config.class_weight_power,
+                )
                 for horizon in data.horizons
             } if self.config.class_weighted_loss else None
             model = self._fit_model(
@@ -676,9 +745,13 @@ class WalkForwardTransformerTrainer:
                 ) * target_scales[horizon]["volatility"]
                 actual_direction = data.directions[horizon][validation_indices]
                 actual_regime = data.regimes[horizon][validation_indices]
-                direction = predictions[horizon]["direction"].argmax(axis=1)
+                direction_logits = _prior_correct_direction_logits(
+                    predictions[horizon]["direction"],
+                    (direction_weights or {}).get(horizon),
+                )
+                direction = direction_logits.argmax(axis=1)
                 regime = predictions[horizon]["regime"].argmax(axis=1)
-                probabilities = _softmax(predictions[horizon]["direction"])
+                probabilities = _softmax(direction_logits)
                 majority_label = int(np.bincount(data.directions[horizon][train_indices], minlength=3).argmax())
                 calibration_temperature = 1.0
                 if calibration_logits[horizon]:
@@ -691,14 +764,14 @@ class WalkForwardTransformerTrainer:
                 net_returns, signal_mask = _trading_metrics(
                     actual_return,
                     predicted_return,
-                    predictions[horizon]["direction"],
+                    direction_logits,
                     trading_cost_bps=self.config.trading_cost_bps,
                     min_signal_edge_bps=self.config.min_signal_edge_bps,
                     confidence_threshold=self.config.signal_confidence_threshold,
                     decision_stride=self.config.feature.horizons[horizon],
                     probability_temperature=calibration_temperature,
                 )
-                calibration_logits[horizon].append(predictions[horizon]["direction"])
+                calibration_logits[horizon].append(direction_logits)
                 calibration_labels[horizon].append(actual_direction)
                 current = evaluations[horizon]
                 current["fold_count"] += 1
@@ -765,6 +838,16 @@ class WalkForwardTransformerTrainer:
                 summary[output_key] = round(float(np.mean(values)), 8) if values else None
             summary["pearson_ic"] = pearson_ic
             summary["spearman_ic"] = spearman_ic
+            summary.update(_direction_summary_metrics(summary.get("direction_confusion_matrix", [])))
+            total_predictions = max(1, sum(summary.get("actual_direction_counts", [])))
+            summary["actual_direction_distribution"] = [
+                round(float(value / total_predictions), 8)
+                for value in summary.get("actual_direction_counts", [])
+            ]
+            summary["predicted_direction_distribution"] = [
+                round(float(value / total_predictions), 8)
+                for value in summary.get("predicted_direction_counts", [])
+            ]
             trade_returns = summary.pop("trade_net_returns", [])
             trade_mask = summary.pop("trade_signal_mask", [])
             summary["trading"] = _summarize_trading(trade_returns, trade_mask)
@@ -782,11 +865,19 @@ class WalkForwardTransformerTrainer:
         target_data = _scale_targets(data, target_scales, clip_sigma=self.config.target_clip_sigma)
         scaled_data = SequenceData(features=_scale(data.features, self.scaler_mean, self.scaler_scale), returns=target_data.returns, volatilities=target_data.volatilities, directions=data.directions, regimes=data.regimes, timestamps=data.timestamps, feature_names=data.feature_names, horizons=data.horizons)
         direction_weights = {
-            horizon: _class_weights(data.directions[horizon], 3)
+            horizon: _class_weights(
+                data.directions[horizon],
+                3,
+                power=self.config.class_weight_power,
+            )
             for horizon in data.horizons
         } if self.config.class_weighted_loss else None
         regime_weights = {
-            horizon: _class_weights(data.regimes[horizon], 4)
+            horizon: _class_weights(
+                data.regimes[horizon],
+                4,
+                power=self.config.class_weight_power,
+            )
             for horizon in data.horizons
         } if self.config.class_weighted_loss else None
         self.model = self._fit_model(
@@ -801,7 +892,10 @@ class WalkForwardTransformerTrainer:
         predicted = self._predict(self.model, latest_data, [0])
         forecasts: dict[str, Any] = {}
         for horizon in data.horizons:
-            logits = predicted[horizon]["direction"][0:1]
+            logits = _prior_correct_direction_logits(
+                predicted[horizon]["direction"][0:1],
+                (direction_weights or {}).get(horizon),
+            )
             calibrator = ProbabilityCalibrator()
             if calibration_logits[horizon]:
                 calibrator.fit(

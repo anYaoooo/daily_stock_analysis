@@ -34,6 +34,7 @@ def test_online_cli_defaults_to_all_architectures_and_24h_holdout() -> None:
     assert args.heads == 8
     assert args.layers == 3
     assert args.class_weighted_loss is True
+    assert args.class_weight_power == pytest.approx(0.5)
     assert args.direction_loss_weight == 1.0
 
 

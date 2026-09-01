@@ -361,7 +361,7 @@ python scripts/train_btc_transformer.py `
   --batch-size 128 `
   --folds 12 `
   --min-train-samples 5000 `
-  --output artifacts\btc-fusion-rx9070xt-v5.json
+  --output artifacts\btc-fusion-rx9070xt-v6.json
 ```
 
 如果显存不足，依次把 batch size 调整为：
@@ -384,7 +384,7 @@ python scripts/train_btc_transformer.py `
   --epochs 30 `
   --batch-size 64 `
   --seeds 7,13,29,43,71 `
-  --output artifacts\research\btc-fusion-rx9070xt-v5.json
+  --output artifacts\research\btc-fusion-rx9070xt-v6.json
 ```
 
 正式训练期间关闭系统自动睡眠，并保留足够磁盘空间。

@@ -103,6 +103,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=True,
         help="启用方向/regime 逆频率类别权重；默认开启以降低中性类别塌缩，可用 --no-class-weighted-loss 关闭。",
     )
+    parser.add_argument(
+        "--class-weight-power",
+        type=float,
+        default=0.5,
+        help="类别逆频率权重的幂次；0.5 为平方根权重，降低少数类过补偿，0 可关闭权重差异。",
+    )
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="cpu", help="PyTorch 设备，例如 cpu、cuda 或 cuda:0；默认 cpu。")
     parser.add_argument("--target-clip-sigma", type=float, default=5.0, help="回归目标按训练折稳健缩放后的裁剪范围，默认 ±5。")
@@ -151,6 +157,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             seed=args.seed,
             device=args.device,
             class_weighted_loss=args.class_weighted_loss,
+            class_weight_power=args.class_weight_power,
             target_clip_sigma=args.target_clip_sigma,
             trading_cost_bps=args.trading_cost_bps,
             min_signal_edge_bps=args.min_signal_edge_bps,

@@ -127,6 +127,7 @@ def run_research_experiment(
                     seed=seed,
                     device=config.device,
                     class_weighted_loss=config.class_weighted_loss,
+                    class_weight_power=config.class_weight_power,
                     target_clip_sigma=config.target_clip_sigma,
                     return_loss_weight=config.return_loss_weight,
                     volatility_loss_weight=config.volatility_loss_weight,

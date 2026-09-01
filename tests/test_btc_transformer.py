@@ -26,8 +26,10 @@ from src.services.btc_transformer import (  # noqa: E402
 from src.services.btc_transformer.dataset import SequenceData  # noqa: E402
 from src.services.btc_transformer.trainer import (  # noqa: E402
     _correlation_metrics,
+    _direction_summary_metrics,
     _fit_target_scales,
     _inverse_target,
+    _prior_correct_direction_logits,
     _scale_targets,
     _summarize_trading,
     _trading_metrics,
@@ -237,6 +239,7 @@ def test_trading_metrics_can_apply_prior_fold_temperature() -> None:
 def test_training_config_exposes_cost_aware_signal_defaults() -> None:
     config = TransformerTrainingConfig()
     assert config.class_weighted_loss is True
+    assert config.class_weight_power == pytest.approx(0.5)
     assert config.min_train_samples == 5000
     assert config.epochs == 30
     assert config.return_loss_weight == 1.0
@@ -270,6 +273,11 @@ def test_transformer_cli_enables_class_weighting_explicitly() -> None:
     assert build_arg_parser().parse_args(["--no-class-weighted-loss"]).class_weighted_loss is False
 
 
+def test_transformer_cli_exposes_class_weight_power() -> None:
+    args = build_arg_parser().parse_args(["--class-weight-power", "0.25"])
+    assert args.class_weight_power == pytest.approx(0.25)
+
+
 def test_transformer_cli_exposes_loss_weights() -> None:
     args = build_arg_parser().parse_args(
         [
@@ -291,9 +299,22 @@ def test_transformer_cli_exposes_loss_weights() -> None:
 
 def test_default_neutral_bands_are_wider_for_short_horizons() -> None:
     config = TransformerFeatureConfig()
-    assert config.neutral_band_for("1h") == pytest.approx(0.0035)
-    assert config.neutral_band_for("4h") == pytest.approx(0.007)
+    assert config.neutral_band_for("1h") == pytest.approx(0.002)
+    assert config.neutral_band_for("4h") == pytest.approx(0.004)
     assert config.neutral_band_for("24h") == pytest.approx(0.01)
+
+
+def test_weighted_logits_can_be_prior_corrected() -> None:
+    logits = np.array([[0.0, 0.0, 0.0]], dtype=float)
+    corrected = _prior_correct_direction_logits(logits, np.array([2.0, 1.0, 2.0]))
+    assert corrected[0, 1] > corrected[0, 0]
+    assert corrected[0, 1] > corrected[0, 2]
+
+
+def test_direction_summary_metrics_report_balanced_quality() -> None:
+    metrics = _direction_summary_metrics([[8, 2, 0], [1, 7, 2], [0, 1, 9]])
+    assert metrics["balanced_accuracy"] == pytest.approx(0.8)
+    assert metrics["macro_f1"] == pytest.approx(0.79975, abs=1e-4)
 
 
 def test_correlation_metrics_report_linear_and_rank_relationships() -> None:

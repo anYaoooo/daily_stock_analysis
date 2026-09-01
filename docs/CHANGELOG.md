@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] BTC Transformer V6 调整 1h/4h 默认中性标签区间为 20/40bps，类别权重改为可调平方根逆频率并在评估前做先验校正；新增 balanced accuracy、macro-F1、类别分布和输入快照指纹，降低中性塌缩、少数类过补偿及实验快照漂移造成的误判。
+
 - [修复] BTC Transformer 交易评估按预测 horizon 抽取非重叠决策点，并让 walk-forward 评分使用仅由更早验证折拟合的温度校准概率；结果新增评估口径和每折校准温度记录，避免重叠窗口和概率口径差异夸大收益。
 
 - [改进] BTC Transformer 默认启用方向类别平衡并提高方向损失权重，训练 CLI 新增各任务损失权重和关闭类别平衡的参数；序列数据集预构造 Tensor，减少长时间 GPU 训练中的重复 CPU 拷贝。
@@ -19,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [文档] 新增空白 Windows 电脑迁移与 RX 9070 XT 训练环境指南，覆盖 SQLite/配置/训练数据备份、AMD ROCm PyTorch 安装验证、Web 恢复、GPU 冒烟训练、故障排查和回滚。
 - [改进] BTC Transformer Fusion 研究默认提高最小训练窗口至 5000 个样本、训练轮数至 30，并关闭类别加权与 regime 损失的默认反向影响；新增收益预测 Pearson/Spearman IC 诊断，类别加权改为 CLI 显式 opt-in。
-- [改进] BTC Transformer 1h/4h 方向标签默认中性区间调整为 35/70bps，降低短周期噪声边界；结果仍保持离线 research/shadow 模式。
+- [改进] BTC Transformer 历史版本曾将 1h/4h 方向标签中性区间调整为 35/70bps；V6 已改为 20/40bps，并继续保持离线 research/shadow 模式。
 - [改进] BTC Transformer 兼容 OKX `funding_rates`、标记价和成交价字段；稀疏衍生品数据采用因果填充并记录缺失掩码，方向标签支持按 horizon 设置中性区间。
 - [改进] BTC Transformer 默认训练轮数、walk-forward 折数和验证窗口提升，并将 PatchTST 时间 patch 改为按变量独立编码后再汇聚，降低特征混合造成的表示损失。
 - [修复] BTC Transformer 训练对收益/波动目标按训练折做稳健尺度拟合与异常值裁剪，并在评估和预测时还原真实单位；同时改进多任务损失权重与训练窗口打乱，避免回归头输出异常值压低 PatchTST、iTransformer 和 Fusion 的方向表现。
