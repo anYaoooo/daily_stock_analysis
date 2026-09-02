@@ -629,6 +629,6 @@ r_multiple = net_pnl / risk_budget
 
 分析生成阶段会读取近期已完成且已触发的 v5 结果，按 `horizon` 计算 MFE P50/P70，并在计划的 `target_calibration` 中标注目标距离是否超过同周期历史 P70。该标注只用于诊断，不改变方向、启用状态或校验结果；数据库不可用或样本不足时按无校准数据继续生成报告。
 
-可用 `python scripts/evaluate_btc_direction_history.py` 对 `data/btc_okx_perpetual_1h_training.csv` 离线评估确定性 EMA/VWAP/Price Action 投票，并与恒定做多、上一根方向、固定种子随机基线比较。脚本只读 CSV，不写数据库；`--horizon-bars` 控制 MFE/MAE 前瞻窗口，`--step` 可用于快速抽样。
+可用 `python scripts/evaluate_btc_direction_history.py` 对 `data/btc_okx_perpetual_1h_training.csv` 离线评估确定性 EMA/VWAP/Price Action 投票，并与恒定做多、上一根方向、固定种子随机基线比较。脚本只读 CSV，不写数据库；`--horizon-bars` 控制前瞻窗口，`--step` 可用于快速抽样，`--direction-threshold` 控制对称方向分数触发多空的绝对门槛。需要同时比较不同持有周期时使用 `--horizons 1,4,12,24`；输出会按每个窗口拆分信号覆盖率、MFE/MAE 机会命中率、下一根 K 线开盘到窗口末收盘的最终方向命中率、日线/小时线方向分项、毛收益、扣除每边手续费和滑点后的净收益、累计净收益、最大回撤和强度分桶。`MFE > MAE` 只表示窗口内曾出现过较大的有利波动，不能替代窗口末最终收益方向。净收益采用固定成本近似，不能替代 `CryptoBacktestEngine` 的真实撮合结果；不同 `step` 下信号可能重叠，累计收益仅用于序列诊断。
 
 新生成计划会写入版本化 `tradeability_audit`，记录护栏是否执行、判定、原因以及护栏修改前的方向、入场、止损、目标和执行契约。对于被护栏改为等待的计划，回测使用同一批前向 K 线和同一 v5 执行引擎运行一次影子反事实评估，并写入结果 diagnostics；正式计划仍保持 `skipped`，影子交易不会进入账户权益、胜率、动态仓位或组合风险。总体汇总的 `guard_forward_comparison` 对比 `released_actual` 与 `blocked_counterfactual`，没有审计元数据的旧计划归入 `legacy_unclassified_count`，不按日期推断护栏版本。

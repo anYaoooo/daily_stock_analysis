@@ -139,6 +139,12 @@ class TrendAnalysisResult:
     signal_score: int = 0            # 综合评分 0-100
     signal_reasons: List[str] = field(default_factory=list)
     risk_factors: List[str] = field(default_factory=list)
+
+    # BTC 专用方向评分审计字段。股票旧路径保持原有评分语义；BTC 路径
+    # 使用以 0 为中轴的对称方向分数，避免把“买入吸引力”误当成涨跌概率。
+    direction_score: float = 0.0     # -1=强空，0=中性，+1=强多
+    signal_components: Dict[str, float] = field(default_factory=dict)
+    signal_method: str = "stock_score_v1"
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -169,6 +175,9 @@ class TrendAnalysisResult:
             'signal_score': self.signal_score,
             'signal_reasons': self.signal_reasons,
             'risk_factors': self.risk_factors,
+            'direction_score': self.direction_score,
+            'signal_components': self.signal_components,
+            'signal_method': self.signal_method,
             'macd_dif': self.macd_dif,
             'macd_dea': self.macd_dea,
             'macd_bar': self.macd_bar,
@@ -234,6 +243,20 @@ class StockTrendAnalyzer:
         Returns:
             TrendAnalysisResult 分析结果
         """
+        # BTC trades 24/7 and has materially different volatility and volume
+        # semantics from equities. Keep the stock implementation stable for
+        # existing callers, but route crypto through its dedicated symmetric
+        # direction model before any stock-specific MA/BIAS scoring runs.
+        try:
+            from data_provider.crypto_fetcher import is_crypto_code
+        except ImportError:
+            def is_crypto_code(_code):
+                return False
+        if is_crypto_code(code):
+            from src.btc_trend_analyzer import BtcTrendAnalyzer
+
+            return BtcTrendAnalyzer().analyze(df, code)
+
         result = TrendAnalysisResult(code=code)
         
         if df is None or df.empty or len(df) < 20:

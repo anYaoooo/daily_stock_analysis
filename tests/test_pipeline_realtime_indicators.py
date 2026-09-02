@@ -220,6 +220,21 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
             "stock_name": "Bitcoin",
             "date": "2026-06-22",
             "today": {"close": 100000, "volume": 1200},
+            "trend_analysis": {
+                "signal_method": "btc_direction_v2",
+                "direction_score": -0.62,
+                "signal_components": {
+                    "price_structure": -0.8,
+                    "ema_structure": -0.6,
+                    "momentum": -0.4,
+                    "price_action": -1.0,
+                },
+                "price_trend": "下跌",
+                "rsi_status": "超卖",
+                "volume_status": "缩量下跌",
+                "signal_reasons": ["价格结构偏空"],
+                "risk_factors": ["RSI 超卖，仅作风险提示"],
+            },
             "crypto_technical": {
                 "price_action": {
                     "state": "breakout",
@@ -249,6 +264,25 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
                 "volatility": {"atr14": 1600, "atr14_pct": 1.6},
                 "vwap": {"rolling_20": 98000, "price_position": "above"},
                 "ema": {"ema20": 97000, "ema50": 94000, "structure": "bullish"},
+                "direction": {
+                    "version": "btc-direction-v2",
+                    "score": 0.62,
+                    "bias": "long",
+                    "threshold_pct": 4.0,
+                    "period": "daily",
+                    "components": {
+                        "price_structure": 0.8,
+                        "ema_structure": 0.6,
+                        "momentum": 0.4,
+                        "price_action": 1.0,
+                    },
+                    "weights": {
+                        "price_structure": 0.45,
+                        "ema_structure": 0.30,
+                        "momentum": 0.15,
+                        "price_action": 0.10,
+                    },
+                },
             },
         }
 
@@ -265,6 +299,15 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         self.assertIn("反弹/回调或短线推进", prompt)
         self.assertIn("VWAP", prompt)
         self.assertIn("EMA20=97000", prompt)
+        self.assertIn("btc-direction-v2", prompt)
+        self.assertIn("score=0.62", prompt)
+        self.assertIn("components={'price_structure': 0.8", prompt)
+        self.assertIn("不是买入吸引力评分", prompt)
+        self.assertIn("低于 ±0.45 门槛时优先输出", prompt)
+        self.assertIn("BTC 确定性方向分析", prompt)
+        self.assertIn("对称方向分数 | -0.62", prompt)
+        self.assertIn("缩量下跌不能自动解释为洗盘或反弹", prompt)
+        self.assertNotIn("乖离率(MA5)", prompt)
         self.assertIn("日线 Price Action", prompt)
         self.assertIn("多空共振", prompt)
         self.assertIn("多单", prompt)
@@ -328,6 +371,14 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
             "volatility": {"atr14": 1600, "atr14_pct": 1.6},
             "vwap": {"rolling_20": 98000, "price_position": "above"},
             "ema": {"ema20": 97000, "ema50": 94000, "structure": "bullish"},
+            "direction": {
+                "version": "btc-direction-v2",
+                "score": 0.58,
+                "bias": "long",
+                "threshold_pct": 4.0,
+                "period": "daily",
+                "components": {"price_structure": 0.7, "ema_structure": 0.5},
+            },
         }
         hourly_context = {
             "price_action": {
@@ -345,6 +396,14 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
             "volatility": {"atr14": 420, "atr14_pct": 0.42},
             "vwap": {"rolling_20": 99500, "price_position": "above"},
             "ema": {"ema20": 99200, "ema50": 98900, "structure": "bullish"},
+            "direction": {
+                "version": "btc-direction-v2",
+                "score": 0.49,
+                "bias": "long",
+                "threshold_pct": 1.5,
+                "period": "hourly",
+                "components": {"price_structure": 0.6, "ema_structure": 0.4},
+            },
             "event": {
                 "type": "selloff_rebound_candidate",
                 "suggested_direction": "conditional_long",
@@ -409,6 +468,8 @@ class TestCryptoTechnicalPrompt(unittest.TestCase):
         self.assertIn("独立判断", prompt)
         self.assertIn("日线偏向", prompt)
         self.assertIn("小时线偏向", prompt)
+        self.assertIn("小时线确定性方向基线（btc-direction-v2）", prompt)
+        self.assertIn("score=0.49", prompt)
         self.assertIn("aligned_long", prompt)
         self.assertIn("日线偏空但小时线出现多单机会", prompt)
         self.assertIn("逆日线短线计划", prompt)
@@ -494,6 +555,42 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
         self.assertEqual(enhanced["today"]["realtime_source"], "tencent")
         self.assertIn("price_change_ratio", enhanced)
         self.assertIn("volume_change_ratio", enhanced)
+
+    @patch("src.core.pipeline.get_market_now")
+    @patch("src.core.pipeline.get_market_for_stock", return_value="crypto")
+    def test_btc_trend_payload_keeps_direction_audit_fields(self, _mock_market, mock_now) -> None:
+        today = date.today()
+        mock_now.return_value = datetime(
+            today.year, today.month, today.day, 10, 0, tzinfo=timezone.utc
+        )
+        context = {
+            "code": "BTC",
+            "date": (today - timedelta(days=1)).isoformat(),
+            "today": {"close": 100000.0},
+            "yesterday": {"close": 99000.0, "volume": 1000.0},
+        }
+        quote = _make_realtime_quote(price=101000.0, volume=2000)
+        trend = TrendAnalysisResult(
+            code="BTC",
+            trend_status=TrendStatus.BULL,
+            ma5=100000.0,
+            ma10=99500.0,
+            ma20=99000.0,
+            price_structure_available=True,
+            price_trend="震荡",
+            direction_score=0.52,
+            signal_method="btc_direction_v2",
+            signal_components={"price_structure": 0.8, "ema_structure": 0.4},
+        )
+
+        enhanced = self.pipeline._enhance_context(
+            context, quote, None, trend, "Bitcoin"
+        )
+
+        payload = enhanced["trend_analysis"]
+        assert payload["signal_method"] == "btc_direction_v2"
+        assert payload["direction_score"] == 0.52
+        assert payload["signal_components"]["price_structure"] == 0.8
 
     @patch("src.core.pipeline.get_market_now")
     @patch("src.core.pipeline.get_market_for_stock", return_value="cn")

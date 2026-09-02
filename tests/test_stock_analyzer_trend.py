@@ -83,6 +83,17 @@ def test_report_headline_uses_measured_price_direction_over_conflicting_agent_te
     assert "trend:technical_baseline" in result.data_sources
 
 
+def test_btc_report_headline_uses_symmetric_direction_gate():
+    trend_result = SimpleNamespace(
+        signal_method="btc_direction_v2",
+        direction_score=0.52,
+        price_structure_available=True,
+        price_trend="震荡",
+    )
+
+    assert StockAnalysisPipeline._trend_label_fallback(trend_result, "zh") == "看多"
+
+
 def test_pattern_detector_does_not_call_a_narrow_one_way_drift_a_box():
     prices = [100.0 + i * 0.5 for i in range(20)]
     frame = _make_daily_frame(prices)

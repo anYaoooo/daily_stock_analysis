@@ -75,6 +75,9 @@ def _handle_analyze_trend(stock_code: str) -> dict:
         "rsi_signal": result.rsi_signal,
         "buy_signal": result.buy_signal.value,
         "signal_score": result.signal_score,
+        "direction_score": result.direction_score,
+        "signal_components": result.signal_components,
+        "signal_method": result.signal_method,
         "signal_reasons": result.signal_reasons,
         "risk_factors": result.risk_factors,
     }

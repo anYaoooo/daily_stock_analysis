@@ -1027,6 +1027,9 @@ class StockAnalysisPipeline:
                 'volume_trend': trend_result.volume_trend,
                 'buy_signal': trend_result.buy_signal.value,
                 'signal_score': trend_result.signal_score,
+                'direction_score': trend_result.direction_score,
+                'signal_components': trend_result.signal_components,
+                'signal_method': trend_result.signal_method,
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
             }
@@ -2009,6 +2012,20 @@ class StockAnalysisPipeline:
     ) -> str:
         if trend_result is None:
             return ""
+        # BTC's score is a symmetric direction baseline. Do not derive the
+        # report headline from the stock-only price-trend label when EMA and
+        # momentum evidence already cross the BTC direction gate.
+        if getattr(trend_result, "signal_method", "") == "btc_direction_v2":
+            try:
+                direction_score = float(getattr(trend_result, "direction_score", 0.0))
+            except (TypeError, ValueError):
+                direction_score = 0.0
+            direction_label = (
+                "看多" if direction_score >= 0.45
+                else "看空" if direction_score <= -0.45
+                else "震荡"
+            )
+            return localize_trend_prediction(direction_label, report_language)
         if getattr(trend_result, "price_structure_available", False):
             price_trend = str(getattr(trend_result, "price_trend", "")).strip()
             direction_labels = {"上涨": "看多", "下跌": "看空", "震荡": "震荡"}
@@ -2158,6 +2175,12 @@ class StockAnalysisPipeline:
                 "is_bullish": trend_result.price_trend == "上涨"
                 or trend_result.trend_status.value in {"强势多头", "多头排列", "弱势多头"},
             })
+            if getattr(trend_result, "signal_method", "") == "btc_direction_v2":
+                local_trend.update({
+                    "direction_score": trend_result.direction_score,
+                    "signal_method": trend_result.signal_method,
+                    "is_bullish": trend_result.direction_score >= 0.45,
+                })
             if trend_result.price_structure_available:
                 local_trend.update({
                     "price_trend": trend_result.price_trend,
@@ -2178,6 +2201,8 @@ class StockAnalysisPipeline:
                 "ma20": trend_result.ma20,
                 "bias_ma5": trend_result.bias_ma5,
             })
+            if getattr(trend_result, "signal_method", "") == "btc_direction_v2":
+                price_position["direction_score"] = trend_result.direction_score
             if trend_result.price_structure_available:
                 price_position["price_trend"] = trend_result.price_trend
             data_perspective["price_position"] = price_position

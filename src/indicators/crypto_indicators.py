@@ -48,28 +48,33 @@ class FundingRateAnalysis:
             )
 
         current = funding_rates[0]
-        avg_24h = statistics.mean(funding_rates[:72]) if len(funding_rates) >= 72 else current
-        avg_7d = statistics.mean(funding_rates[:504]) if len(funding_rates) >= 504 else avg_24h
+        # Binance/OKX funding is normally settled every 8 hours: 3 samples per
+        # day and 21 samples per week. The previous 72/504 windows silently
+        # collapsed almost every real response to ``current``.
+        avg_24h = statistics.mean(funding_rates[:3])
+        avg_7d = statistics.mean(funding_rates[:21])
 
         # Determine trend
-        if current > avg_24h * 1.5:
+        delta = current - avg_24h
+        trend_threshold = max(abs(avg_24h) * 0.5, 0.00001)
+        if delta > trend_threshold:
             trend = "positive"
-        elif current < avg_24h * 0.5:
+        elif delta < -trend_threshold:
             trend = "negative"
         else:
             trend = "neutral"
 
-        # Determine extremity (threshold: 0.01% = 0.0001 per 8h)
-        if current > 0.01:
+        # Funding values are fractions (0.0001 = 0.01% per settlement).
+        if current > 0.0005:
             extremity = "extreme_long"
             interpretation = "极高正费率，多头过度拥挤，可能面临回调压力"
-        elif current < -0.01:
+        elif current < -0.0005:
             extremity = "extreme_short"
             interpretation = "极高负费率，空头过度拥挤，可能面临空头挤压"
-        elif current > 0.005:
+        elif current > 0.0001:
             extremity = "elevated_long"
             interpretation = "正费率偏高，多头成本增加，需警惕多头疲劳"
-        elif current < -0.005:
+        elif current < -0.0001:
             extremity = "elevated_short"
             interpretation = "负费率偏高，空头成本增加，利于多头"
         else:
@@ -126,11 +131,11 @@ class OpenInterestAnalysis:
             divergence = "bearish"
             interpretation = "价格下跌但持仓量增加，空头趋势强劲"
         elif price_change_24h_pct > 2 and oi_change_24h < -5:
-            divergence = "bearish"
-            interpretation = "价格上涨但持仓量减少，可能是空头平仓，趋势可能反转"
-        elif price_change_24h_pct < -2 and oi_change_24h < -5:
             divergence = "bullish"
-            interpretation = "价格下跌但持仓量减少，可能是多头止损，跌势可能减弱"
+            interpretation = "价格上涨但持仓量减少，主要可能是空头回补；方向偏多但上涨延续性低于增仓上涨"
+        elif price_change_24h_pct < -2 and oi_change_24h < -5:
+            divergence = "bearish"
+            interpretation = "价格下跌且持仓量减少，主要可能是多头平仓；短线偏空但趋势确认度较低"
         else:
             divergence = "neutral"
             interpretation = "持仓量变化正常，无明显异常信号"

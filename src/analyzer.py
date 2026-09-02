@@ -932,6 +932,15 @@ def stabilize_decision_with_structure(
         return
 
     try:
+        # This guard is built around equity capital-flow semantics. BTC has
+        # no stock-style main-force flow, and its fundamental context usually
+        # reports ``capital_flow=not_supported``; applying this calibration
+        # would incorrectly turn a valid crypto long/short conclusion into a
+        # generic hold. BTC execution validation is handled separately by
+        # ``align_btc_execution_plans``.
+        if get_market_for_stock(normalize_stock_code(getattr(result, "code", ""))) == "crypto":
+            return
+
         language = normalize_report_language(getattr(result, "report_language", "zh"))
         dashboard = result.dashboard if isinstance(result.dashboard, dict) else {}
         data_perspective = dashboard.get("data_perspective") if isinstance(dashboard, dict) else {}
@@ -4762,7 +4771,34 @@ class GeminiAnalyzer:
 | 20日区间振幅 | {_format_trend_metric(trend.get('price_range_pct', 0), '.2f')}% | |
 | 方向效率 | {_format_trend_metric(trend.get('directional_efficiency', 0), '.2f')} | 越接近1越单边，接近0越震荡 |
 """
-            if use_legacy_default_prompt:
+            if is_crypto_context:
+                direction_components = trend.get('signal_components', {})
+                if not isinstance(direction_components, dict):
+                    direction_components = {}
+                prompt += f"""
+### BTC 确定性方向分析（仅作方向基线，不是买入评分）
+| 指标 | 数值 | 说明 |
+|------|------|------|
+| 模型版本 | {trend.get('signal_method', 'btc_direction_v2')} | 仅使用已闭合 K 线；方向分数与股票买入评分分离 |
+| 对称方向分数 | {trend.get('direction_score', 'N/A')} | -1=强空，0=中性，+1=强多；低于 ±0.45 优先等待 |
+| 方向分量 | {direction_components} | 价格结构、EMA 结构、动量和价格行为的加权结果 |
+{price_structure_section}
+| RSI 状态 | {trend.get('rsi_status', unknown_text)} | 超买/超卖只作风险提示，不单独反转方向 |
+| 量能状态 | {trend.get('volume_status', unknown_text)} | 缩量下跌不能自动解释为洗盘或反弹 |
+
+#### BTC 基线理由
+{chr(10).join('- ' + r for r in trend.get('signal_reasons', ['无'])) if trend.get('signal_reasons') else '- 无'}
+
+#### BTC 风险因素
+{chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
+"""
+                if consistency_notes:
+                    prompt += f"""
+
+**一致性约束**：
+{chr(10).join('- ' + note for note in consistency_notes)}
+"""
+            elif use_legacy_default_prompt:
                 bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
                 prompt += f"""
 ### 趋势分析预判（基于交易理念）
@@ -4856,6 +4892,21 @@ class GeminiAnalyzer:
             )
             vwap = daily_crypto.get("vwap") or {}
             ema = daily_crypto.get("ema") or {}
+            daily_direction = (
+                daily_crypto.get("direction")
+                if isinstance(daily_crypto.get("direction"), dict)
+                else {}
+            )
+            daily_direction_components = (
+                daily_direction.get("components")
+                if isinstance(daily_direction.get("components"), dict)
+                else {}
+            )
+            daily_direction_weights = (
+                daily_direction.get("weights")
+                if isinstance(daily_direction.get("weights"), dict)
+                else {}
+            )
             mode_instruction = (
                 "本轮是 BTC 小时线分析：日线只作为背景和风险边界，重点刷新 `intraday_plan`。"
                 "小时线允许出现与日线方向相反的短线机会，但必须明确写成“逆日线短线/日内机会”，"
@@ -4874,8 +4925,10 @@ class GeminiAnalyzer:
 | EWMA 波动预测 | 数据质量={daily_volatility_forecast.get('data_quality', 'N/A')}；下一根 sigma={daily_volatility_forecast.get('forecast_sigma_pct', 'N/A')}%；历史分位={daily_volatility_forecast.get('historical_percentile', 'N/A')}%；状态={daily_volatility_forecast.get('regime', 'N/A')}；仓位上限乘数={daily_volatility_forecast.get('position_multiplier_cap', 'N/A')} | 只用于仓位和风险预算，不预测方向；elevated/extreme 必须缩减仓位，compressed 不得自动加杠杆，需等待突破确认 |
 | VWAP（成交量加权均价） | rolling20 VWAP={vwap.get('rolling_20', 'N/A')}；价格位置={vwap.get('price_position', 'N/A')} | 价格在 VWAP 上方偏多头强势，下方偏空头压制；日线数据下按 rolling VWAP 解读 |
 | EMA（指数移动平均） | EMA20={ema.get('ema20', 'N/A')}；EMA50={ema.get('ema50', 'N/A')}；结构={ema.get('structure', 'N/A')} | 判断短中期趋势延续或反转，必须和 MA/MACD/RSI 交叉验证 |
+| **确定性方向基线（btc-direction-v2）** | score={daily_direction.get('score', 'N/A')}；bias={daily_direction.get('bias', 'N/A')}；threshold={daily_direction.get('threshold_pct', 'N/A')}%；period={daily_direction.get('period', 'N/A')} | 分数范围 -1 到 +1；分数≥+0.45 才是多头基线，≤-0.45 才是空头基线，其余必须等待确认；components={daily_direction_components}；weights={daily_direction_weights} |
 
 > BTC 日线特别要求：日线是主方向和风险边界，最终操作建议必须同时引用 Price Action、Fibonacci、Volume、VWAP、EMA、ATR 中至少三个维度；若这些维度互相冲突，优先输出“等待确认/区间策略”，不要给激进追涨、抄底或盲目开空建议。
+> BTC 方向基线约束：`btc-direction-v2` 是基于已闭合 K 线的确定性方向基线，不是买入吸引力评分，也不是收益概率。`score` 必须按 -1 到 +1 的对称语义解释；低于 ±0.45 门槛时优先输出 `wait/hold`，不能因为 RSI 超卖、缩量下跌或单一 Price Action 事件改成反向交易；RSI 超买/超卖只用于风险提示。LLM 可以解释冲突，但不得覆盖该基线而强行给出相反的日线主方向。
 > BTC 突破判定规则：真突破必须满足实体收盘站上前高/阻力，不能仅因最高价扫过前高就判定突破；若 `high_swept=true` 但 `close_above_resistance=false`，必须按“流动性掠夺/假突破偏空风险”处理，并降低多单置信度。跌破同理：真跌破必须收盘跌破支撑；若只插针扫低后收回，优先按流动性掠夺/假跌破反弹风险处理。
 > BTC 冲突判定规则：当短线 Price Action 与中线 EMA/VWAP 冲突时，定义为“反弹/回调或短线推进”，不得直接升级为趋势反转；只有 Price Action、VWAP、EMA、Volume 至少三项同向确认，才可称为趋势延续或反转。
 > BTC 本轮分析模式：{mode_instruction}
@@ -4902,6 +4955,17 @@ class GeminiAnalyzer:
             )
             hourly_vwap = hourly_crypto.get("vwap") if isinstance(hourly_crypto, dict) else {}
             hourly_ema = hourly_crypto.get("ema") if isinstance(hourly_crypto, dict) else {}
+            hourly_direction = (
+                hourly_crypto.get("direction")
+                if isinstance(hourly_crypto, dict)
+                and isinstance(hourly_crypto.get("direction"), dict)
+                else {}
+            )
+            hourly_direction_components = (
+                hourly_direction.get("components")
+                if isinstance(hourly_direction.get("components"), dict)
+                else {}
+            )
             hourly_event = hourly_crypto.get("event") if isinstance(hourly_crypto, dict) else {}
             hourly_trigger_reference = (
                 hourly_event.get("trigger_reference") if isinstance(hourly_event.get("trigger_reference"), dict) else {}
@@ -4973,6 +5037,7 @@ class GeminiAnalyzer:
 | 对齐状态 | {intraday.get('alignment', 'N/A')} | aligned_long/short 表示顺日线机会；conflict/countertrend 表示逆日线短线机会，需要更严格风控 |
 | 小时线 Price Action | 状态={hourly_price_action.get('state', unknown_text)}；前20根高点/阻力={hourly_price_action.get('recent_high', 'N/A')}；前20根低点/支撑={hourly_price_action.get('recent_low', 'N/A')}；最新涨跌={hourly_price_action.get('close_change_pct', 'N/A')}%；扫过前高={hourly_price_action.get('high_swept', 'N/A')}；收盘站上阻力={hourly_price_action.get('close_above_resistance', 'N/A')} | 日内触发必须区分真突破与插针扫高；扫高回落不得作为多单突破触发 |
 | 小时线 Volume/VWAP/EMA/ATR | 量比={hourly_volume.get('ratio', 'N/A')}；量能确认={hourly_volume.get('confirmation', 'N/A')}；VWAP={hourly_vwap.get('rolling_20', 'N/A')}；价格位置={hourly_vwap.get('price_position', 'N/A')}；EMA20={hourly_ema.get('ema20', 'N/A')}；EMA50={hourly_ema.get('ema50', 'N/A')}；结构={hourly_ema.get('structure', 'N/A')}；ATR14={hourly_volatility.get('atr14', 'N/A')}；ATR14%={hourly_volatility.get('atr14_pct', 'N/A')}%；EWMA sigma={hourly_volatility_forecast.get('forecast_sigma_pct', 'N/A')}%；波动状态={hourly_volatility_forecast.get('regime', 'N/A')}；仓位上限乘数={hourly_volatility_forecast.get('position_multiplier_cap', 'N/A')} | 判断日内触发是否有量价、均线和波动率确认；止损不得落在小时线常规 ATR 噪音内，elevated/extreme 必须缩仓 |
+| **小时线确定性方向基线（btc-direction-v2）** | score={hourly_direction.get('score', 'N/A')}；bias={hourly_direction.get('bias', 'N/A')}；threshold={hourly_direction.get('threshold_pct', 'N/A')}%；period={hourly_direction.get('period', 'N/A')}；components={hourly_direction_components} | 小时线分数同样是 -1 到 +1 的对称方向证据；低于 ±0.45 只可等待确认，不能把 RSI 或单根未收线冲击当作趋势反转 |
 | 小时线急跌/扫低事件（含扫高） | 类型={hourly_event.get('type', 'N/A')}；建议方向={hourly_event.get('suggested_direction', 'N/A')}；紧急度={hourly_event.get('urgency', 'N/A')}；参考高点={hourly_event.get('reference_high', 'N/A')}；事件低点={hourly_event.get('event_low', 'N/A')}；事件K高点={hourly_event.get('event_bar_high', 'N/A')}；高点到低点跌幅={hourly_event.get('drop_from_reference_high_pct', 'N/A')}%；低点反弹={hourly_event.get('rebound_from_event_low_pct', 'N/A')}%；ATR位移={hourly_event.get('atr_move', 'N/A')}%；多单确认价={hourly_trigger_reference.get('long_confirmation_price', 'N/A')}；多单失效价={hourly_trigger_reference.get('long_invalidation_price', 'N/A')}；空单跌破价={hourly_trigger_reference.get('short_breakdown_price', 'N/A')}；右侧状态={hourly_right_side.get('state', 'N/A')}；右侧方向={hourly_right_side.get('direction', 'N/A')}；确认价={hourly_right_side.get('confirmation_price', 'N/A')}；回踩/反抽区={hourly_right_side.get('retest_zone', 'N/A')}；延续试仓价={hourly_right_side.get('continuation_price', 'N/A')}；禁止追价线={hourly_right_side.get('no_chase_price', 'N/A')} | 扫高后未收盘站上对应条件性空头，扫低后未收盘跌破对应条件性多头；反抽/回踩不是硬性必需，但若当前价超过禁止追价线，必须标记机会错过并等待新结构，不得激进追单 |
 | 日内机会 | {hourly_opportunity} | 必须写清是否有日内交易机会；没有机会时说明等待什么小时线条件 |
 | 衍生品杠杆环境 | 数据质量={derivatives.get('data_quality', 'N/A')}；资金费率={funding.get('rate_pct', 'N/A')}%；状态={funding.get('state', 'N/A')}；7日均值={funding_history.get('avg_rate_pct', 'N/A')}%；趋势={funding_history.get('trend', 'N/A')}；持仓量={open_interest.get('value', 'N/A')} BTC；名义规模={open_interest.get('notional_usdt', 'N/A')} USDT；OI 24h变化={oi_history.get('change_pct', 'N/A')}%；OI趋势={oi_history.get('state', 'N/A')}；永续基差={basis.get('perpetual_premium_pct', 'N/A')}%；基差状态={basis.get('state', 'N/A')}；多空比={long_short_ratio.get('current', 'N/A')}；多空比状态={long_short_ratio.get('state', 'N/A')}；跨所质量={cross_exchange.get('data_quality', 'N/A')}；跨所Funding差={cross_exchange.get('funding_spread_pct', 'N/A')}%；杠杆压力={derivatives.get('leverage_pressure', 'N/A')} | Funding 为正且偏高时警惕多头拥挤和追多回撤；Funding 为负且偏深时警惕空头拥挤和 short squeeze；结合 Funding 趋势、OI 变化、基差和多空比判断杠杆扩张/去杠杆，跨所只有单源时必须降置信度；数据缺失必须标记为不确定而不是中性 |

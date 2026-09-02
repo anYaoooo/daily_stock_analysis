@@ -723,9 +723,16 @@ class AgentOrchestrator:
 
             # Pre-populate data fields that the caller already has
             for data_key in ("realtime_quote", "daily_history", "chip_distribution",
-                             "trend_result", "news_context"):
+                             "trend_result", "crypto_technical", "news_context"):
                 if context.get(data_key):
                     ctx.set_data(data_key, context[data_key])
+
+        # Keep explicit runtime feature switches available to specialist
+        # agents without exposing the full config in their user prompt. In
+        # particular, TechnicalAgent must distinguish a missing config from
+        # an explicit ``btc_crypto_indicators_enabled=False`` opt-out.
+        if self.config is not None:
+            ctx.meta["config"] = self.config
 
         # Try to extract stock code from the query text
         if not ctx.stock_code:

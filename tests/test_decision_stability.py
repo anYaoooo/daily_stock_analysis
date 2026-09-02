@@ -86,6 +86,38 @@ def test_capital_flow_bias_is_neutral_when_main_conflicts_with_windows() -> None
     assert _capital_flow_bias(context) == "neutral"
 
 
+def test_stock_capital_flow_guard_skips_btc() -> None:
+    result = AnalysisResult(
+        code="BTC",
+        name="Bitcoin",
+        sentiment_score=68,
+        trend_prediction="看空",
+        operation_advice="空单入场",
+        decision_type="sell",
+        report_language="zh",
+        current_price=100000.0,
+        dashboard={
+            "data_perspective": {
+                "price_position": {
+                    "current_price": 100000.0,
+                    "support_level": 90000.0,
+                    "resistance_level": 110000.0,
+                }
+            }
+        },
+    )
+
+    stabilize_decision_with_structure(
+        result,
+        SimpleNamespace(support_levels=[90000.0], resistance_levels=[110000.0]),
+        _unsupported_fund_flow(),
+    )
+
+    assert result.decision_type == "sell"
+    assert result.operation_advice == "空单入场"
+    assert result.sentiment_score == 68
+
+
 def test_downgrades_buy_near_resistance_without_fund_confirmation() -> None:
     result = _result(
         decision_type="buy",

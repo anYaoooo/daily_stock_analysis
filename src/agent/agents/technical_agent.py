@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # P0-4: Import crypto indicators module
 try:
-    from src.indicators.crypto_indicators import compute_crypto_indicators, CryptoIndicatorsSummary
+    from src.indicators.crypto_indicators import compute_crypto_indicators
     CRYPTO_INDICATORS_AVAILABLE = True
 except ImportError:
     CRYPTO_INDICATORS_AVAILABLE = False
@@ -49,6 +49,15 @@ class TechnicalAgent(BaseAgent):
         baseline = ""
         if self.technical_skill_policy:
             baseline = f"\n{self.technical_skill_policy}\n"
+        crypto_guidance = ""
+        if ctx.stock_code.upper() in ["BTC", "BTCUSDT", "BTC-USD", "BTC/USD", "BTCUSD"]:
+            crypto_guidance = """
+## BTC Direction Baseline
+- BTC uses the pre-fetched `btc-direction-v2` baseline, not an equity buy-attractiveness score.
+- `direction_score` is symmetric from -1 (strong bearish) to +1 (strong bullish); below +/-0.45, prefer wait/hold.
+- RSI overbought/oversold and shrinking volume are risk/context signals only. They must not reverse a falling/rising BTC baseline by themselves.
+- Keep long and short semantics symmetric and state the confirmation condition when evidence is mixed.
+"""
 
         return f"""\
 You are a **Technical Analysis Agent** specialising in Chinese A-shares, \
@@ -71,6 +80,7 @@ output a structured JSON opinion.
   one indicator is neutral. If other evidence disagrees, describe the conflict
   and the confirmation condition instead of silently reversing the baseline.
 
+{crypto_guidance}
 {baseline}
 {skills}
 ## Output Format
@@ -97,8 +107,10 @@ Return **only** a JSON object (no markdown fences):
         if ctx.stock_name:
             parts[0] += f" ({ctx.stock_name})"
 
-        # P0-4: Add crypto-specific indicators for BTC analysis
-        if ctx.stock_code.upper() in ["BTC", "BTCUSDT", "BTC-USD", "BTC/USD"]:
+        # BTC derivatives are already fetched by the pipeline and stored in
+        # crypto_technical. Never synthesize Funding/OI/position data here:
+        # fixed demo values can silently override the real market context.
+        if ctx.stock_code.upper() in ["BTC", "BTCUSDT", "BTC-USD", "BTC/USD", "BTCUSD"]:
             crypto_summary = self._get_crypto_indicators_summary(ctx)
             if crypto_summary:
                 parts.append("\n## Crypto-Specific Market Indicators")
@@ -115,11 +127,6 @@ Return **only** a JSON object (no markdown fences):
             Formatted string with crypto indicators or None if unavailable
         """
         if not CRYPTO_INDICATORS_AVAILABLE:
-            return None
-
-        config = ctx.meta.get("config")
-        if not config or not getattr(config, "btc_crypto_indicators_enabled", False):
-            logger.debug("Crypto indicators disabled in config")
             return None
 
         try:
@@ -144,21 +151,49 @@ Return **only** a JSON object (no markdown fences):
                 except (KeyError, ValueError, IndexError):
                     pass
 
-            # TODO: Fetch actual crypto-specific data from data provider
-            # For now, use placeholder values - integrate with crypto_fetcher in future
+            crypto_context = ctx.get_data("crypto_technical")
+            derivatives = crypto_context.get("derivatives") if isinstance(crypto_context, dict) else None
+            if not isinstance(derivatives, dict):
+                logger.debug("No actual BTC derivatives context available")
+                return None
+
+            # The orchestrator normally passes already-fetched derivatives in
+            # the context, but it does not inject the full runtime config into
+            # every AgentContext. A missing config is therefore not an
+            # explicit opt-out. Only a present config with the switch set to
+            # false disables this summary.
+            config = ctx.meta.get("config")
+            if (
+                config is not None
+                and hasattr(config, "btc_crypto_indicators_enabled")
+                and not getattr(config, "btc_crypto_indicators_enabled")
+            ):
+                logger.debug("Crypto indicators disabled explicitly in config")
+                return None
+
+            funding = derivatives.get("funding") if isinstance(derivatives.get("funding"), dict) else {}
+            open_interest = derivatives.get("open_interest") if isinstance(derivatives.get("open_interest"), dict) else {}
+            long_short = derivatives.get("long_short_ratio") if isinstance(derivatives.get("long_short_ratio"), dict) else {}
+            funding_rate = funding.get("rate")
+            current_oi = open_interest.get("value")
+            ratio = long_short.get("current")
+            long_accounts = 0
+            short_accounts = 0
+            if isinstance(ratio, (int, float)) and float(ratio) > 0:
+                # Account counts are not available from every venue. Using a
+                # ratio-equivalent pair preserves the observed ratio without
+                # pretending to know the absolute number of accounts.
+                long_accounts = float(ratio)
+                short_accounts = 1.0
+
+            funding_rates = [float(funding_rate)] if isinstance(funding_rate, (int, float)) else None
             indicators = compute_crypto_indicators(
-                funding_rates=[0.0001, 0.0002, 0.00015],  # Sample data - replace with actual
-                current_oi=5000000000.0,
-                oi_24h_ago=4800000000.0,
-                oi_7d_ago=4500000000.0,
+                funding_rates=funding_rates,
+                current_oi=float(current_oi) if isinstance(current_oi, (int, float)) else None,
                 price_change_24h_pct=price_change_24h_pct,
-                long_accounts=55000,
-                short_accounts=45000,
+                long_accounts=long_accounts,
+                short_accounts=short_accounts,
                 current_price=current_price,
-                liquidation_map={
-                    current_price * 1.02: 500000000,
-                    current_price * 0.98: 600000000,
-                },
             )
 
             summary = indicators.generate_summary()
@@ -187,4 +222,3 @@ Return **only** a JSON object (no markdown fences):
             },
             raw_data=parsed,
         )
-

@@ -7,8 +7,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import pandas as pd
+import numpy as np
 
-_SUPPORTED_CRYPTO_CODES = {"BTC", "BTCUSDT", "BTC-USD", "BTC/USD"}
+_SUPPORTED_CRYPTO_CODES = {"BTC", "BTCUSDT", "BTC-USD", "BTC/USD", "BTCUSD"}
 _BAR_DURATION_BY_PERIOD = {
     "hourly": timedelta(hours=1),
     "four_hour": timedelta(hours=4),
@@ -16,6 +17,12 @@ _BAR_DURATION_BY_PERIOD = {
 }
 _EWMA_VOLATILITY_LAMBDA = 0.94
 _EWMA_VOLATILITY_MIN_RETURNS = 20
+_DIRECTION_WEIGHTS = {
+    "price_structure": 0.45,
+    "ema_structure": 0.30,
+    "momentum": 0.15,
+    "price_action": 0.10,
+}
 
 
 def _is_supported_crypto_code(code: str) -> bool:
@@ -42,6 +49,103 @@ def _pct_change(current: Optional[float], base: Optional[float]) -> Optional[flo
     if current is None or base is None or base <= 0:
         return None
     return (current - base) / base * 100
+
+
+def _build_direction_snapshot(
+    bars: pd.DataFrame,
+    *,
+    close: float,
+    ema20: Optional[float],
+    ema50: Optional[float],
+    atr_pct: Optional[float],
+    price_action: str,
+    period: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build one symmetric, volatility-normalized direction vote.
+
+    This is deliberately separate from execution events: a breakout/sweep can
+    describe a setup, but it should not turn a mixed market into a forced long
+    or short signal by itself.
+    """
+    window = bars["close"].tail(20).astype(float)
+    first = _safe_float(window.iloc[0]) if not window.empty else close
+    last = _safe_float(window.iloc[-1]) if not window.empty else close
+    return_pct = _pct_change(last, first) or 0.0
+    path = float(window.diff().abs().sum()) if len(window) > 1 else 0.0
+    efficiency = abs(last - first) / path if path > 0 else 0.0
+    volatility = max(atr_pct or 0.0, 0.0)
+    # A fixed 4% floor is suitable for a daily BTC bar but almost guarantees
+    # ``neutral`` on a 1h bar. Keep the threshold volatility-aware and scale
+    # the noise floor with the actual bar period.
+    threshold_floor = 1.5 if period == "hourly" else 2.5 if period == "four_hour" else 4.0
+    threshold_pct = max(threshold_floor, volatility * 1.5)
+    price_component = max(-1.0, min(1.0, return_pct / threshold_pct))
+
+    atr_fraction = (atr_pct or 0.0) / 100.0
+    ema_scale = max(atr_fraction * 1.5, 0.005)
+    close_component = (
+        max(-1.0, min(1.0, (close / ema20 - 1.0) / ema_scale))
+        if ema20 and ema20 > 0
+        else 0.0
+    )
+    spread_component = (
+        max(-1.0, min(1.0, (ema20 / ema50 - 1.0) / ema_scale))
+        if ema20 and ema50 and ema50 > 0
+        else 0.0
+    )
+    ema_component = (close_component + spread_component) / 2.0
+
+    momentum_component = 0.0
+    if len(bars) >= 6:
+        base = _safe_float(bars["close"].iloc[-6])
+        if base and base > 0:
+            momentum_component = max(
+                -1.0,
+                min(1.0, ((close / base - 1.0) / max(atr_fraction * (5.0 ** 0.5), 0.015))),
+            )
+
+    action_component = {
+        "breakout": 1.0,
+        "bullish_push": 0.5,
+        "liquidity_sweep_low": 0.25,
+        "breakdown": -1.0,
+        "bearish_push": -0.5,
+        "liquidity_sweep_high": -0.25,
+    }.get(str(price_action or "").lower(), 0.0)
+    components = {
+        "price_structure": round(price_component, 4),
+        "ema_structure": round(ema_component, 4),
+        "momentum": round(momentum_component, 4),
+        "price_action": round(action_component, 4),
+    }
+    score = sum(_DIRECTION_WEIGHTS[key] * components[key] for key in _DIRECTION_WEIGHTS)
+    bias = "long" if score >= 0.45 else "short" if score <= -0.45 else "neutral"
+    trend = "震荡"
+    if abs(return_pct) >= threshold_pct and efficiency >= 0.35:
+        trend = "上涨" if return_pct > 0 else "下跌"
+    return {
+        "version": "btc-direction-v2",
+        "score": round(score, 4),
+        "bias": bias,
+        "components": components,
+        "weights": _DIRECTION_WEIGHTS.copy(),
+        "price_return_20_pct": round(return_pct, 4),
+        "price_slope_pct": round(
+            float(np.polyfit(np.arange(len(window)), window.to_numpy(dtype=float), 1)[0])
+            * (len(window) - 1)
+            / max(float(window.mean()), 1e-12)
+            * 100.0,
+            4,
+        ) if len(window) >= 2 else 0.0,
+        "price_range_pct": round(
+            (float(window.max()) - float(window.min())) / max(first, 1e-12) * 100.0,
+            4,
+        ) if not window.empty else 0.0,
+        "directional_efficiency": round(float(np.clip(efficiency, 0.0, 1.0)), 4),
+        "threshold_pct": round(threshold_pct, 4),
+        "period": period,
+        "trend": trend,
+    }
 
 
 def _build_ewma_volatility_forecast(
@@ -568,6 +672,15 @@ def build_crypto_technical_context(
         bars,
         period=bar_metadata.get("period"),
     )
+    direction_snapshot = _build_direction_snapshot(
+        bars,
+        close=close,
+        ema20=ema20,
+        ema50=ema50,
+        atr_pct=atr_pct,
+        price_action=price_action,
+        period=bar_metadata.get("period"),
+    )
 
     return {
         "framework": "Price Action + Fibonacci + Volume + VWAP + EMA",
@@ -610,6 +723,7 @@ def build_crypto_technical_context(
             "ema50": _round(ema50),
             "structure": ema_structure,
         },
+        "direction": direction_snapshot,
         "event": event_context,
     }
 
@@ -617,6 +731,12 @@ def build_crypto_technical_context(
 def _infer_bias(context: Optional[Dict[str, Any]]) -> str:
     if not isinstance(context, dict):
         return "neutral"
+
+    direction = context.get("direction")
+    if isinstance(direction, dict) and str(direction.get("version") or "") == "btc-direction-v2":
+        bias = str(direction.get("bias") or "neutral").strip().lower()
+        if bias in {"long", "short", "neutral"}:
+            return bias
 
     ema_structure = ((context.get("ema") or {}).get("structure") or "").strip().lower()
     vwap_position = ((context.get("vwap") or {}).get("price_position") or "").strip().lower()

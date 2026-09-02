@@ -1447,6 +1447,47 @@ class TestTechnicalAgentSkillPolicy(unittest.TestCase):
         self.assertIn("Bias from MA5 < 2%", prompt)
         self.assertIn("### 技能 1: 默认多头趋势", prompt)
 
+    def test_btc_prompt_uses_symmetric_direction_baseline(self):
+        from src.agent.agents.technical_agent import TechnicalAgent
+
+        agent = TechnicalAgent(tool_registry=MagicMock(), llm_adapter=MagicMock())
+        prompt = agent.system_prompt(AgentContext(query="分析 BTC", stock_code="BTC"))
+
+        self.assertIn("btc-direction-v2", prompt)
+        self.assertIn("symmetric from -1", prompt)
+        self.assertIn("below +/-0.45", prompt)
+        self.assertIn("must not reverse", prompt)
+
+    def test_crypto_summary_uses_real_derivatives_when_config_is_not_in_context(self):
+        from src.agent.agents.technical_agent import TechnicalAgent
+
+        agent = TechnicalAgent(tool_registry=MagicMock(), llm_adapter=MagicMock())
+        ctx = AgentContext(query="分析 BTC", stock_code="BTC")
+        ctx.set_data("realtime_quote", {"price": 100000})
+        ctx.set_data("daily_history", [{"close": 99000}, {"close": 100000}])
+        ctx.set_data(
+            "crypto_technical",
+            {"derivatives": {"funding": {"rate": 0.0006}}},
+        )
+
+        summary = agent._get_crypto_indicators_summary(ctx)
+
+        self.assertIsNotNone(summary)
+        self.assertIn("资金费率", summary)
+        self.assertIn("多头过度拥挤", summary)
+
+    def test_crypto_summary_honors_explicit_config_opt_out(self):
+        from types import SimpleNamespace
+        from src.agent.agents.technical_agent import TechnicalAgent
+
+        agent = TechnicalAgent(tool_registry=MagicMock(), llm_adapter=MagicMock())
+        ctx = AgentContext(query="分析 BTC", stock_code="BTC")
+        ctx.meta["config"] = SimpleNamespace(btc_crypto_indicators_enabled=False)
+        ctx.set_data("realtime_quote", {"price": 100000})
+        ctx.set_data("crypto_technical", {"derivatives": {"funding": {"rate": 0.0006}}})
+
+        self.assertIsNone(agent._get_crypto_indicators_summary(ctx))
+
 
 class TestBaseAgentMessageAssembly(unittest.TestCase):
     """Test BaseAgent message assembly helpers."""
