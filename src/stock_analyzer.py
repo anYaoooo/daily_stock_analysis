@@ -29,6 +29,26 @@ from src.config import get_config
 logger = logging.getLogger(__name__)
 
 
+# Shared state multipliers used by both equity and BTC analyzers. Directional
+# and bias-specific factors remain local to each model because their score
+# semantics differ.
+PHASE_THRESHOLD_MULTIPLIERS = {
+    "premarket": 1.15,
+    "intraday": 1.00,
+    "lunch_break": 1.20,
+    "closing_auction": 1.10,
+    "postmarket": 0.95,
+    "non_trading": 1.25,
+    "unknown": 1.00,
+}
+VOLATILITY_THRESHOLD_MULTIPLIERS = {
+    "low": 0.85,
+    "normal": 1.00,
+    "high": 1.20,
+    "extreme": 1.40,
+}
+
+
 class TrendStatus(Enum):
     """趋势状态枚举"""
     STRONG_BULL = "强势多头"      # MA5 > MA10 > MA20，且间距扩大
@@ -77,6 +97,23 @@ class RSIStatus(Enum):
     NEUTRAL = "中性"          # 40 <= RSI <= 60
     WEAK = "弱势"             # 30 < RSI < 40
     OVERSOLD = "超卖"         # RSI < 30
+
+
+class SignalDirection(Enum):
+    """Directional side used by the threshold calibration layer."""
+
+    LONG = "long"
+    SHORT = "short"
+    NEUTRAL = "neutral"
+
+
+class VolatilityState(Enum):
+    """Realized volatility bucket used to widen or tighten thresholds."""
+
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    EXTREME = "extreme"
 
 
 @dataclass
@@ -145,6 +182,16 @@ class TrendAnalysisResult:
     direction_score: float = 0.0     # -1=强空，0=中性，+1=强多
     signal_components: Dict[str, float] = field(default_factory=dict)
     signal_method: str = "stock_score_v1"
+
+    # Threshold calibration audit fields. ``market_phase`` is the regular
+    # session phase supplied by the pipeline; ``market_regime`` is inferred
+    # from the price/MA structure and is intentionally kept separate.
+    market_phase: str = "unknown"
+    market_regime: str = "unknown"
+    volatility_state: str = VolatilityState.NORMAL.value
+    volatility_pct: float = 0.0
+    threshold_profile: Dict[str, Any] = field(default_factory=dict)
+    signal_direction: str = SignalDirection.NEUTRAL.value
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -175,6 +222,12 @@ class TrendAnalysisResult:
             'signal_score': self.signal_score,
             'signal_reasons': self.signal_reasons,
             'risk_factors': self.risk_factors,
+            'market_phase': self.market_phase,
+            'market_regime': self.market_regime,
+            'volatility_state': self.volatility_state,
+            'volatility_pct': self.volatility_pct,
+            'threshold_profile': self.threshold_profile,
+            'signal_direction': self.signal_direction,
             'direction_score': self.direction_score,
             'signal_components': self.signal_components,
             'signal_method': self.signal_method,
@@ -227,12 +280,37 @@ class StockTrendAnalyzer:
     RSI_LONG = 24              # 长期RSI周期
     RSI_OVERBOUGHT = 70        # 超买阈值
     RSI_OVERSOLD = 30          # 超卖阈值
+
+    # Realized-volatility buckets (ATR percentage). These are deliberately
+    # broad guardrails rather than extra indicators: each bucket selects a
+    # different threshold profile in ``calibrate_thresholds``.
+    VOLATILITY_LOW_PCT = 1.2
+    VOLATILITY_HIGH_PCT = 2.5
+    VOLATILITY_EXTREME_PCT = 4.5
+
+    # Independent calibration multipliers. Keeping the dimensions explicit
+    # makes it possible to tune one source of uncertainty without stacking
+    # another indicator into the score.
+    PHASE_THRESHOLD_MULTIPLIERS = PHASE_THRESHOLD_MULTIPLIERS
+    VOLATILITY_THRESHOLD_MULTIPLIERS = VOLATILITY_THRESHOLD_MULTIPLIERS
+    VOLATILITY_BIAS_MULTIPLIERS = {
+        VolatilityState.LOW.value: 0.90,
+        VolatilityState.NORMAL.value: 1.00,
+        VolatilityState.HIGH.value: 0.85,
+        VolatilityState.EXTREME.value: 0.70,
+    }
     
     def __init__(self):
         """初始化分析器"""
         pass
     
-    def analyze(self, df: pd.DataFrame, code: str) -> TrendAnalysisResult:
+    def analyze(
+        self,
+        df: pd.DataFrame,
+        code: str,
+        market_phase_context: Any = None,
+        market_phase: Any = None,
+    ) -> TrendAnalysisResult:
         """
         分析股票趋势
         
@@ -255,9 +333,17 @@ class StockTrendAnalyzer:
         if is_crypto_code(code):
             from src.btc_trend_analyzer import BtcTrendAnalyzer
 
-            return BtcTrendAnalyzer().analyze(df, code)
+            return BtcTrendAnalyzer().analyze(
+                df,
+                code,
+                market_phase_context=market_phase_context,
+                market_phase=market_phase,
+            )
 
         result = TrendAnalysisResult(code=code)
+        result.market_phase = self._normalize_market_phase(
+            market_phase_context if market_phase_context is not None else market_phase
+        )
         
         if df is None or df.empty or len(df) < 20:
             logger.warning(f"{code} 数据不足，无法进行趋势分析")
@@ -285,26 +371,221 @@ class StockTrendAnalyzer:
         # 1. 趋势判断
         self._analyze_trend(df, result)
 
-        # 2. 乖离率计算
+        # 2. Market regime and realized volatility are state inputs for the
+        # final threshold profile, not additional score components.
+        result.market_regime = self._infer_market_regime(result)
+        self._analyze_volatility(df, result)
+
+        # 3. 乖离率计算
         self._calculate_bias(result)
 
-        # 3. 量能分析
+        # 4. 量能分析
         self._analyze_volume(df, result)
 
-        # 4. 支撑压力分析
+        # 5. 支撑压力分析
         self._analyze_support_resistance(df, result)
 
-        # 5. MACD 分析
+        # 6. MACD 分析
         self._analyze_macd(df, result)
 
-        # 6. RSI 分析
+        # 7. RSI 分析
         self._analyze_rsi(df, result)
 
-        # 7. 生成买入信号
+        # 8. 生成买入信号
         self._generate_signal(result)
 
         return result
-    
+
+    @staticmethod
+    def _normalize_market_phase(value: Any) -> str:
+        """Normalize a calendar context or phase label to a stable value."""
+        if isinstance(value, dict):
+            value = value.get("phase")
+        elif hasattr(value, "phase"):
+            value = getattr(value, "phase")
+        if isinstance(value, Enum):
+            value = value.value
+        phase = str(value or "unknown").strip().lower().replace("-", "_")
+        phase = {
+            "pre_market": "premarket",
+            "post_market": "postmarket",
+            "close": "closing_auction",
+            "closing": "closing_auction",
+            "open": "intraday",
+        }.get(phase, phase)
+        return phase if phase in StockTrendAnalyzer.PHASE_THRESHOLD_MULTIPLIERS else "unknown"
+
+    @staticmethod
+    def _infer_market_regime(result: TrendAnalysisResult) -> str:
+        """Map measured trend structure to a small, auditable regime set."""
+        if result.trend_status in {TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL}:
+            return "bull_trend"
+        if result.trend_status in {TrendStatus.STRONG_BEAR, TrendStatus.BEAR, TrendStatus.WEAK_BEAR}:
+            return "bear_trend"
+        if result.trend_status == TrendStatus.CONSOLIDATION:
+            return "range"
+        return "transition"
+
+    @staticmethod
+    def _infer_signal_direction(result: TrendAnalysisResult) -> str:
+        """Infer the side whose threshold should be calibrated.
+
+        A neutral/range structure stays neutral even when one oscillator is
+        extreme; this prevents a single indicator from forcing a direction.
+        """
+        if result.trend_status in {TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL}:
+            return SignalDirection.LONG.value
+        if result.trend_status in {TrendStatus.STRONG_BEAR, TrendStatus.BEAR, TrendStatus.WEAK_BEAR}:
+            return SignalDirection.SHORT.value
+        if result.price_trend == "上涨":
+            return SignalDirection.LONG.value
+        if result.price_trend == "下跌":
+            return SignalDirection.SHORT.value
+        return SignalDirection.NEUTRAL.value
+
+    def _analyze_volatility(self, df: pd.DataFrame, result: TrendAnalysisResult) -> None:
+        """Estimate realized ATR volatility and assign a broad state bucket."""
+        try:
+            close = pd.to_numeric(df["close"], errors="coerce")
+            high = pd.to_numeric(df.get("high", close), errors="coerce")
+            low = pd.to_numeric(df.get("low", close), errors="coerce")
+            previous = close.shift(1)
+            true_range = pd.concat(
+                [high - low, (high - previous).abs(), (low - previous).abs()],
+                axis=1,
+            ).max(axis=1)
+            atr_pct_series = (true_range / close.replace(0, np.nan) * 100).dropna()
+            returns_pct = (close.pct_change() * 100).dropna()
+            if atr_pct_series.empty and returns_pct.empty:
+                return
+            atr_pct = float(atr_pct_series.tail(14).mean()) if not atr_pct_series.empty else 0.0
+            realized_pct = float(returns_pct.tail(20).std(ddof=0)) if len(returns_pct) > 1 else 0.0
+            volatility_pct = max(atr_pct, realized_pct)
+            if not np.isfinite(volatility_pct):
+                return
+            result.volatility_pct = round(volatility_pct, 4)
+            if volatility_pct <= self.VOLATILITY_LOW_PCT:
+                state = VolatilityState.LOW
+            elif volatility_pct <= self.VOLATILITY_HIGH_PCT:
+                state = VolatilityState.NORMAL
+            elif volatility_pct <= self.VOLATILITY_EXTREME_PCT:
+                state = VolatilityState.HIGH
+            else:
+                state = VolatilityState.EXTREME
+            result.volatility_state = state.value
+        except Exception as exc:
+            # Technical analysis is best effort; retain the neutral state when
+            # malformed OHLC data prevents a volatility estimate.
+            logger.debug("%s volatility estimate unavailable: %s", result.code, exc)
+
+    def calibrate_thresholds(
+        self,
+        market_phase: Any = "unknown",
+        volatility_state: Any = VolatilityState.NORMAL.value,
+        direction: Any = SignalDirection.NEUTRAL.value,
+        market_regime: str = "unknown",
+        base_bias_threshold: Any = None,
+        market_stage: Any = None,
+        volatility: Any = None,
+    ) -> Dict[str, Any]:
+        """Return independent, state-aware signal thresholds.
+
+        The profile intentionally exposes each multiplier. Callers can audit
+        whether a stricter threshold came from the session phase, volatility,
+        regime, or directional side instead of attributing it to a larger
+        pile of indicators.
+        """
+        phase = self._normalize_market_phase(market_phase)
+        volatility_state = volatility if volatility is not None else volatility_state
+        if isinstance(volatility_state, Enum):
+            volatility_state = volatility_state.value
+        volatility = str(volatility_state or VolatilityState.NORMAL.value).strip().lower().replace("-", "_")
+        volatility = {
+            "compressed": VolatilityState.LOW.value,
+            "elevated": VolatilityState.HIGH.value,
+            "very_high": VolatilityState.EXTREME.value,
+        }.get(volatility, volatility)
+        if volatility not in self.VOLATILITY_THRESHOLD_MULTIPLIERS:
+            volatility = VolatilityState.NORMAL.value
+        if isinstance(direction, Enum):
+            direction = direction.value
+        direction = str(direction or SignalDirection.NEUTRAL.value).strip().lower()
+        direction = {
+            "bullish": SignalDirection.LONG.value,
+            "bearish": SignalDirection.SHORT.value,
+            "up": SignalDirection.LONG.value,
+            "down": SignalDirection.SHORT.value,
+        }.get(direction, direction)
+        if direction not in {item.value for item in SignalDirection}:
+            direction = SignalDirection.NEUTRAL.value
+        regime = str(market_stage if market_stage is not None else market_regime or "unknown").strip().lower()
+        regime = {
+            "bull": "bull_trend",
+            "bear": "bear_trend",
+            "sideways": "range",
+            "consolidation": "range",
+        }.get(regime, regime)
+        if regime not in {"bull_trend", "bear_trend", "range", "transition", "unknown"}:
+            regime = "unknown"
+
+        try:
+            base_bias = float(base_bias_threshold) if base_bias_threshold is not None else float(get_config().bias_threshold)
+        except (TypeError, ValueError, AttributeError):
+            base_bias = 5.0
+        if not np.isfinite(base_bias) or base_bias <= 0:
+            base_bias = 5.0
+
+        phase_multiplier = self.PHASE_THRESHOLD_MULTIPLIERS[phase]
+        volatility_multiplier = self.VOLATILITY_THRESHOLD_MULTIPLIERS[volatility]
+        volatility_bias_multiplier = self.VOLATILITY_BIAS_MULTIPLIERS[volatility]
+        # Bias/chase distance is side-aware but not regime-aware: trend regime
+        # is already represented in the score gate, while distance is a price
+        # risk measure and should not be double-counted.
+        direction_multiplier = {
+            SignalDirection.LONG.value: 1.00,
+            SignalDirection.SHORT.value: 1.05,
+            SignalDirection.NEUTRAL.value: 1.10,
+        }[direction]
+        bias_multiplier = float(np.clip(phase_multiplier * volatility_bias_multiplier * direction_multiplier, 0.55, 1.50))
+        bias_threshold = float(np.clip(base_bias * bias_multiplier, 2.0, 12.0))
+
+        # Regime/side only calibrate score gates. The defaults (60/75 for long
+        # and 60/70 for short) preserve the historical stock behavior.
+        regime_long = {"bull_trend": 1.00, "bear_trend": 1.10, "range": 1.05, "transition": 1.05, "unknown": 1.00}[regime]
+        regime_short = {"bull_trend": 1.10, "bear_trend": 1.00, "range": 1.05, "transition": 1.05, "unknown": 1.00}[regime]
+        side_long = {"long": 1.00, "short": 1.10, "neutral": 1.05}[direction]
+        side_short = {"long": 1.10, "short": 1.00, "neutral": 1.05}[direction]
+        long_factor = phase_multiplier * volatility_multiplier * regime_long * side_long
+        short_factor = phase_multiplier * volatility_multiplier * regime_short * side_short
+        return {
+            "market_phase": phase,
+            "market_regime": regime,
+            "market_stage": {
+                "bull_trend": "bull",
+                "bear_trend": "bear",
+                "range": "range",
+                "transition": "transition",
+                "unknown": "unknown",
+            }[regime],
+            "volatility_state": volatility,
+            "direction": direction,
+            "phase_multiplier": round(float(phase_multiplier), 4),
+            "volatility_multiplier": round(float(volatility_multiplier), 4),
+            "volatility_bias_multiplier": round(float(volatility_bias_multiplier), 4),
+            "direction_multiplier": round(float(direction_multiplier), 4),
+            "regime_long_multiplier": round(float(regime_long), 4),
+            "regime_short_multiplier": round(float(regime_short), 4),
+            "side_long_multiplier": round(float(side_long), 4),
+            "side_short_multiplier": round(float(side_short), 4),
+            "bias_multiplier": round(bias_multiplier, 4),
+            "bias_threshold": round(bias_threshold, 4),
+            "bias_chase_threshold": round(float(np.clip(bias_threshold * 1.5, 3.0, 18.0)), 4),
+            "long_entry_score": round(float(np.clip(60.0 * long_factor, 50.0, 88.0)), 2),
+            "long_strong_score": round(float(np.clip(75.0 * long_factor, 65.0, 95.0)), 2),
+            "short_entry_score": round(float(np.clip(60.0 * short_factor, 50.0, 88.0)), 2),
+            "short_strong_score": round(float(np.clip(70.0 * short_factor, 60.0, 95.0)), 2),
+        }
+
     def _calculate_mas(self, df: pd.DataFrame) -> pd.DataFrame:
         """计算均线"""
         df = df.copy()
@@ -745,18 +1026,56 @@ class StockTrendAnalyzer:
         bias = result.bias_ma5
         if bias != bias or bias is None:  # NaN or None defense
             bias = 0.0
-        base_threshold = get_config().bias_threshold
+        profile = self.calibrate_thresholds(
+            market_phase=result.market_phase,
+            volatility_state=result.volatility_state,
+            direction=self._infer_signal_direction(result),
+            market_regime=(
+                result.market_regime
+                if result.market_regime and result.market_regime != "unknown"
+                else self._infer_market_regime(result)
+            ),
+        )
+        result.threshold_profile = profile
+        result.signal_direction = str(profile["direction"])
+        base_threshold = float(profile["bias_threshold"])
 
         # Strong trend compensation: relax threshold for STRONG_BULL with high strength
         trend_strength = result.trend_strength if result.trend_strength == result.trend_strength else 0.0
         if result.trend_status == TrendStatus.STRONG_BULL and (trend_strength or 0) >= 70:
-            effective_threshold = base_threshold * 1.5
+            effective_threshold = float(profile["bias_chase_threshold"])
             is_strong_trend = True
         else:
             effective_threshold = base_threshold
             is_strong_trend = False
 
-        if bias < 0:
+        if profile["direction"] == SignalDirection.SHORT.value:
+            # In a bearish structure, a price already below MA5 is extended
+            # to the downside; do not turn that move into a long "pullback"
+            # point. A rebound toward MA5 is the only bias pattern that can
+            # improve a short-side setup.
+            if bias >= 0:
+                if bias < 2:
+                    score += 18
+                    reasons.append(f"✅ 价格反弹贴近MA5({bias:.1f}%)，空头观察点")
+                elif bias < base_threshold:
+                    score += 14
+                    reasons.append(f"⚡ 价格反弹至MA5上方({bias:.1f}%)，可观察空头确认")
+                elif bias > effective_threshold:
+                    score += 4
+                    risks.append(f"❌ 反弹乖离过高({bias:.1f}%>{effective_threshold:.1f}%)，等待回落确认")
+                else:
+                    score += 8
+                    reasons.append(f"⚡ 空头方向乖离偏高({bias:.1f}%)，等待反转确认")
+            elif bias > -3:
+                score += 8
+                risks.append(f"⚠️ 价格低于MA5({bias:.1f}%)，空头追跌风险")
+            elif bias > -5:
+                score += 4
+                risks.append(f"⚠️ 下行乖离扩大({bias:.1f}%)，不宜追空")
+            else:
+                risks.append(f"❌ 下行乖离过大({bias:.1f}%)，等待反弹后再评估")
+        elif bias < 0:
             # Price below MA5 (pullback)
             if bias > -3:
                 score += 20
@@ -856,11 +1175,18 @@ class StockTrendAnalyzer:
         result.signal_reasons = reasons
         result.risk_factors = risks
 
-        # 生成买入信号（调整阈值以适应新的100分制）
-        if score >= 75 and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL]:
+        # Generate the action from calibrated side-specific gates. The score
+        # remains a transparent summary, while the inverse score gives the
+        # short side a symmetric decision boundary without adding indicators.
+        short_score = 100 - score
+        if score >= profile["long_strong_score"] and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL]:
             result.buy_signal = BuySignal.STRONG_BUY
-        elif score >= 60 and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL]:
+        elif score >= profile["long_entry_score"] and result.trend_status in [TrendStatus.STRONG_BULL, TrendStatus.BULL, TrendStatus.WEAK_BULL]:
             result.buy_signal = BuySignal.BUY
+        elif short_score >= profile["short_strong_score"] and result.trend_status in [TrendStatus.STRONG_BEAR, TrendStatus.BEAR]:
+            result.buy_signal = BuySignal.STRONG_SELL
+        elif short_score >= profile["short_entry_score"] and result.trend_status in [TrendStatus.STRONG_BEAR, TrendStatus.BEAR, TrendStatus.WEAK_BEAR]:
+            result.buy_signal = BuySignal.SELL
         elif score >= 45:
             result.buy_signal = BuySignal.HOLD
         elif score >= 30:
@@ -869,7 +1195,7 @@ class StockTrendAnalyzer:
             result.buy_signal = BuySignal.STRONG_SELL
         else:
             result.buy_signal = BuySignal.SELL
-    
+
     def format_analysis(self, result: TrendAnalysisResult) -> str:
         """
         格式化分析结果为文本
@@ -886,6 +1212,8 @@ class StockTrendAnalyzer:
             f"📊 趋势判断: {result.trend_status.value}",
             f"   均线排列: {result.ma_alignment}",
             f"   趋势强度: {result.trend_strength}/100",
+            f"   市场阶段: {result.market_phase} | 趋势阶段: {result.market_regime}",
+            f"   波动状态: {result.volatility_state} ({result.volatility_pct:.2f}%) | 校准方向: {result.signal_direction}",
             f"",
             f"📈 均线数据:",
             f"   现价: {result.current_price:.2f}",
@@ -913,6 +1241,15 @@ class StockTrendAnalyzer:
             f"   综合评分: {result.signal_score}/100",
         ]
 
+        profile = result.threshold_profile or {}
+        if profile:
+            lines.append(
+                "   校准门槛: "
+                f"乖离≤{profile.get('bias_threshold', 0):.2f}% | "
+                f"多头{profile.get('long_entry_score', 0):.1f}/{profile.get('long_strong_score', 0):.1f} | "
+                f"空头{profile.get('short_entry_score', 0):.1f}/{profile.get('short_strong_score', 0):.1f}"
+            )
+
         if result.signal_reasons:
             lines.append(f"")
             lines.append(f"✅ 买入理由:")
@@ -928,7 +1265,12 @@ class StockTrendAnalyzer:
         return "\n".join(lines)
 
 
-def analyze_stock(df: pd.DataFrame, code: str) -> TrendAnalysisResult:
+def analyze_stock(
+    df: pd.DataFrame,
+    code: str,
+    market_phase_context: Any = None,
+    market_phase: Any = None,
+) -> TrendAnalysisResult:
     """
     便捷函数：分析单只股票
     
@@ -940,7 +1282,12 @@ def analyze_stock(df: pd.DataFrame, code: str) -> TrendAnalysisResult:
         TrendAnalysisResult 分析结果
     """
     analyzer = StockTrendAnalyzer()
-    return analyzer.analyze(df, code)
+    return analyzer.analyze(
+        df,
+        code,
+        market_phase_context=market_phase_context,
+        market_phase=market_phase,
+    )
 
 
 if __name__ == "__main__":

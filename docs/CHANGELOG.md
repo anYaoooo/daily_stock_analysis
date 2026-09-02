@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] 股票与 BTC 技术信号新增按交易阶段、实现波动状态、市场趋势阶段和多空方向独立校准的阈值画像；报告保留各乘数与有效门槛，避免继续通过重复指标堆叠放大信号。
 - [改进] BTC 技术方向判断改用已闭合 K 线、ATR 波动率归一化和对称多空评分，移除股票专用单向买入评分及 Agent 固定衍生品样例数据，并统一小时线方向投票口径。
 - [测试] BTC 离线方向评估支持多前瞻周期、信号覆盖率和扣除双边手续费/滑点后的净收益统计，避免将单一 MFE/MAE 命中率误读为交易收益。
 - [改进] BTC 趋势分析器与加密技术上下文统一使用同一份方向快照；离线评估新增窗口末方向命中率、累计净收益、最大回撤、盈利因子、分数强度分桶和可调方向阈值，区分机会命中与最终交易结果。

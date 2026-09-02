@@ -37,6 +37,8 @@ def test_btc_uses_symmetric_direction_model_for_rising_and_falling_markets() -> 
 
     assert rising.signal_method == "btc_direction_v2"
     assert falling.signal_method == "btc_direction_v2"
+    assert rising.market_regime == rising.threshold_profile["market_regime"]
+    assert falling.market_regime == falling.threshold_profile["market_regime"]
     assert rising.direction_score > 0.45
     assert falling.direction_score < -0.45
     assert rising.buy_signal in {BuySignal.BUY, BuySignal.STRONG_BUY}

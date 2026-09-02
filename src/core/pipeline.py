@@ -513,7 +513,14 @@ class StockAnalysisPipeline:
                     # Issue #234: Augment with realtime for intraday MA calculation
                     if self.config.enable_realtime_quote and realtime_quote:
                         df = self._augment_historical_with_realtime(df, realtime_quote, code)
-                    trend_result = self.trend_analyzer.analyze(df, code)
+                    # Reuse the already-frozen runtime market phase so the
+                    # technical signal thresholds are calibrated against the
+                    # same session context as the report prompt.
+                    trend_result = self.trend_analyzer.analyze(
+                        df,
+                        code,
+                        market_phase_context=market_phase_context_dict,
+                    )
                     hourly_df = None
                     shadow_hourly_df = None
                     if is_crypto_code(code):
@@ -1021,6 +1028,12 @@ class StockAnalysisPipeline:
                 'price_range_pct': trend_result.price_range_pct,
                 'directional_efficiency': trend_result.directional_efficiency,
                 'price_structure_available': trend_result.price_structure_available,
+                'market_phase': trend_result.market_phase,
+                'market_regime': trend_result.market_regime,
+                'volatility_state': trend_result.volatility_state,
+                'volatility_pct': trend_result.volatility_pct,
+                'threshold_profile': trend_result.threshold_profile,
+                'signal_direction': trend_result.signal_direction,
                 'bias_ma5': trend_result.bias_ma5,
                 'bias_ma10': trend_result.bias_ma10,
                 'volume_status': trend_result.volume_status.value,

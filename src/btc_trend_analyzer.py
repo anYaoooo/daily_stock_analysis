@@ -18,8 +18,12 @@ from src.stock_analyzer import (
     BuySignal,
     MACDStatus,
     RSIStatus,
+    SignalDirection,
+    PHASE_THRESHOLD_MULTIPLIERS,
     TrendAnalysisResult,
     TrendStatus,
+    VOLATILITY_THRESHOLD_MULTIPLIERS,
+    VolatilityState,
     VolumeStatus,
 )
 
@@ -33,6 +37,9 @@ _DIRECTION_WEIGHTS = {
     "momentum": 0.15,
     "price_action": 0.10,
 }
+
+_PHASE_MULTIPLIERS = PHASE_THRESHOLD_MULTIPLIERS
+_VOLATILITY_MULTIPLIERS = VOLATILITY_THRESHOLD_MULTIPLIERS
 
 
 def _float(value: Any) -> Optional[float]:
@@ -56,8 +63,17 @@ def _pct(value: Optional[float], base: Optional[float]) -> float:
 class BtcTrendAnalyzer:
     """Deterministic BTC baseline used by both pipeline and agent tools."""
 
-    def analyze(self, df: pd.DataFrame, code: str) -> TrendAnalysisResult:
+    def analyze(
+        self,
+        df: pd.DataFrame,
+        code: str,
+        market_phase_context: Any = None,
+        market_phase: Any = None,
+    ) -> TrendAnalysisResult:
         result = TrendAnalysisResult(code=code, signal_method="btc_direction_v2")
+        result.market_phase = self._normalize_phase(
+            market_phase_context if market_phase_context is not None else market_phase
+        )
         bars = self._closed_bars(df)
         if len(bars) < _MIN_BARS:
             result.risk_factors.append("BTC 已闭合 K 线不足，无法完成方向判断")
@@ -81,6 +97,8 @@ class BtcTrendAnalyzer:
         atr_series = self._true_range(bars).rolling(_ATR_PERIOD).mean()
         atr = _float(atr_series.iloc[-1])
         atr_pct = atr / close if atr and atr > 0 else 0.0
+        result.volatility_pct = round(atr_pct * 100.0, 4)
+        result.volatility_state = self._volatility_state(atr_pct).value
 
         # Keep the trend result and the richer crypto context on one direction
         # calculation.  Both are consumed by different callers, so allowing
@@ -183,19 +201,40 @@ class BtcTrendAnalyzer:
         result.trend_status, result.ma_alignment = self._trend_status(direction_score, ema)
         result.trend_strength = round(50.0 + abs(direction_score) * 50.0, 2)
 
+        direction = (
+            SignalDirection.LONG.value
+            if direction_score > 0
+            else SignalDirection.SHORT.value
+            if direction_score < 0
+            else SignalDirection.NEUTRAL.value
+        )
+        result.market_regime = (
+            "bull_trend" if direction_score >= 0.20
+            else "bear_trend" if direction_score <= -0.20
+            else "range"
+        )
+        result.threshold_profile = self.calibrate_thresholds(
+            market_phase=result.market_phase,
+            volatility_state=result.volatility_state,
+            direction=direction,
+            market_regime=result.market_regime,
+        )
+        result.signal_direction = direction
+
         result.volume_status, result.volume_ratio_5d, result.volume_trend = self._volume(bars)
         self._levels(bars, result, atr_pct)
         self._macd(bars, result)
         self._rsi(bars, result)
 
         result.signal_score = int(round(50.0 + direction_score * 50.0))
-        if direction_score >= 0.70:
+        profile = result.threshold_profile
+        if direction_score >= profile["long_strong_score"]:
             result.buy_signal = BuySignal.STRONG_BUY
-        elif direction_score >= 0.45:
+        elif direction_score >= profile["long_entry_score"]:
             result.buy_signal = BuySignal.BUY
-        elif direction_score <= -0.70:
+        elif direction_score <= -profile["short_strong_score"]:
             result.buy_signal = BuySignal.STRONG_SELL
-        elif direction_score <= -0.45:
+        elif direction_score <= -profile["short_entry_score"]:
             result.buy_signal = BuySignal.SELL
         else:
             result.buy_signal = BuySignal.WAIT
@@ -210,11 +249,129 @@ class BtcTrendAnalyzer:
             result.risk_factors.append(f"ATR14 约为价格的 {atr_pct:.1%}，波动过高，应缩小仓位")
         if result.rsi_status in {RSIStatus.OVERBOUGHT, RSIStatus.OVERSOLD}:
             result.risk_factors.append(f"RSI 处于{result.rsi_status.value}，只作为风险提示，不单独反转方向")
-        if abs(direction_score) < 0.45:
+        if abs(direction_score) < min(profile["long_entry_score"], profile["short_entry_score"]):
             result.risk_factors.append("多空证据未达到方向门槛，保持观望而不是强行交易")
         if crypto_context and isinstance(crypto_context.get("live_partial_bar"), dict):
             result.risk_factors.append("实时未收线 K 线未参与指标和方向计算")
         return result
+
+    @staticmethod
+    def _normalize_phase(value: Any) -> str:
+        if isinstance(value, dict):
+            value = value.get("phase")
+        elif hasattr(value, "phase"):
+            value = getattr(value, "phase")
+        if hasattr(value, "value"):
+            value = value.value
+        phase = str(value or "unknown").strip().lower().replace("-", "_")
+        phase = {
+            "pre_market": "premarket",
+            "post_market": "postmarket",
+            "close": "closing_auction",
+            "closing": "closing_auction",
+            "open": "intraday",
+        }.get(phase, phase)
+        return phase if phase in _PHASE_MULTIPLIERS else "unknown"
+
+    @staticmethod
+    def _volatility_state(atr_pct: float) -> VolatilityState:
+        """Classify ATR percentage without using it as a direction vote."""
+        if atr_pct <= 0.01:
+            return VolatilityState.LOW
+        if atr_pct <= 0.03:
+            return VolatilityState.NORMAL
+        if atr_pct <= 0.06:
+            return VolatilityState.HIGH
+        return VolatilityState.EXTREME
+
+    @staticmethod
+    def calibrate_thresholds(
+        market_phase: Any = "unknown",
+        volatility_state: Any = VolatilityState.NORMAL.value,
+        direction: Any = SignalDirection.NEUTRAL.value,
+        market_regime: str = "unknown",
+        market_stage: Any = None,
+        volatility: Any = None,
+    ) -> Dict[str, float | str]:
+        """Build state-aware long/short direction gates.
+
+        The default profile is exactly the historical +/-0.45 and +/-0.70
+        gates. State multipliers only make a gate stricter in uncertain
+        sessions or volatile regimes; they never add another vote.
+        """
+        phase = BtcTrendAnalyzer._normalize_phase(market_phase)
+        volatility_state = volatility if volatility is not None else volatility_state
+        if hasattr(volatility_state, "value"):
+            volatility_state = volatility_state.value
+        volatility = str(volatility_state or VolatilityState.NORMAL.value).strip().lower().replace("-", "_")
+        volatility = {
+            "compressed": VolatilityState.LOW.value,
+            "elevated": VolatilityState.HIGH.value,
+            "very_high": VolatilityState.EXTREME.value,
+        }.get(volatility, volatility)
+        if volatility not in _VOLATILITY_MULTIPLIERS:
+            volatility = VolatilityState.NORMAL.value
+        if hasattr(direction, "value"):
+            direction = direction.value
+        direction = str(direction or SignalDirection.NEUTRAL.value).strip().lower()
+        direction = {
+            "bullish": SignalDirection.LONG.value,
+            "bearish": SignalDirection.SHORT.value,
+            "up": SignalDirection.LONG.value,
+            "down": SignalDirection.SHORT.value,
+        }.get(direction, direction)
+        if direction not in {item.value for item in SignalDirection}:
+            direction = SignalDirection.NEUTRAL.value
+        regime = str(market_stage if market_stage is not None else market_regime or "unknown").strip().lower()
+        regime = {
+            "bull": "bull_trend",
+            "bear": "bear_trend",
+            "sideways": "range",
+            "consolidation": "range",
+        }.get(regime, regime)
+        if regime not in {"bull_trend", "bear_trend", "range", "unknown"}:
+            regime = "unknown"
+
+        base = _PHASE_MULTIPLIERS[phase] * _VOLATILITY_MULTIPLIERS[volatility]
+        # A side that is counter to the measured regime needs more evidence;
+        # the aligned side keeps the base gate. Unknown/range stays symmetric.
+        long_side = 1.0
+        short_side = 1.0
+        if regime == "bull_trend":
+            short_side = 1.10
+        elif regime == "bear_trend":
+            long_side = 1.10
+        elif regime == "range":
+            long_side = short_side = 1.08
+        if direction == SignalDirection.LONG.value:
+            short_side *= 1.05
+        elif direction == SignalDirection.SHORT.value:
+            long_side *= 1.05
+
+        long_entry = float(np.clip(0.45 * base * long_side, 0.35, 0.80))
+        short_entry = float(np.clip(0.45 * base * short_side, 0.35, 0.80))
+        long_strong = float(np.clip(0.70 * base * long_side, 0.55, 0.95))
+        short_strong = float(np.clip(0.70 * base * short_side, 0.55, 0.95))
+        return {
+            "market_phase": phase,
+            "market_regime": regime,
+            "market_stage": {
+                "bull_trend": "bull",
+                "bear_trend": "bear",
+                "range": "range",
+                "unknown": "unknown",
+            }[regime],
+            "volatility_state": volatility,
+            "direction": direction,
+            "phase_multiplier": round(float(_PHASE_MULTIPLIERS[phase]), 4),
+            "volatility_multiplier": round(float(_VOLATILITY_MULTIPLIERS[volatility]), 4),
+            "regime_long_multiplier": round(float(long_side), 4),
+            "regime_short_multiplier": round(float(short_side), 4),
+            "long_entry_score": round(long_entry, 4),
+            "long_strong_score": round(long_strong, 4),
+            "short_entry_score": round(short_entry, 4),
+            "short_strong_score": round(short_strong, 4),
+        }
 
     @staticmethod
     def _closed_bars(df: pd.DataFrame) -> pd.DataFrame:

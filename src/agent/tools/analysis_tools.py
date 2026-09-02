@@ -78,6 +78,12 @@ def _handle_analyze_trend(stock_code: str) -> dict:
         "direction_score": result.direction_score,
         "signal_components": result.signal_components,
         "signal_method": result.signal_method,
+        "market_phase": result.market_phase,
+        "market_regime": result.market_regime,
+        "volatility_state": result.volatility_state,
+        "volatility_pct": result.volatility_pct,
+        "threshold_profile": result.threshold_profile,
+        "signal_direction": result.signal_direction,
         "signal_reasons": result.signal_reasons,
         "risk_factors": result.risk_factors,
     }
@@ -89,7 +95,7 @@ analyze_trend_tool = ToolDefinition(
                 "Fetches historical data from database or data source. "
                 "Returns MA alignment, bias rates, MACD status, RSI levels, "
                 "volume analysis, support/resistance levels, and a buy/sell signal "
-                "with a score (0-100).",
+                "with a score (0-100) plus phase/volatility/direction-calibrated thresholds.",
     parameters=[
         ToolParameter(
             name="stock_code",
