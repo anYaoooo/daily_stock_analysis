@@ -263,7 +263,26 @@ class EventMonitor:
     def _fetch_realtime_quote(self, stock_code: str) -> Any:
         from data_provider import DataFetcherManager
 
-        return DataFetcherManager().get_realtime_quote(stock_code)
+        try:
+            quote = DataFetcherManager().get_realtime_quote(stock_code)
+        except Exception as exc:
+            logger.debug("[EventMonitor] generic realtime quote failed for %s: %s", stock_code, exc)
+            quote = None
+        if quote is not None:
+            return quote
+
+        # Crypto has a dedicated public REST fallback.  The generic manager
+        # can briefly return None while its provider circuit is cooling down;
+        # that transient gap must not make a 24/7 alert silently unobservable.
+        try:
+            from data_provider.crypto_fetcher import CryptoFetcher, is_crypto_code
+            from src.config import get_config
+
+            if is_crypto_code(stock_code) and getattr(get_config(), "enable_realtime_quote", True):
+                return CryptoFetcher().get_realtime_quote(stock_code)
+        except Exception as exc:
+            logger.debug("[EventMonitor] crypto realtime fallback failed for %s: %s", stock_code, exc)
+        return None
 
     async def _get_realtime_quote(self, stock_code: str) -> Any:
         return await asyncio.to_thread(self._fetch_realtime_quote, stock_code)

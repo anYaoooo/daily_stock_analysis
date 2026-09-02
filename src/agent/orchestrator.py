@@ -1074,13 +1074,31 @@ class AgentOrchestrator:
         trend_dict = trend if isinstance(trend, dict) else {}
 
         data_perspective: Dict[str, Any] = {}
-        ma_alignment = tech_raw.get("ma_alignment")
-        trend_score = tech_raw.get("trend_score")
-        if ma_alignment or trend_score is not None:
+
+        def _r(val, n=2):
+            """Round numeric values for display."""
+            return round(val, n) if isinstance(val, (int, float)) else val
+
+        # The pre-fetched local trend result is deterministic and should take
+        # precedence over an agent's abbreviated description in this summary.
+        ma_alignment = trend_dict.get("ma_alignment") or tech_raw.get("ma_alignment")
+        trend_score = trend_dict.get("trend_strength")
+        if trend_score is None:
+            trend_score = tech_raw.get("trend_score")
+        price_trend = trend_dict.get("price_trend")
+        if ma_alignment or trend_score is not None or price_trend:
             data_perspective["trend_status"] = {
                 "ma_alignment": ma_alignment or "N/A",
                 "trend_score": trend_score if trend_score is not None else "N/A",
-                "is_bullish": str(ma_alignment).lower() == "bullish",
+                "price_trend": price_trend or "N/A",
+                "is_bullish": (
+                    price_trend == "上涨"
+                    or str(ma_alignment).lower() in {"bullish", "多头排列", "强势多头"}
+                ),
+                "price_slope_pct": _r(trend_dict.get("price_slope_pct")),
+                "price_return_pct": _r(trend_dict.get("price_return_pct")),
+                "price_range_pct": _r(trend_dict.get("price_range_pct")),
+                "directional_efficiency": _r(trend_dict.get("directional_efficiency")),
             }
 
         def _bias_label(bias):
@@ -1095,10 +1113,6 @@ class AgentOrchestrator:
             elif bias < -2:
                 return "偏低"
             return "中性"
-
-        def _r(val, n=2):
-            """Round numeric values for display."""
-            return round(val, n) if isinstance(val, (int, float)) else val
 
         def _pick(primary_dict, primary_key, fallback_dict, fallback_key, default="N/A"):
             """Pick first non-None value, avoiding falsy-zero trap."""
@@ -1116,6 +1130,7 @@ class AgentOrchestrator:
                 "ma20": _r(_pick(trend_dict, "ma20", tech_raw, "ma20")),
                 "bias_ma5": _r(_pick(trend_dict, "bias_ma5", tech_raw, "bias_ma5")),
                 "bias_status": _bias_label(trend_dict.get("bias_ma5")) or tech_raw.get("bias_status", "N/A"),
+                "price_trend": trend_dict.get("price_trend", "N/A"),
                 "support_level": key_levels.get("support") or key_levels.get("immediate_support") or "N/A",
                 "resistance_level": key_levels.get("resistance") or key_levels.get("current_resistance") or "N/A",
             }

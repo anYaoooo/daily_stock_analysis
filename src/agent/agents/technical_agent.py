@@ -63,6 +63,14 @@ output a structured JSON opinion.
 3. Analyse volume and chip distribution
 4. Identify chart patterns
 
+## Trend interpretation
+- When `[Pre-fetched: trend_result]` is present, treat its `price_trend` and
+  `trend_status` as the deterministic technical baseline. Use `price_trend`
+  to distinguish 上涨/下跌/震荡 and use the MA/MACD/RSI fields to explain it.
+- Do not call a clear local `price_trend` of 上涨 or 下跌 震荡 merely because
+  one indicator is neutral. If other evidence disagrees, describe the conflict
+  and the confirmation condition instead of silently reversing the baseline.
+
 {baseline}
 {skills}
 ## Output Format
@@ -77,6 +85,7 @@ Return **only** a JSON object (no markdown fences):
     "stop_loss": <float>
   }},
   "trend_score": 0-100,
+  "price_trend": "up|down|sideways",
   "ma_alignment": "bullish|neutral|bearish",
   "volume_status": "heavy|normal|light",
   "pattern": "<detected pattern or none>"

@@ -658,6 +658,14 @@ def _contains_trend_hint(text: str, hints: Tuple[str, ...]) -> bool:
 
 def _infer_trend_direction(trend: Dict[str, Any]) -> str:
     """Infer the final trend direction from trend_status and ma_alignment."""
+    price_trend = str(trend.get("price_trend", "")).strip().lower()
+    if price_trend in {"上涨", "up", "uptrend"}:
+        return "bullish"
+    if price_trend in {"下跌", "down", "downtrend"}:
+        return "bearish"
+    if price_trend in {"震荡", "sideways", "neutral"}:
+        return "neutral"
+
     combined = " ".join(
         str(trend.get(key, "")).strip()
         for key in ("trend_status", "ma_alignment")
@@ -4513,6 +4521,13 @@ class GeminiAnalyzer:
             
         today = context.get('today', {})
         unknown_text = get_unknown_text(report_language)
+
+        def _format_trend_metric(value: Any, spec: str) -> str:
+            """Format optional local trend metrics without breaking prompt construction."""
+            try:
+                return format(float(value), spec)
+            except (TypeError, ValueError):
+                return unknown_text
         no_data_text = get_no_data_text(report_language)
         quote_section_title, close_price_label = _phase_aware_quote_labels(context)
         subject_type = "加密货币" if is_crypto_context else "股票"
@@ -4740,6 +4755,13 @@ class GeminiAnalyzer:
                 volume_change_ratio=context.get('volume_change_ratio'),
             )
             consistency_notes = trend.get('prompt_consistency_notes', [])
+            price_structure_section = f"""
+| 价格结构趋势 | {trend.get('price_trend', unknown_text)} | 20日价格方向基线 |
+| 20日拟合斜率 | {_format_trend_metric(trend.get('price_slope_pct', 0), '+.2f')}% | 正值偏上涨，负值偏下跌 |
+| 20日首尾涨跌幅 | {_format_trend_metric(trend.get('price_return_pct', 0), '+.2f')}% | |
+| 20日区间振幅 | {_format_trend_metric(trend.get('price_range_pct', 0), '.2f')}% | |
+| 方向效率 | {_format_trend_metric(trend.get('directional_efficiency', 0), '.2f')} | 越接近1越单边，接近0越震荡 |
+"""
             if use_legacy_default_prompt:
                 bias_warning = "🚨 超过5%，严禁追高！" if trend.get('bias_ma5', 0) > 5 else "✅ 安全范围"
                 prompt += f"""
@@ -4749,6 +4771,7 @@ class GeminiAnalyzer:
 | 趋势状态 | {trend.get('trend_status', unknown_text)} | |
 | 均线排列 | {trend.get('ma_alignment', unknown_text)} | MA5>MA10>MA20为多头 |
 | 趋势强度 | {trend.get('trend_strength', 0)}/100 | |
+{price_structure_section}
 | **乖离率(MA5)** | **{trend.get('bias_ma5', 0):+.2f}%** | {bias_warning} |
 | 乖离率(MA10) | {trend.get('bias_ma10', 0):+.2f}% | |
 | 量能状态 | {trend.get('volume_status', unknown_text)} | {trend.get('volume_trend', '')} |
@@ -4781,6 +4804,7 @@ class GeminiAnalyzer:
 | 趋势状态 | {trend.get('trend_status', unknown_text)} | |
 | 均线排列 | {trend.get('ma_alignment', unknown_text)} | 结合激活技能判断结构强弱 |
 | 趋势强度 | {trend.get('trend_strength', 0)}/100 | |
+{price_structure_section}
 | **价格位置(MA5)** | **{trend.get('bias_ma5', 0):+.2f}%** | {bias_warning} |
 | 价格位置(MA10) | {trend.get('bias_ma10', 0):+.2f}% | |
 | 量能状态 | {trend.get('volume_status', unknown_text)} | {trend.get('volume_trend', '')} |

@@ -88,6 +88,14 @@ class TrendAnalysisResult:
     trend_status: TrendStatus = TrendStatus.CONSOLIDATION
     ma_alignment: str = ""           # 均线排列描述
     trend_strength: float = 0.0      # 趋势强度 0-100
+
+    # 价格结构（用于区分真正的方向性走势与均线滞后造成的误判）
+    price_trend: str = "震荡"        # 上涨 / 下跌 / 震荡
+    price_slope_pct: float = 0.0      # 观察窗口内线性拟合的累计斜率（%）
+    price_return_pct: float = 0.0     # 观察窗口首尾收盘价变化（%）
+    price_range_pct: float = 0.0      # 观察窗口最高最低价振幅（%）
+    directional_efficiency: float = 0.0  # 净位移 / 总路径，范围 0-1
+    price_structure_available: bool = False
     
     # 均线数据
     ma5: float = 0.0
@@ -138,6 +146,12 @@ class TrendAnalysisResult:
             'trend_status': self.trend_status.value,
             'ma_alignment': self.ma_alignment,
             'trend_strength': self.trend_strength,
+            'price_trend': self.price_trend,
+            'price_slope_pct': self.price_slope_pct,
+            'price_return_pct': self.price_return_pct,
+            'price_range_pct': self.price_range_pct,
+            'directional_efficiency': self.directional_efficiency,
+            'price_structure_available': self.price_structure_available,
             'ma5': self.ma5,
             'ma10': self.ma10,
             'ma20': self.ma20,
@@ -185,6 +199,13 @@ class StockTrendAnalyzer:
     VOLUME_SHRINK_RATIO = 0.7   # 缩量判断阈值（当日量/5日均量）
     VOLUME_HEAVY_RATIO = 1.5    # 放量判断阈值
     MA_SUPPORT_TOLERANCE = 0.02  # MA 支撑判断容忍度（2%）
+
+    # 价格结构参数。20 个交易日能覆盖短中期走势，同时避免单日噪声主导结论。
+    PRICE_TREND_LOOKBACK = 20
+    PRICE_DIRECTION_THRESHOLD_PCT = 2.0
+    PRICE_CONSOLIDATION_RANGE_PCT = 8.0
+    PRICE_CONSOLIDATION_EFFICIENCY = 0.45
+    MA_ALIGNMENT_TOLERANCE_PCT = 0.005  # 均线差异小于 0.5% 时视为基本重合
 
     # MACD 参数（标准12/26/9）
     MACD_FAST = 12              # 快线周期
@@ -341,12 +362,40 @@ class StockTrendAnalyzer:
         """
         分析趋势状态
         
-        核心逻辑：判断均线排列和趋势强度
+        核心逻辑：结合价格结构和均线排列判断趋势强度。
+
+        均线是滞后指标，仅靠 MA5/10/20 的严格大小关系会把横盘中的微小
+        差异误判成弱趋势。因此先计算价格斜率、区间振幅和方向效率，再用
+        容差判断均线排列；价格结构明确时，允许在均线尚未完全排列前给出
+        “弱势多/空头”，而不是直接返回趋势不明。
         """
         ma5, ma10, ma20 = result.ma5, result.ma10, result.ma20
+
+        price_trend = self._analyze_price_structure(df, result)
+        ma_tolerance = abs(ma20) * self.MA_ALIGNMENT_TOLERANCE_PCT if ma20 > 0 else 0.0
+
+        ma5_above_ma10 = ma5 > ma10 + ma_tolerance
+        ma10_above_ma20 = ma10 > ma20 + ma_tolerance
+        ma5_below_ma10 = ma5 < ma10 - ma_tolerance
+        ma10_below_ma20 = ma10 < ma20 - ma_tolerance
+
+        # 区间窄、路径来回反复时，盘整优先级高于均线的微弱排列。
+        is_consolidating = (
+            price_trend == "震荡"
+            and (
+                result.price_range_pct <= self.PRICE_CONSOLIDATION_RANGE_PCT
+                or result.directional_efficiency <= self.PRICE_CONSOLIDATION_EFFICIENCY
+            )
+        )
+
+        if is_consolidating:
+            result.trend_status = TrendStatus.CONSOLIDATION
+            result.ma_alignment = "价格区间震荡，均线缠绕"
+            result.trend_strength = 50
+            return
         
         # 判断均线排列
-        if ma5 > ma10 > ma20:
+        if ma5_above_ma10 and ma10_above_ma20 and price_trend != "下跌":
             # 检查间距是否在扩大（强势）
             prev = df.iloc[-5] if len(df) >= 5 else df.iloc[-1]
             prev_spread = (prev['MA5'] - prev['MA20']) / prev['MA20'] * 100 if prev['MA20'] > 0 else 0
@@ -361,12 +410,15 @@ class StockTrendAnalyzer:
                 result.ma_alignment = "多头排列 MA5>MA10>MA20"
                 result.trend_strength = 75
                 
-        elif ma5 > ma10 and ma10 <= ma20:
+        elif (
+            (ma5_above_ma10 and not ma10_above_ma20)
+            or price_trend == "上涨"
+        ):
             result.trend_status = TrendStatus.WEAK_BULL
             result.ma_alignment = "弱势多头，MA5>MA10 但 MA10≤MA20"
             result.trend_strength = 55
             
-        elif ma5 < ma10 < ma20:
+        elif ma5_below_ma10 and ma10_below_ma20 and price_trend != "上涨":
             prev = df.iloc[-5] if len(df) >= 5 else df.iloc[-1]
             prev_spread = (prev['MA20'] - prev['MA5']) / prev['MA5'] * 100 if prev['MA5'] > 0 else 0
             curr_spread = (ma20 - ma5) / ma5 * 100 if ma5 > 0 else 0
@@ -380,7 +432,10 @@ class StockTrendAnalyzer:
                 result.ma_alignment = "空头排列 MA5<MA10<MA20"
                 result.trend_strength = 25
                 
-        elif ma5 < ma10 and ma10 >= ma20:
+        elif (
+            (ma5_below_ma10 and not ma10_below_ma20)
+            or price_trend == "下跌"
+        ):
             result.trend_status = TrendStatus.WEAK_BEAR
             result.ma_alignment = "弱势空头，MA5<MA10 但 MA10≥MA20"
             result.trend_strength = 40
@@ -389,6 +444,54 @@ class StockTrendAnalyzer:
             result.trend_status = TrendStatus.CONSOLIDATION
             result.ma_alignment = "均线缠绕，趋势不明"
             result.trend_strength = 50
+
+    def _analyze_price_structure(self, df: pd.DataFrame, result: TrendAnalysisResult) -> str:
+        """从收盘价的方向、振幅和路径效率识别上涨/下跌/震荡。"""
+        if "close" not in df.columns:
+            return result.price_trend
+
+        close = pd.to_numeric(df["close"], errors="coerce").dropna()
+        close = close.tail(min(self.PRICE_TREND_LOOKBACK, len(close)))
+        if len(close) < 5:
+            return result.price_trend
+
+        result.price_structure_available = True
+
+        values = close.to_numpy(dtype=float)
+        first_price = float(values[0])
+        mean_price = float(np.mean(values))
+        if not np.isfinite(first_price) or not np.isfinite(mean_price) or first_price <= 0 or mean_price <= 0:
+            return result.price_trend
+
+        x = np.arange(len(values), dtype=float)
+        slope = float(np.polyfit(x, values, 1)[0])
+        slope_pct = slope * (len(values) - 1) / mean_price * 100
+        return_pct = (float(values[-1]) - first_price) / first_price * 100
+        range_pct = (float(np.max(values)) - float(np.min(values))) / first_price * 100
+        path = float(np.abs(np.diff(values)).sum())
+        efficiency = abs(float(values[-1]) - first_price) / path if path > 0 else 0.0
+        efficiency = float(np.clip(efficiency, 0.0, 1.0))
+
+        result.price_slope_pct = round(slope_pct, 4)
+        result.price_return_pct = round(return_pct, 4)
+        result.price_range_pct = round(range_pct, 4)
+        result.directional_efficiency = round(efficiency, 4)
+
+        threshold = self.PRICE_DIRECTION_THRESHOLD_PCT
+        directional_up = (
+            slope_pct >= threshold and efficiency >= self.PRICE_CONSOLIDATION_EFFICIENCY
+        ) or (return_pct >= threshold * 1.5 and efficiency >= 0.35)
+        directional_down = (
+            slope_pct <= -threshold and efficiency >= self.PRICE_CONSOLIDATION_EFFICIENCY
+        ) or (return_pct <= -threshold * 1.5 and efficiency >= 0.35)
+
+        if directional_up and not directional_down:
+            result.price_trend = "上涨"
+        elif directional_down and not directional_up:
+            result.price_trend = "下跌"
+        else:
+            result.price_trend = "震荡"
+        return result.price_trend
     
     def _calculate_bias(self, result: TrendAnalysisResult) -> None:
         """

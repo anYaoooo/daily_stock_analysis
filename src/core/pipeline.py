@@ -821,6 +821,12 @@ class StockAnalysisPipeline:
             # Step 7.7: price_position fallback
             if result:
                 fill_price_position_if_needed(result, trend_result, realtime_quote)
+                self._apply_local_trend_baseline(
+                    result,
+                    trend_result,
+                    getattr(result, "report_language", None)
+                    or getattr(self.config, "report_language", "zh"),
+                )
                 action_source_advice = getattr(result, "operation_advice", None)
                 stabilize_decision_with_structure(result, trend_result, fundamental_context)
                 adjustments = apply_phase_decision_guardrails(
@@ -1009,6 +1015,12 @@ class StockAnalysisPipeline:
                 'trend_status': trend_result.trend_status.value,
                 'ma_alignment': trend_result.ma_alignment,
                 'trend_strength': trend_result.trend_strength,
+                'price_trend': trend_result.price_trend,
+                'price_slope_pct': trend_result.price_slope_pct,
+                'price_return_pct': trend_result.price_return_pct,
+                'price_range_pct': trend_result.price_range_pct,
+                'directional_efficiency': trend_result.directional_efficiency,
+                'price_structure_available': trend_result.price_structure_available,
                 'bias_ma5': trend_result.bias_ma5,
                 'bias_ma10': trend_result.bias_ma10,
                 'volume_status': trend_result.volume_status.value,
@@ -1997,11 +2009,46 @@ class StockAnalysisPipeline:
     ) -> str:
         if trend_result is None:
             return ""
+        if getattr(trend_result, "price_structure_available", False):
+            price_trend = str(getattr(trend_result, "price_trend", "")).strip()
+            direction_labels = {"上涨": "看多", "下跌": "看空", "震荡": "震荡"}
+            label = direction_labels.get(price_trend)
+            if label:
+                return localize_trend_prediction(label, report_language)
         trend_status = getattr(trend_result, "trend_status", None)
         value = getattr(trend_status, "value", None) or str(trend_status or "").strip()
         if report_language != "en":
             return value
         return localize_trend_prediction(value, report_language)
+
+    @staticmethod
+    def _apply_local_trend_baseline(
+        result: AnalysisResult,
+        trend_result: Optional[TrendAnalysisResult],
+        report_language: str,
+    ) -> None:
+        """Make the measured price direction authoritative for the report headline."""
+        if trend_result is None or not getattr(trend_result, "price_structure_available", False):
+            return
+        label = StockAnalysisPipeline._trend_label_fallback(trend_result, report_language)
+        if not label:
+            return
+        previous = str(getattr(result, "trend_prediction", "") or "").strip()
+        result.trend_prediction = label
+        if isinstance(getattr(result, "dashboard", None), dict):
+            result.dashboard["trend_prediction"] = label
+        if previous and previous != label:
+            StockAnalysisPipeline._mark_trend_baseline_source(result)
+
+    @staticmethod
+    def _mark_trend_baseline_source(result: AnalysisResult) -> None:
+        if "trend:technical_baseline" in (result.data_sources or ""):
+            return
+        result.data_sources = (
+            f"{result.data_sources},trend:technical_baseline"
+            if result.data_sources
+            else "trend:technical_baseline"
+        )
 
     @staticmethod
     def _trend_signal_fallback(
@@ -2095,6 +2142,47 @@ class StockAnalysisPipeline:
         ):
             risk_factors = getattr(trend_result, "risk_factors", None) or []
             intelligence["risk_alerts"] = list(risk_factors)
+
+        # Preserve the deterministic technical baseline even when the Agent
+        # returned a partial or independently worded data_perspective block.
+        if trend_result is not None:
+            data_perspective = dashboard.get("data_perspective")
+            if not isinstance(data_perspective, dict):
+                data_perspective = {}
+            local_trend = data_perspective.get("trend_status")
+            if not isinstance(local_trend, dict):
+                local_trend = {}
+            local_trend.update({
+                "ma_alignment": trend_result.ma_alignment or trend_result.trend_status.value,
+                "trend_score": trend_result.trend_strength,
+                "is_bullish": trend_result.price_trend == "上涨"
+                or trend_result.trend_status.value in {"强势多头", "多头排列", "弱势多头"},
+            })
+            if trend_result.price_structure_available:
+                local_trend.update({
+                    "price_trend": trend_result.price_trend,
+                    "price_slope_pct": trend_result.price_slope_pct,
+                    "price_return_pct": trend_result.price_return_pct,
+                    "price_range_pct": trend_result.price_range_pct,
+                    "directional_efficiency": trend_result.directional_efficiency,
+                })
+            data_perspective["trend_status"] = local_trend
+
+            price_position = data_perspective.get("price_position")
+            if not isinstance(price_position, dict):
+                price_position = {}
+            price_position.update({
+                "current_price": trend_result.current_price,
+                "ma5": trend_result.ma5,
+                "ma10": trend_result.ma10,
+                "ma20": trend_result.ma20,
+                "bias_ma5": trend_result.bias_ma5,
+            })
+            if trend_result.price_structure_available:
+                price_position["price_trend"] = trend_result.price_trend
+            data_perspective["price_position"] = price_position
+            dashboard["data_perspective"] = data_perspective
+            self._apply_local_trend_baseline(result, trend_result, report_language)
 
         if result.decision_type in ("buy", "hold"):
             battle = dashboard.get("battle_plan")

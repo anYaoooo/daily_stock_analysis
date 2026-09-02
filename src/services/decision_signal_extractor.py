@@ -12,7 +12,7 @@ from data_provider.base import normalize_stock_code
 
 from src.analyzer import AnalysisResult
 from src.core.trading_calendar import get_market_for_stock
-from src.schemas.decision_action import build_action_fields
+from src.schemas.decision_action import build_action_fields, localize_action_label
 from src.services.decision_signal_service import DecisionSignalService
 from src.utils.sniper_points import (
     extract_directional_strategy_plans,
@@ -38,6 +38,13 @@ _INTRADAY_MARKET_PHASES = {
     "lunch_break",
     "closing_auction",
 }
+_CRYPTO_TERMINAL_PLAN_STATES = frozenset({
+    "selloff_rebound_missed",
+    "right_side_missed",
+    "late_extension",
+    "exhaustion_candidate",
+    "invalidated",
+})
 
 
 def build_decision_signal_payload_from_report(
@@ -359,8 +366,75 @@ def _apply_crypto_plan_freeze(
             if str(_as_mapping(item.get("metadata")).get("plan_key") or "").strip()
             in {"", plan_key}
         ]
+
+    strategy_plan = _as_mapping(metadata.get("strategy_plan"))
+    plan_state = str(strategy_plan.get("trigger_execution_state") or "").strip().lower()
+    if plan_state in _CRYPTO_TERMINAL_PLAN_STATES:
+        # A refresh that explicitly says the frozen opportunity was missed or
+        # invalidated must close the old actionable signal.  Otherwise the
+        # service's neutral-observation protection keeps publishing the stale
+        # buy/sell action after the execution window has gone.
+        for item in same_horizon:
+            if _signal_action_direction(str(item.get("action") or "")) is None:
+                continue
+            item_metadata = _as_mapping(item.get("metadata"))
+            item_metadata["plan_lifecycle"] = {
+                "state": "invalidated_by_observation",
+                "reason": plan_state,
+                "source_report_id": payload.get("source_report_id"),
+            }
+            service.update_status(
+                int(item["id"]),
+                status="invalidated",
+                metadata=item_metadata,
+                replace_metadata=True,
+            )
+        metadata["plan_lifecycle"] = {
+            "state": "terminal_observation",
+            "reason": plan_state,
+        }
+        payload = dict(payload)
+        payload["action"] = "watch"
+        payload["action_label"] = localize_action_label(
+            "watch", payload.get("report_language")
+        )
+        payload["metadata"] = metadata
+        return payload
     new_action = str(payload.get("action") or "").strip().lower()
     new_direction = _signal_action_direction(new_action)
+
+    risk_guard = _crypto_backtest_risk_guard(stock_code=stock_code, horizon=str(horizon))
+    if risk_guard is not None and new_direction is not None:
+        # Do not create or refresh an executable plan while the latest
+        # completed BTC trades are inside a configured risk stop.  Existing
+        # unfilled plans are invalidated so they cannot bypass the guard on a
+        # later monitor tick.
+        for item in same_horizon:
+            if _signal_action_direction(str(item.get("action") or "")) is None:
+                continue
+            item_metadata = _as_mapping(item.get("metadata"))
+            item_metadata["plan_lifecycle"] = {
+                "state": "invalidated_by_risk_guard",
+                "reason": risk_guard.get("reason"),
+            }
+            service.update_status(
+                int(item["id"]),
+                status="invalidated",
+                metadata=item_metadata,
+                replace_metadata=True,
+            )
+        metadata["risk_guard"] = risk_guard
+        metadata["plan_lifecycle"] = {
+            "state": "risk_guarded",
+            "reason": risk_guard.get("reason"),
+        }
+        payload = dict(payload)
+        payload["action"] = "watch"
+        payload["action_label"] = localize_action_label(
+            "watch", payload.get("report_language")
+        )
+        payload["metadata"] = metadata
+        return payload
 
     if new_direction is not None and not plan_key:
         for item in same_horizon:
@@ -441,6 +515,67 @@ def _apply_crypto_plan_freeze(
 def _crypto_plan_key(stock_code: str, horizon: str) -> str:
     """Stable identity for one BTC execution plan lifecycle."""
     return f"crypto:{normalize_stock_code(stock_code).upper()}:{str(horizon).strip().lower()}"
+
+
+def _crypto_backtest_risk_guard(*, stock_code: str, horizon: str) -> Optional[Dict[str, Any]]:
+    """Return a live risk-stop diagnostic for a BTC plan, if one is active."""
+
+    try:
+        from src.config import get_config
+        from src.core.crypto_backtest_engine import CryptoBacktestEngine
+        from src.repositories.crypto_backtest_repo import CryptoBacktestRepository
+
+        config = get_config()
+        if not bool(getattr(config, "backtest_enabled", True)):
+            return None
+        engine_version = str(
+            getattr(config, "crypto_backtest_engine_version", "btc-plan-v5")
+            or "btc-plan-v5"
+        )
+        result_horizon = "intraday" if horizon == "intraday" else "daily"
+        rows = CryptoBacktestRepository().list_results(
+            code=stock_code,
+            horizon=result_horizon,
+            engine_version=engine_version,
+            limit=200,
+        )
+        filled = [
+            row
+            for row in rows
+            if getattr(row, "eval_status", None) == "completed"
+            and CryptoBacktestEngine._row_entry_triggered(row)
+        ]
+        if not filled:
+            return None
+        diagnostics = CryptoBacktestEngine._risk_control_diagnostics(
+            filled,
+            initial_equity=float(getattr(config, "crypto_backtest_initial_equity", 10000.0)),
+        )
+        if not diagnostics.get("would_block_new_trade"):
+            return None
+        triggered = diagnostics.get("triggered") or {}
+        # The backtest's portfolio-cap metric is a historical overlap audit;
+        # completed rows do not represent positions that are open right now.
+        # Only current-streak and current-day loss stops are actionable here.
+        reasons = [
+            name
+            for name, active in triggered.items()
+            if active and name in {"consecutive_loss_cooldown", "daily_loss_limit"}
+        ]
+        if not reasons:
+            return None
+        diagnostics = {
+            "reason": ",".join(reasons) or "risk_control",
+            "current_consecutive_losses": diagnostics.get("current_consecutive_losses", 0),
+            "current_daily_loss_pct": diagnostics.get("current_daily_loss_pct", 0.0),
+            "thresholds": diagnostics.get("thresholds") or {},
+        }
+        return diagnostics
+    except Exception as exc:
+        # A missing/temporarily unavailable audit must not break report
+        # generation; it simply leaves the normal plan path untouched.
+        logger.warning("BTC risk guard unavailable; keeping normal plan path: %s", exc)
+        return None
 
 
 def _default_crypto_horizon(

@@ -1729,6 +1729,37 @@ class TestEventMonitorAsync(unittest.IsolatedAsyncioTestCase):
             manager.get_realtime_quote.assert_called_once_with("600519")
         self.assertEqual(len(triggered), 2)
 
+    async def test_crypto_quote_uses_dedicated_fallback_when_manager_has_transient_gap(self):
+        from data_provider.realtime_types import UnifiedRealtimeQuote
+        from src.agent.events import EventMonitor, PriceChangeAlert
+
+        monitor = EventMonitor()
+        rule = PriceChangeAlert(stock_code="BTC", direction="down", change_pct=1.0)
+        manager = MagicMock()
+        manager.get_realtime_quote.return_value = None
+        fallback_quote = UnifiedRealtimeQuote(
+            code="BTCUSDT",
+            name="Bitcoin",
+            source="okx",
+            price=70000.0,
+            change_pct=-2.0,
+        )
+
+        async def _run_inline(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("data_provider.DataFetcherManager", return_value=manager), patch(
+            "data_provider.crypto_fetcher.CryptoFetcher.get_realtime_quote",
+            return_value=fallback_quote,
+        ), patch("src.config.get_config", return_value=SimpleNamespace(enable_realtime_quote=True)), patch(
+            "src.agent.events.asyncio.to_thread", new=_run_inline
+        ):
+            triggered = await monitor._check_price_change(rule)
+
+        assert triggered is not None
+        assert triggered.current_value == -2.0
+        manager.get_realtime_quote.assert_called_once_with("BTC")
+
     async def test_check_volume_safe_when_fetch_returns_none(self):
         """_check_volume must not crash when get_daily_data returns None."""
         from src.agent.events import EventMonitor, VolumeAlert

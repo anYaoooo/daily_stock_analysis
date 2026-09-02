@@ -1999,13 +1999,36 @@ class CryptoBacktestEngine:
             max(0.0, -min(daily_pnl.values(), default=0.0) / initial_equity * 100.0)
             if initial_equity else 0.0
         )
+        latest_timestamp = next(
+            (
+                getattr(row, "entry_triggered_at", None)
+                or getattr(row, "analysis_created_at", None)
+                for row in reversed(ordered)
+                if getattr(row, "entry_triggered_at", None)
+                or getattr(row, "analysis_created_at", None)
+            ),
+            None,
+        )
+        latest_day = (
+            latest_timestamp.date().isoformat()
+            if hasattr(latest_timestamp, "date")
+            else None
+        )
+        current_daily_loss_pct = (
+            max(0.0, -daily_pnl.get(latest_day, 0.0) / initial_equity * 100.0)
+            if initial_equity and latest_day
+            else 0.0
+        )
         max_concurrent_risk_pct = 0.0
         for point in sorted({point for start, end, _risk in risk_intervals for point in (start, end)}):
             active_risk = sum(risk for start, end, risk in risk_intervals if start <= point < end)
             max_concurrent_risk_pct = max(max_concurrent_risk_pct, active_risk)
         triggered = {
-            "consecutive_loss_cooldown": max_consecutive_losses >= cooldown,
-            "daily_loss_limit": worst_daily_loss_pct >= daily_limit,
+            # A cooldown applies to the current losing streak.  Using the
+            # historical maximum here permanently blocks new trades after
+            # any old three-loss streak, even when later trades recovered.
+            "consecutive_loss_cooldown": consecutive >= cooldown,
+            "daily_loss_limit": current_daily_loss_pct >= daily_limit,
             "portfolio_risk_cap": max_concurrent_risk_pct > portfolio_cap,
         }
         return {
@@ -2016,7 +2039,9 @@ class CryptoBacktestEngine:
                 "daily_loss_limit_pct": daily_limit,
             },
             "max_consecutive_losses": max_consecutive_losses,
+            "current_consecutive_losses": consecutive,
             "worst_daily_loss_pct": round(worst_daily_loss_pct, 4),
+            "current_daily_loss_pct": round(current_daily_loss_pct, 4),
             "max_single_trade_risk_pct": round(max_risk_pct, 4),
             "max_concurrent_risk_pct": round(max_concurrent_risk_pct, 4),
             "triggered": triggered,

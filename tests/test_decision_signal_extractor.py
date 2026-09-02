@@ -14,6 +14,7 @@ from src.services.decision_signal_extractor import (
     build_decision_signal_payload_from_report,
     extract_and_persist_from_analysis_result,
 )
+import src.services.decision_signal_extractor as decision_signal_extractor_module
 from src.services.decision_signal_service import DecisionSignalService
 from src.storage import DatabaseManager
 
@@ -484,6 +485,101 @@ def test_wait_plan_does_not_publish_fake_entry_range() -> None:
     assert payload is not None
     assert "entry_low" not in payload
     assert "entry_high" not in payload
+
+
+def test_terminal_crypto_observation_invalidates_stale_actionable_plan(isolated_db) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+    ready = _result()
+    ready.dashboard["battle_plan"]["intraday_plan"] = {
+        "enabled": True,
+        "direction": "long",
+        "entry_zone": "1710-1720",
+        "entry_price": 1715,
+        "stop_loss": 1688,
+        "take_profit": 1760,
+        "trigger_execution_state": "selloff_rebound_trial_ready",
+    }
+    first = extract_and_persist_from_analysis_result(
+        ready,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=904,
+        trace_id="trace-ready",
+        query_source="btc_volatility",
+        report_type="simple",
+        service=service,
+    )
+    assert first is not None
+    stale_id = first["item"]["id"]
+
+    missed = _result(operation_advice="观望", decision_type="hold", action="watch")
+    missed.dashboard["battle_plan"]["intraday_plan"] = {
+        "enabled": False,
+        "direction": "wait",
+        "entry_zone": "1710-1720",
+        "no_trade_reason": "本轮反弹已错过",
+        "trigger_execution_state": "selloff_rebound_missed",
+    }
+    second = extract_and_persist_from_analysis_result(
+        missed,
+        context_snapshot={"analysis_mode": "hourly"},
+        source_report_id=905,
+        trace_id="trace-missed",
+        query_source="hourly_schedule",
+        report_type="simple",
+        service=service,
+    )
+
+    assert second is not None
+    assert second["item"]["action"] == "watch"
+    assert service.get_signal(stale_id)["status"] == "invalidated"
+
+
+def test_crypto_risk_guard_downgrades_new_actionable_plan(isolated_db, monkeypatch) -> None:
+    service = DecisionSignalService(db_manager=isolated_db)
+    existing = service.create_signal(
+        {
+            "stock_code": "BTC",
+            "stock_name": "Bitcoin",
+            "market": "crypto",
+            "source_type": "analysis",
+            "source_report_id": 906,
+            "trace_id": "trace-risk-existing",
+            "trigger_source": "btc_volatility",
+            "action": "buy",
+            "horizon": "intraday",
+            "entry_low": 100,
+            "entry_high": 101,
+            "stop_loss": 95,
+            "target_price": 110,
+        }
+    )["item"]
+    monkeypatch.setattr(
+        decision_signal_extractor_module,
+        "_crypto_backtest_risk_guard",
+        lambda **_kwargs: {
+            "reason": "consecutive_loss_cooldown",
+            "current_consecutive_losses": 3,
+            "thresholds": {"consecutive_loss_cooldown": 3},
+        },
+    )
+
+    guarded = _apply_crypto_plan_freeze(
+        {
+            "market": "crypto",
+            "stock_code": "BTC",
+            "action": "buy",
+            "action_label": "买入",
+            "horizon": "intraday",
+            "report_language": "zh",
+            "metadata": {"plan_key": "crypto:BTC:intraday"},
+        },
+        service,
+    )
+
+    assert guarded["action"] == "watch"
+    assert guarded["action_label"] == "观望"
+    assert guarded["metadata"]["plan_lifecycle"]["state"] == "risk_guarded"
+    assert service.get_signal(existing["id"])["status"] == "invalidated"
 
 
 def test_daily_and_hourly_reports_keep_separate_plan_identities() -> None:

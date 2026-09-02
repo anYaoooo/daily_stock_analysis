@@ -901,6 +901,42 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
         assert result["simulated_exit_reason"] == "take_profit"
         assert result["outcome"] == "win"
 
+    def test_risk_guard_uses_current_streak_not_historical_maximum(self):
+        base = datetime(2026, 1, 1)
+
+        def row(index, outcome):
+            pnl = 100 if outcome == "win" else -100
+            return SimpleNamespace(
+                analysis_history_id=index,
+                analysis_created_at=base + timedelta(days=index),
+                entry_triggered_at=base + timedelta(days=index),
+                first_hit_at=base + timedelta(days=index, hours=1),
+                outcome=outcome,
+                diagnostics_json=(
+                    '{"execution":{"consecutive_loss_cooldown":3,'
+                    '"daily_loss_limit_pct":3,"max_portfolio_risk_pct":2},'
+                    '"trade":{"risk_budget":100,"equity_before":10000,'
+                    f'"net_pnl":{pnl}}}'
+                ),
+            )
+
+        recovered = CryptoBacktestEngine._risk_control_diagnostics(
+            [row(1, "loss"), row(2, "loss"), row(3, "loss"), row(4, "win"), row(5, "loss")],
+            initial_equity=10000,
+        )
+        assert recovered["max_consecutive_losses"] == 3
+        assert recovered["current_consecutive_losses"] == 1
+        assert recovered["triggered"]["consecutive_loss_cooldown"] is False
+        assert recovered["would_block_new_trade"] is False
+
+        blocked = CryptoBacktestEngine._risk_control_diagnostics(
+            [row(1, "win"), row(2, "loss"), row(3, "loss"), row(4, "loss")],
+            initial_equity=10000,
+        )
+        assert blocked["current_consecutive_losses"] == 3
+        assert blocked["triggered"]["consecutive_loss_cooldown"] is True
+        assert blocked["would_block_new_trade"] is True
+
 
 if __name__ == "__main__":
     unittest.main()

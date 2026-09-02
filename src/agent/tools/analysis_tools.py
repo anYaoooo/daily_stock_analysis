@@ -457,7 +457,18 @@ def _handle_analyze_pattern(stock_code: str, days: int = 60) -> dict:
         recent_high = max(h[n - 10:])
         recent_low = min(l[n - 10:])
         box_range_pct = (recent_high - recent_low) / recent_low * 100 if recent_low > 0 else 0
-        if box_range_pct < 8:
+        box_closes = c[n - 10:]
+        box_path = sum(abs(float(box_closes[i]) - float(box_closes[i - 1])) for i in range(1, len(box_closes)))
+        box_net_change = abs(float(box_closes[-1]) - float(box_closes[0]))
+        box_efficiency = box_net_change / box_path if box_path > 0 else 0.0
+        box_net_change_pct = (
+            box_net_change / abs(float(box_closes[0])) * 100
+            if float(box_closes[0]) != 0
+            else 0.0
+        )
+        # A narrow one-way drift is a trend, not a box. Require low directional
+        # efficiency and a modest net move before labelling consolidation.
+        if box_range_pct < 8 and box_efficiency < 0.55 and box_net_change_pct < 4:
             patterns_detected.append({
                 "pattern": "箱体震荡", "type": "consolidation",
                 "day_offset": 0, "strength": "中",
