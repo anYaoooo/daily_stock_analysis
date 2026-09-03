@@ -26,6 +26,7 @@ class CryptoBacktestServiceHelperTestCase(unittest.TestCase):
             diagnostics_json=json.dumps({
                 "summary_contract_version": "btc-backtest-summary-v2",
                 "metric_denominators": {"signal_quality": "completed evaluations"},
+                "plan_level_result": {"win_rate_pct": 50.0},
                 "guard_forward_comparison": {},
             }),
         )

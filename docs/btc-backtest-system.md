@@ -338,8 +338,9 @@ else:
 | `direction_accuracy_raw_pct` | 原始方向命中率（信号触发后，以纯价格 MFE/MAE 判断，不含成本） |
 | `signal_quality_rate_pct` | 信号质量率：已形成信号 / 已完成评估 |
 | `execution_fill_rate_pct` | 执行成交率：实际成交 / 已形成信号 |
-| `win_rate_pct` | 胜率，胜 / (胜 + 负) |
+| `win_rate_pct` | 账户层胜率：独立成交的胜 / (胜 + 负)，重叠持仓先排除 |
 | `avg_simulated_return_pct` | 平均单笔账户净收益率 |
+| `diagnostics.plan_level_result.win_rate_pct` | 计划层胜率：所有已成交计划的胜 / (胜 + 负)，包含重叠计划；用于评价计划本身，不代表账户可实现收益 |
 | `diagnostics.signal_triggered_count` | 已形成交易信号的计划数 |
 | `diagnostics.rejected_order_count` | 信号形成后因成交价质量门槛被拒绝的委托数 |
 | `diagnostics.order_fill_rate_pct` | 实际成交数 / 信号形成数 |

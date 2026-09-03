@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] BTC 离线训练基线新增固定末段 holdout、holdout 前 horizon purge 和 14/30/50 bps 成本敏感性评估；最新 forecast 不使用 holdout 标签，结果继续保持 research-only。
+- [改进] BTC 离线多任务基线新增 LightGBM 显式模型选项、下一根开盘执行收益标签及按 horizon 去重的手续费/滑点后交易评估，仍保持 research-only 不参与交易决策。
 - [新功能] 增加独立 TimesFM 2.5 BTC 微调训练器，默认冻结预训练主干并使用严格时间切分、purge、验证指标和 checkpoint，保持观察模式且不参与交易决策。
 - [改进] 增加原生 `scripts/ci_gate.ps1` Windows 后端门禁，并允许无 symlink 权限时使用严格的 `CLAUDE.md` 指针文件完成治理校验。
 - [新功能] 可选接入 TimesFM 2.5 PyTorch 股票日线影子预测，支持懒加载、分位数区间与 fail-open 数据质量状态；默认关闭且不参与交易决策。
@@ -15,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] BTC 技术方向判断改用已闭合 K 线、ATR 波动率归一化和对称多空评分，移除股票专用单向买入评分及 Agent 固定衍生品样例数据，并统一小时线方向投票口径。
 - [测试] BTC 离线方向评估支持多前瞻周期、信号覆盖率和扣除双边手续费/滑点后的净收益统计，避免将单一 MFE/MAE 命中率误读为交易收益。
 - [改进] BTC 趋势分析器与加密技术上下文统一使用同一份方向快照；离线评估新增窗口末方向命中率、累计净收益、最大回撤、盈利因子、分数强度分桶和可调方向阈值，区分机会命中与最终交易结果。
+- [修复] BTC 回测同时披露含重叠计划的计划层胜率与排除重叠持仓后的账户层胜率，避免 3 笔被去重盈利将策略表现误读为单一 16.67%。
 
 - [改进] 股票趋势识别新增价格结构证据（20 日斜率、首尾涨跌幅、区间振幅和方向效率），对均线近似重合设置容差并降低箱体震荡误报；Agent 报告的数据透视保留本地技术基线，区分明确上涨、下跌与震荡。
 

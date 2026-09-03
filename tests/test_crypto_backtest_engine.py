@@ -488,6 +488,8 @@ class CryptoBacktestEngineTestCase(unittest.TestCase):
         self.assertEqual(summary["diagnostics"]["raw_triggered_count"], 3)
         self.assertEqual(summary["diagnostics"]["overlap_excluded_count"], 1)
         self.assertEqual(summary["win_rate_pct"], 50.0)
+        self.assertEqual(summary["diagnostics"]["plan_level_result"]["win_rate_pct"], 33.33)
+        self.assertEqual(summary["diagnostics"]["plan_level_result"]["triggered_count"], 3)
         self.assertEqual(summary["diagnostics"]["sample_confidence"]["minimum_sample_count"], 100)
 
     def test_v4_perpetual_deducts_historical_funding(self):

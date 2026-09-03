@@ -507,6 +507,7 @@ class CryptoBacktestService:
         return (
             not isinstance(diagnostics.get("metric_denominators"), dict)
             or diagnostics.get("summary_contract_version") != "btc-backtest-summary-v2"
+            or not isinstance(diagnostics.get("plan_level_result"), dict)
             or (
                 getattr(summary, "scope", None) == "overall"
                 and not isinstance(diagnostics.get("guard_forward_comparison"), dict)

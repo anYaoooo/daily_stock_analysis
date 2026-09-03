@@ -10,7 +10,10 @@ import pytest
 from src.services.btc_training import (
     BtcTrainingConfig,
     BtcTrainingService,
+    SUPPORTED_MODELS,
+    _execution_evaluation,
     build_feature_frame,
+    fixed_holdout_split,
     walk_forward_splits,
 )
 
@@ -39,8 +42,9 @@ def _bars(count: int = 520) -> pd.DataFrame:
 
 
 def test_feature_frame_separates_causal_features_and_future_targets() -> None:
+    bars = _bars(120)
     frame = build_feature_frame(
-        _bars(120),
+        bars,
         config=BtcTrainingConfig(horizons={"1h": 1, "4h": 4}, lookback_bars=20),
     )
     assert frame["feature_log_return_1"].iloc[40] == pytest.approx(
@@ -48,6 +52,9 @@ def test_feature_frame_separates_causal_features_and_future_targets() -> None:
     )
     assert frame["target_return_1h"].iloc[40] == pytest.approx(
         np.log(frame["reference_close"].iloc[41] / frame["reference_close"].iloc[40])
+    )
+    assert frame["target_trade_return_1h"].iloc[40] == pytest.approx(
+        np.log(frame["reference_close"].iloc[41] / bars["open"].iloc[41])
     )
     assert all(column.startswith("feature_") or column.startswith("target_") or column in {"date", "reference_close"} for column in frame)
 
@@ -68,12 +75,26 @@ def test_walk_forward_splits_have_purge_gap() -> None:
     assert all(item["train_start"] == 0 for item in splits)
 
 
+def test_fixed_holdout_split_keeps_tail_and_purge_out_of_training() -> None:
+    split = fixed_holdout_split(500, min_train_bars=200, holdout_bars=100, purge_bars=24)
+    assert split is not None
+    assert split["train_start"] == 0
+    assert split["train_end"] == 376
+    assert split["purge_start"] == 376
+    assert split["purge_end"] == 400
+    assert split["holdout_start"] == 400
+    assert split["holdout_end"] == 500
+    assert split["train_end"] + split["purge_bars"] == split["holdout_start"]
+    assert fixed_holdout_split(399, min_train_bars=300, holdout_bars=100, purge_bars=24) is None
+
+
 def test_service_returns_distribution_volatility_and_regime() -> None:
     config = BtcTrainingConfig(
         horizons={"1h": 1, "4h": 4},
         min_train_bars=120,
         validation_bars=24,
         folds=3,
+        holdout_bars=96,
     )
     result = BtcTrainingService(config).build(_bars(420))
     assert result["mode"] == "offline_research"
@@ -88,6 +109,97 @@ def test_service_returns_distribution_volatility_and_regime() -> None:
     assert forecast["regime"] in {"trend_up", "trend_down", "high_volatility", "sideways"}
     assert result["evaluations"]["4h"]["fold_count"] == 3
     assert "quantile_pinball_loss" in result["evaluations"]["4h"]
+    execution = result["evaluations"]["4h"]["execution_evaluation"]
+    assert execution["non_overlapping"] is True
+    assert execution["decision_stride_bars"] == 4
+    assert execution["round_trip_cost_bps"] == 14.0
+    assert "directional_accuracy" in execution
+    assert execution["decision_count"] <= result["evaluations"]["4h"]["samples"]
+    holdout = result["evaluations"]["4h"]["holdout_evaluation"]
+    assert holdout["data_quality"] == "available"
+    assert holdout["evaluation_type"] == "fixed_tail_holdout"
+    assert holdout["holdout_samples"] == 96
+    assert holdout["split"]["train_end"] + holdout["purge_bars"] == holdout["split"]["holdout_start"]
+    assert holdout["model_fit_scope"] == "rows_before_holdout_purge"
+    assert holdout["cost_sensitivity"]["same_holdout_predictions"] is True
+    assert holdout["cost_sensitivity"]["refit_per_cost"] is False
+    assert [item["round_trip_cost_bps"] for item in holdout["cost_sensitivity"]["scenarios"]] == [14.0, 30.0, 50.0]
+    assert result["forecasts"]["4h"]["training_data_scope"] == "before_holdout_purge"
+    assert result["forecasts"]["4h"]["training_samples"] == holdout["train_samples"]
+
+
+def test_training_config_exposes_model_and_execution_options() -> None:
+    assert SUPPORTED_MODELS == ("linear", "lightgbm")
+    config = BtcTrainingConfig(
+        model="lightgbm",
+        fee_bps_per_side=6,
+        slippage_bps_per_side=3,
+        decision_stride=7,
+        holdout_bars=72,
+        cost_sensitivity_bps=(50, 14, 30, 14),
+    )
+    assert config.model == "lightgbm"
+    assert config.round_trip_cost_bps == 18.0
+    assert config.decision_stride == 7
+    assert config.holdout_bars == 72
+    assert config.cost_sensitivity_bps == (14.0, 30.0, 50.0)
+
+
+def test_execution_evaluation_drops_overlapping_decisions_and_applies_cost() -> None:
+    config = BtcTrainingConfig(
+        horizons={"4h": 4},
+        fee_bps_per_side=5,
+        slippage_bps_per_side=2,
+    )
+    result = _execution_evaluation(
+        [
+            {
+                "decision_index": 10,
+                "predicted_direction": 1,
+                "predicted_return": 0.01,
+                "actual_trade_return": float(np.log(1.01)),
+                "actual_trade_direction": 1,
+            },
+            {
+                "decision_index": 11,
+                "predicted_direction": -1,
+                "predicted_return": -0.01,
+                "actual_trade_return": float(np.log(0.99)),
+                "actual_trade_direction": -1,
+            },
+            {
+                "decision_index": 14,
+                "predicted_direction": -1,
+                "predicted_return": -0.01,
+                "actual_trade_return": float(np.log(0.99)),
+                "actual_trade_direction": -1,
+            },
+        ],
+        horizon=4,
+        config=config,
+    )
+    assert result["decision_count"] == 2
+    assert result["signal_count"] == 2
+    assert result["directional_accuracy"] == 1.0
+    assert result["avg_net_return_pct"] == pytest.approx(0.865051, abs=0.000001)
+    assert result["round_trip_cost_bps"] == 14.0
+
+
+def test_lightgbm_model_runs_through_the_same_walk_forward_contract() -> None:
+    pytest.importorskip("lightgbm")
+    config = BtcTrainingConfig(
+        horizons={"4h": 4},
+        min_train_bars=120,
+        validation_bars=24,
+        folds=2,
+        model="lightgbm",
+        holdout_bars=96,
+    )
+    result = BtcTrainingService(config).build(_bars(420))
+    assert result["model"] == "lightgbm"
+    assert result["forecasts"]["4h"]["model"] == "lightgbm"
+    assert result["evaluations"]["4h"]["execution_evaluation"]["non_overlapping"] is True
+    assert result["evaluations"]["4h"]["holdout_evaluation"]["data_quality"] == "available"
 
 
 def test_service_reports_insufficient_data_without_forecast() -> None:

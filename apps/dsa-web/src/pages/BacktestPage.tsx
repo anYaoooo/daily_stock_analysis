@@ -227,6 +227,9 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
     | undefined;
   const baselineCost = costSensitivity?.scenarios?.find((item) => item.feeBps === 5 && item.slippageBps === 2);
   const conservativeCost = costSensitivity?.scenarios?.find((item) => item.feeBps === 15 && item.slippageBps === 10);
+  const planLevelResult = metrics.diagnostics?.planLevelResult as
+    | { triggeredCount?: number; winCount?: number; lossCount?: number; neutralCount?: number; winRatePct?: number | null }
+    | undefined;
 
   return (
     <Card variant="gradient" padding="md">
@@ -234,8 +237,14 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics | null }> = ({ met
         <span className="label-uppercase">BTC 计划表现</span>
         {sampleConfidence?.isLowConfidence ? <Badge variant="warning">低样本</Badge> : null}
       </div>
-      <MetricRow label={contractMetrics ? '策略契约胜率' : '触价代理胜率'} value={pct(metrics.winRatePct)} />
-      <MetricRow label="成交后非中性净结果命中率" value={pct(metrics.directionAccuracyPct)} />
+      <MetricRow
+        label={contractMetrics ? '策略契约胜率' : '触价代理胜率'}
+        value={`${pct(planLevelResult?.winRatePct)} · ${planLevelResult?.winCount ?? 0} 胜 / ${planLevelResult?.lossCount ?? 0} 负（含重叠计划）`}
+      />
+      <MetricRow
+        label="账户独立成交胜率"
+        value={`${pct(metrics.winRatePct)} · ${metrics.triggeredCount ?? 0} 笔（排除重叠）`}
+      />
       <MetricRow label="原始方向命中率（MFE/MAE）" value={pct(metrics.directionAccuracyRawPct)} />
       <MetricRow label="信号质量率" value={pct(metrics.signalQualityRatePct)} />
       <MetricRow label="执行成交率" value={pct(metrics.executionFillRatePct)} />

@@ -1026,6 +1026,10 @@ class CryptoBacktestEngine:
                 key = str(layer)
                 missing_layer_counts[key] = missing_layer_counts.get(key, 0) + 1
         win_loss_denominator = len(wins) + len(losses)
+        plan_wins = [row for row in raw_triggered if getattr(row, "outcome", None) == "win"]
+        plan_losses = [row for row in raw_triggered if getattr(row, "outcome", None) == "loss"]
+        plan_neutral = [row for row in raw_triggered if getattr(row, "outcome", None) == "neutral"]
+        plan_win_loss_denominator = len(plan_wins) + len(plan_losses)
 
         by_plan_type: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -1167,6 +1171,19 @@ class CryptoBacktestEngine:
                     "signal_quality": "completed evaluations",
                     "execution_quality": "signal-triggered rows",
                     "account_result": "independent filled rows",
+                    "plan_result": "all filled plan rows, including overlapping rows",
+                },
+                "plan_level_result": {
+                    "triggered_count": len(raw_triggered),
+                    "win_count": len(plan_wins),
+                    "loss_count": len(plan_losses),
+                    "neutral_count": len(plan_neutral),
+                    "win_rate_pct": (
+                        round(len(plan_wins) / plan_win_loss_denominator * 100, 2)
+                        if plan_win_loss_denominator
+                        else None
+                    ),
+                    "note": "用于衡量计划本身；重叠计划会计入，不能直接当作账户可实现收益。",
                 },
                 "plan_quality_summary": plan_quality_summary,
                 "cost_sensitivity": cost_sensitivity,
