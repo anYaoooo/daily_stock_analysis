@@ -1,3 +1,5 @@
 # Optional dependencies for the offline BTC PatchTST/iTransformer research module.
 -r requirements.txt
 torch>=2.2
+# Optional zero-shot stock forecasting (TimesFM 2.5, PyTorch backend).
+timesfm[torch]>=2.0.2,<3.0

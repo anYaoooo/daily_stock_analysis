@@ -1728,6 +1728,25 @@ BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=true
 
 `BTC_SHADOW_FORECAST_MODEL_CANDIDATES` 支持 `logistic`、`hist_gradient_boosting`、`lightgbm`，逗号分隔且会自动去重；`BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=false` 可关闭等权集成，仅保留单候选内层选择。LightGBM 由 `requirements.txt` 提供；精简环境若未安装，诊断会明确列出缺失依赖并继续使用其余候选。回滚方式：设置 `BTC_SHADOW_FORECAST_ENABLED=false`。该开关只停止附加影子上下文，已有 BTC 技术分析、回测和交易执行路径不受影响。
 
+## TimesFM 股票日线影子预测
+
+TimesFM 2.5 是可选的零样本时序模型，使用 PyTorch 加载 `google/timesfm-2.5-200m-pytorch` 权重。启用后，普通股票分析会尝试补齐配置的日线历史，输出未来若干交易日的收盘价点预测、q10/q50/q90 区间和相对最新收盘价的预期变化。结果写入 `enhanced_context.timesfm_forecast`，标记为 `mode=shadow`、`participates_in_decision=false`，不会改变趋势判断、交易计划、仓位、风控或自动下单。
+
+默认关闭。启用前执行 `pip install -r requirements-ml.txt`；首次运行会从 Hugging Face 下载约 800 MB 模型权重并缓存。CPU 可以运行但速度较慢，GPU 可通过 `TIMESFM_DEVICE=cuda:0` 指定。建议先用 512 个上下文点和 5 个预测点，再根据内存调整。依赖缺失、历史不足或推理失败时返回 `data_quality=unavailable|insufficient`，主分析继续运行。
+
+```env
+TIMESFM_ENABLED=true
+TIMESFM_MODEL_ID=google/timesfm-2.5-200m-pytorch
+TIMESFM_CACHE_DIR=
+TIMESFM_CONTEXT_LENGTH=512
+TIMESFM_HORIZON_BARS=5
+TIMESFM_BATCH_SIZE=4
+TIMESFM_HISTORY_DAYS=900
+TIMESFM_DEVICE=
+```
+
+TimesFM 输出的是连续值和分位数，不是经过成本校准的方向概率；不要直接将 q50 上涨解释为买入信号。正式升级前必须按标的和市场做 expanding walk-forward 回测，并与现有基线比较。回滚方式：设置 `TIMESFM_ENABLED=false`，不会影响其他分析和 BTC 模型。
+
 ## BTC 交易机会触发分析
 
 `BTC_VOLATILITY_MONITOR_ENABLED=true` 后，schedule 模式会额外注册 `btc_volatility_monitor` 后台任务。它按实时 BTC 价格维护一个短窗口：绝对涨跌幅先达到 `BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT`（默认 0.3%）时，立即发送“启动预警”，显示当前价格、完整波动确认线、多/空确认价和失效价，但不建议立即下单；涨跌幅达到 `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT` 时，再发送一次行情警报并进入“机会观察”状态。只有价格继续沿同方向满足 `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` 和 `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES` 后，才会触发一次 `analysis_mode=hourly` 的 BTC 分析并走现有 report 通知路由。该能力只生成分析和进场计划，不会自动下单；真实交易仍需通过手动交易接口确认。

@@ -749,6 +749,14 @@ class Config:
     btc_shadow_forecast_confidence_threshold: float = 0.58
     btc_shadow_forecast_model_candidates: str = "logistic,hist_gradient_boosting,lightgbm"
     btc_shadow_forecast_ensemble_enabled: bool = True
+    timesfm_enabled: bool = False
+    timesfm_model_id: str = "google/timesfm-2.5-200m-pytorch"
+    timesfm_cache_dir: str = ""
+    timesfm_context_length: int = 512
+    timesfm_horizon_bars: int = 5
+    timesfm_batch_size: int = 4
+    timesfm_history_days: int = 900
+    timesfm_device: str = ""
     btc_volatility_monitor_enabled: bool = False
     btc_volatility_monitor_use_websocket: bool = False
     btc_volatility_monitor_ws_stale_seconds: int = 30
@@ -1683,6 +1691,26 @@ class Config:
                 os.getenv('BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED'),
                 default=True,
             ),
+            timesfm_enabled=parse_env_bool(os.getenv('TIMESFM_ENABLED'), default=False),
+            timesfm_model_id=os.getenv('TIMESFM_MODEL_ID', 'google/timesfm-2.5-200m-pytorch'),
+            timesfm_cache_dir=os.getenv('TIMESFM_CACHE_DIR', ''),
+            timesfm_context_length=parse_env_int(
+                os.getenv('TIMESFM_CONTEXT_LENGTH'), 512,
+                field_name='TIMESFM_CONTEXT_LENGTH', minimum=32, maximum=16384,
+            ),
+            timesfm_horizon_bars=parse_env_int(
+                os.getenv('TIMESFM_HORIZON_BARS'), 5,
+                field_name='TIMESFM_HORIZON_BARS', minimum=1, maximum=256,
+            ),
+            timesfm_batch_size=parse_env_int(
+                os.getenv('TIMESFM_BATCH_SIZE'), 4,
+                field_name='TIMESFM_BATCH_SIZE', minimum=1, maximum=256,
+            ),
+            timesfm_history_days=parse_env_int(
+                os.getenv('TIMESFM_HISTORY_DAYS'), 900,
+                field_name='TIMESFM_HISTORY_DAYS', minimum=60, maximum=10000,
+            ),
+            timesfm_device=os.getenv('TIMESFM_DEVICE', ''),
             btc_volatility_monitor_enabled=parse_env_bool(
                 os.getenv('BTC_VOLATILITY_MONITOR_ENABLED'),
                 default=False,

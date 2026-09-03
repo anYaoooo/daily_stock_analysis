@@ -49,6 +49,14 @@ def ensure_symlink() -> None:
     if not CLAUDE.exists():
         fail("CLAUDE.md is missing")
     if not CLAUDE.is_symlink():
+        # Windows may block symlink creation unless Developer Mode or
+        # elevation is enabled. Accept the Git-compatible pointer file there.
+        if sys.platform == "win32" and CLAUDE.is_file():
+            try:
+                if CLAUDE.read_text(encoding="utf-8").strip() == "AGENTS.md":
+                    return
+            except OSError:
+                pass
         fail("CLAUDE.md must be a symlink to AGENTS.md")
 
     target = Path(CLAUDE.readlink())

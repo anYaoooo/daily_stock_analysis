@@ -94,6 +94,9 @@ pip install -r requirements.txt
 pip install flake8 pytest
 ./scripts/ci_gate.sh
 
+# Native Windows PowerShell equivalent
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci_gate.ps1
+
 # Frontend gate (only if you changed apps/dsa-web/)
 cd apps/dsa-web
 npm ci

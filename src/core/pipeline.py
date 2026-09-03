@@ -501,6 +501,7 @@ class StockAnalysisPipeline:
             trend_result: Optional[TrendAnalysisResult] = None
             crypto_technical_context: Optional[Dict[str, Any]] = None
             shadow_forecast_context: Optional[Dict[str, Any]] = None
+            timesfm_forecast_context: Optional[Dict[str, Any]] = None
             try:
                 from src.services.history_loader import get_frozen_target_date
                 _mkt = get_market_for_stock(normalize_stock_code(code))
@@ -521,6 +522,33 @@ class StockAnalysisPipeline:
                         code,
                         market_phase_context=market_phase_context_dict,
                     )
+                    if bool(getattr(self.config, "timesfm_enabled", False)):
+                        try:
+                            timesfm_bars = self._load_timesfm_daily_frames(code, df)
+                            from src.services.timesfm_forecast_service import StockTimesFMForecastService
+
+                            timesfm_forecast_context = StockTimesFMForecastService(
+                                model_id=getattr(
+                                    self.config,
+                                    "timesfm_model_id",
+                                    "google/timesfm-2.5-200m-pytorch",
+                                ),
+                                cache_dir=getattr(self.config, "timesfm_cache_dir", ""),
+                                context_length=int(getattr(self.config, "timesfm_context_length", 512)),
+                                horizon=int(getattr(self.config, "timesfm_horizon_bars", 5)),
+                                batch_size=int(getattr(self.config, "timesfm_batch_size", 4)),
+                                device=getattr(self.config, "timesfm_device", ""),
+                            ).build(timesfm_bars, stock_code=code, as_of=end_date)
+                        except Exception as exc:
+                            logger.warning("%s(%s) TimesFM 影子预测失败，继续现有分析: %s", stock_name, code, exc)
+                            timesfm_forecast_context = {
+                                "model_version": "timesfm-2.5-200m-pytorch",
+                                "mode": "shadow",
+                                "data_quality": "unavailable",
+                                "reason": "timesfm_pipeline_error",
+                                "error_type": type(exc).__name__,
+                                "participates_in_decision": False,
+                            }
                     hourly_df = None
                     shadow_hourly_df = None
                     if is_crypto_code(code):
@@ -632,6 +660,7 @@ class StockAnalysisPipeline:
                     portfolio_context=portfolio_context,
                     crypto_technical_context=crypto_technical_context,
                     shadow_forecast_context=shadow_forecast_context,
+                    timesfm_forecast_context=timesfm_forecast_context,
                 )
 
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
@@ -718,6 +747,7 @@ class StockAnalysisPipeline:
                 market_phase_context=market_phase_context_dict,
                 portfolio_context=portfolio_context,
                 crypto_technical_context=crypto_technical_context,
+                timesfm_forecast_context=timesfm_forecast_context,
             )
             enhanced_context["market_phase_context"] = market_phase_context_dict
             trigger_context = self._resolve_btc_trigger_context(
@@ -944,6 +974,7 @@ class StockAnalysisPipeline:
         market_phase_context: Optional[Dict[str, Any]] = None,
         portfolio_context: Optional[Dict[str, Any]] = None,
         crypto_technical_context: Optional[Dict[str, Any]] = None,
+        timesfm_forecast_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         增强分析上下文
@@ -1048,6 +1079,8 @@ class StockAnalysisPipeline:
             }
         if crypto_technical_context:
             enhanced['crypto_technical'] = crypto_technical_context
+        if timesfm_forecast_context:
+            enhanced['timesfm_forecast'] = timesfm_forecast_context
 
         # Issue #234：盘中分析使用实时 OHLC 与趋势 MA 覆盖 today。
         # 防护条件：trend_result.ma5 > 0 表示 MA 计算已成功且数据量充足。
@@ -1242,6 +1275,34 @@ class StockAnalysisPipeline:
         except Exception as e:
             logger.warning("[%s] Agent history prefetch failed: %s", code, e)
 
+    def _load_timesfm_daily_frames(self, code: str, fallback: pd.DataFrame) -> pd.DataFrame:
+        """Load enough daily bars for the optional TimesFM shadow forecast."""
+        required = max(32, int(getattr(self.config, "timesfm_context_length", 512)))
+        history_days = max(60, int(getattr(self.config, "timesfm_history_days", 900)))
+        if fallback is not None and len(fallback) >= required:
+            return fallback
+
+        try:
+            target = self._resolve_resume_target_date(code)
+            start = target - timedelta(days=history_days)
+            stored = self.db.get_data_range(code, start, target)
+            if stored and len(stored) >= required:
+                return pd.DataFrame([bar.to_dict() for bar in stored])
+        except Exception as exc:
+            logger.debug("[%s] TimesFM 本地日线历史读取失败: %s", code, exc)
+
+        try:
+            df, source = self.fetcher_manager.get_daily_data(code, days=history_days)
+            if df is not None and not df.empty:
+                try:
+                    self.db.save_daily_data(df, code, source)
+                except Exception as exc:
+                    logger.debug("[%s] TimesFM 日线历史写入失败: %s", code, exc)
+                return df
+        except Exception as exc:
+            logger.warning("[%s] TimesFM 日线历史预取失败: %s", code, exc)
+        return fallback if fallback is not None else pd.DataFrame()
+
     def _analyze_with_agent(
         self, 
         code: str, 
@@ -1259,6 +1320,7 @@ class StockAnalysisPipeline:
         portfolio_context: Optional[Dict[str, Any]] = None,
         crypto_technical_context: Optional[Dict[str, Any]] = None,
         shadow_forecast_context: Optional[Dict[str, Any]] = None,
+        timesfm_forecast_context: Optional[Dict[str, Any]] = None,
     ) -> Optional[AnalysisResult]:
         """
         使用 Agent 模式分析单只股票。
@@ -1310,6 +1372,8 @@ class StockAnalysisPipeline:
                 initial_context["trend_result"] = self._safe_to_dict(trend_result)
             if crypto_technical_context:
                 initial_context["crypto_technical"] = crypto_technical_context
+            if timesfm_forecast_context:
+                initial_context["timesfm_forecast"] = timesfm_forecast_context
 
             news_result_count: Optional[int] = None
             news_intel_prefetched = False

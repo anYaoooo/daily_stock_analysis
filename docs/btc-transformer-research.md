@@ -46,4 +46,14 @@ CSV 必须包含 `date/open/high/low/close/volume`。衍生品字段可使用 `f
 
 该模块仍是 research/shadow 产物。交易统计是成本感知的离线诊断，不等同于可交易回测；只有在固定训练区间、测试区间、手续费、滑点、换手、基准策略和校准流程下完成独立比较后，才可讨论接入现有 shadow forecast。当前版本没有自动保存权重或下单能力。
 
+## TimesFM BTC 微调
+
+TimesFM 2.5 的独立微调入口为 `scripts/train_timesfm_btc.py`。它默认冻结 200M 参数主干，仅训练输出投影层，使用 BTC 小时线、严格时间切分和 purge，结果写入 `artifacts/`，不会写数据库或参与交易决策：
+
+```powershell
+python scripts/train_timesfm_btc.py --trainable-scope projection --epochs 3 --device cpu
+```
+
+`--trainable-scope head` 会同时训练 point 与 quantile 输出层；`--trainable-scope all` 才会更新整个 TimesFM 主干，显存和耗时显著增加。该训练器使用相对价格 Huber loss，输出验证集方向命中率和价格 MAE；它不是官方 TimesFM Trainer，正式使用前仍需按市场、标的和固定样本外区间独立回测。
+
 `validate_btc_transformer_online.py` 会将最新闭合小时前 `--holdout-hours`（默认 24 小时）作为 cutoff，只用 cutoff 及之前可见的数据训练，再将 cutoff 后已经实现的 1/4/24 小时行情作为样本外结果。它不把未来标签混入训练，也不连接现有交易决策链路；运行前应先用 `scripts/backfill_btc_history.py --export-csv` 刷新 CSV。

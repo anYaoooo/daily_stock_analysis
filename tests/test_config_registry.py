@@ -50,6 +50,34 @@ class TestBtcShadowForecastFieldsRegistered(unittest.TestCase):
         self.assertTrue(set(self._SHADOW_KEYS).issubset(field_keys))
 
 
+class TestTimesFMFieldsRegistered(unittest.TestCase):
+    _TIMESFM_KEYS = (
+        "TIMESFM_ENABLED",
+        "TIMESFM_MODEL_ID",
+        "TIMESFM_CACHE_DIR",
+        "TIMESFM_CONTEXT_LENGTH",
+        "TIMESFM_HORIZON_BARS",
+        "TIMESFM_BATCH_SIZE",
+        "TIMESFM_HISTORY_DAYS",
+        "TIMESFM_DEVICE",
+    )
+
+    def test_field_definitions_match_runtime_contract(self):
+        enabled = get_field_definition("TIMESFM_ENABLED")
+        self.assertEqual(enabled["category"], "system")
+        self.assertEqual(enabled["data_type"], "boolean")
+        self.assertEqual(enabled["default_value"], "false")
+        self.assertIn("research_only", enabled["warning_codes"])
+
+    def test_schema_response_includes_timesfm_controls(self):
+        schema = build_schema_response()
+        system_category = next(
+            category for category in schema["categories"] if category["category"] == "system"
+        )
+        field_keys = {field["key"] for field in system_category["fields"]}
+        self.assertTrue(set(self._TIMESFM_KEYS).issubset(field_keys))
+
+
 class TestSlackFieldsRegistered(unittest.TestCase):
     """Slack config keys must be present in the registry."""
 

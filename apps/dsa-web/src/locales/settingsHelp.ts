@@ -489,6 +489,17 @@ const settingsHelpZhCN: SettingsHelpMap = {
       '波动触发分析与日线、小时线计划任务共用进程内互斥；若已有分析正在运行，本次触发会记录日志并跳过。',
     ],
   },
+  'settings.system.timesfm_forecast': {
+    title: 'TimesFM 股票影子预测',
+    summary: '使用可选的 TimesFM 2.5 预测股票日线收盘价，仅作为观察数据。',
+    usage: '安装 requirements-ml.txt 后，将 TIMESFM_ENABLED 设为 true；首次运行会下载模型权重。',
+    valueNotes: [
+      'TIMESFM_CONTEXT_LENGTH 控制输入历史长度，TIMESFM_HORIZON_BARS 控制预测交易日数量。',
+      'TIMESFM_CACHE_DIR 可指定 Hugging Face 权重缓存目录，TIMESFM_DEVICE 可指定 cpu 或 cuda:0。',
+    ],
+    impact: ['结果附加到分析上下文，不改变趋势、交易计划、仓位、风控或自动下单。'],
+    notes: ['依赖缺失、数据不足或推理失败时会 fail-open，主分析继续运行。', 'TimesFM 输出连续值和分位数，不等价于买入/卖出概率。'],
+  },
   'settings.system.RUN_IMMEDIATELY': {
     title: '启动后立即运行',
     summary: '控制非定时模式启动时是否立即执行一次分析。',
@@ -1420,6 +1431,17 @@ const settingsHelpEnUS: SettingsHelpMap = {
       'This only triggers analysis and notification; it never places orders automatically.',
       'Opportunity-triggered analysis shares the process-local BTC analysis lock with daily and hourly scheduled runs; if another analysis is running, the trigger is logged and skipped.',
     ],
+  },
+  'settings.system.timesfm_forecast': {
+    title: 'TimesFM Stock Shadow Forecast',
+    summary: 'Use the optional TimesFM 2.5 model to forecast daily stock closes for observation only.',
+    usage: 'Install requirements-ml.txt, then set TIMESFM_ENABLED=true; the first run downloads the checkpoint.',
+    valueNotes: [
+      'TIMESFM_CONTEXT_LENGTH controls the historical context and TIMESFM_HORIZON_BARS controls future trading days.',
+      'TIMESFM_CACHE_DIR selects the Hugging Face cache directory; TIMESFM_DEVICE can be cpu or cuda:0.',
+    ],
+    impact: ['The result is attached to analysis context and does not change trend, trading plans, sizing, risk controls, or orders.'],
+    notes: ['Missing dependencies, insufficient data, and inference failures are fail-open.', 'Continuous forecasts and quantiles are not buy/sell probabilities.'],
   },
   'settings.system.RUN_IMMEDIATELY': {
     title: 'Run Immediately',

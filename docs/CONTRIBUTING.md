@@ -91,6 +91,9 @@ pip install -r requirements.txt
 pip install flake8 pytest
 ./scripts/ci_gate.sh
 
+# Windows PowerShell 等价入口
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci_gate.ps1
+
 # 前端 gate（如修改了 apps/dsa-web）
 cd apps/dsa-web
 npm ci

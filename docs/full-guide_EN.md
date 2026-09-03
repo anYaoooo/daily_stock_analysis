@@ -1567,6 +1567,25 @@ BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=true
 
 `BTC_SHADOW_FORECAST_MODEL_CANDIDATES` accepts comma-separated `logistic`, `hist_gradient_boosting`, and `lightgbm` values and automatically removes duplicates. Set `BTC_SHADOW_FORECAST_ENSEMBLE_ENABLED=false` to disable the equal-weight ensemble and keep per-candidate inner selection only. LightGBM is supplied by `requirements.txt`; minimal environments without it report the missing optional dependency and continue with the remaining candidates. To roll back, set `BTC_SHADOW_FORECAST_ENABLED=false`. This stops attaching the shadow context only; the existing BTC technical-analysis, backtest, and execution paths are unchanged.
 
+## TimesFM Stock Daily Shadow Forecast
+
+TimesFM 2.5 is an optional zero-shot time-series model using the PyTorch checkpoint `google/timesfm-2.5-200m-pytorch`. When enabled, ordinary stock analysis attempts to backfill the configured daily history and emits point close forecasts, q10/q50/q90 intervals, and the expected change from the latest close. The result is attached as `enhanced_context.timesfm_forecast` with `mode=shadow` and `participates_in_decision=false`; it never changes trend analysis, trading plans, sizing, risk controls, or automatic orders.
+
+It is disabled by default. Install it with `pip install -r requirements-ml.txt`; the first run downloads and caches roughly 800 MB of weights from Hugging Face. CPU inference works but is slower; set `TIMESFM_DEVICE=cuda:0` for a GPU. Start with 512 context points and a five-bar horizon. Missing dependencies, insufficient history, or inference errors return `data_quality=unavailable|insufficient` and the main analysis continues.
+
+```env
+TIMESFM_ENABLED=true
+TIMESFM_MODEL_ID=google/timesfm-2.5-200m-pytorch
+TIMESFM_CACHE_DIR=
+TIMESFM_CONTEXT_LENGTH=512
+TIMESFM_HORIZON_BARS=5
+TIMESFM_BATCH_SIZE=4
+TIMESFM_HISTORY_DAYS=900
+TIMESFM_DEVICE=
+```
+
+TimesFM returns continuous values and quantiles, not cost-calibrated direction probabilities; an upward q50 must not be interpreted as a buy signal. Before any promotion, run expanding walk-forward tests per market and symbol against the existing baselines. To roll back, set `TIMESFM_ENABLED=false`; other analysis and BTC models are unaffected.
+
 ## BTC Opportunity-Triggered Analysis
 
 When `BTC_VOLATILITY_MONITOR_ENABLED=true`, schedule mode also registers the `btc_volatility_monitor` background task. It keeps a short real-time BTC price window: when the absolute move first reaches `BTC_VOLATILITY_MONITOR_EARLY_WARNING_PCT` (0.3% by default), it immediately sends a startup warning with the current price, full-move confirmation level, long/short confirmation price, and invalidation price, but does not recommend immediate entry. When the move reaches `BTC_VOLATILITY_MONITOR_THRESHOLD_PCT`, it sends a market alert and enters an active opportunity state. It triggers one `analysis_mode=hourly` BTC analysis only after price continues in the same direction and satisfies `BTC_VOLATILITY_MONITOR_ENTRY_CONFIRMATION_PCT` plus `BTC_VOLATILITY_MONITOR_CONFIRMATION_SAMPLES`. The analysis is routed through the existing report notification path. It only generates analysis and entry plans; it does not place orders automatically.

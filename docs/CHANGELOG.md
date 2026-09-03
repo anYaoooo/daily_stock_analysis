@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 增加独立 TimesFM 2.5 BTC 微调训练器，默认冻结预训练主干并使用严格时间切分、purge、验证指标和 checkpoint，保持观察模式且不参与交易决策。
+- [改进] 增加原生 `scripts/ci_gate.ps1` Windows 后端门禁，并允许无 symlink 权限时使用严格的 `CLAUDE.md` 指针文件完成治理校验。
+- [新功能] 可选接入 TimesFM 2.5 PyTorch 股票日线影子预测，支持懒加载、分位数区间与 fail-open 数据质量状态；默认关闭且不参与交易决策。
 - [改进] 股票与 BTC 技术信号新增按交易阶段、实现波动状态、市场趋势阶段和多空方向独立校准的阈值画像；报告保留各乘数与有效门槛，避免继续通过重复指标堆叠放大信号。
 - [改进] BTC 技术方向判断改用已闭合 K 线、ATR 波动率归一化和对称多空评分，移除股票专用单向买入评分及 Agent 固定衍生品样例数据，并统一小时线方向投票口径。
 - [测试] BTC 离线方向评估支持多前瞻周期、信号覆盖率和扣除双边手续费/滑点后的净收益统计，避免将单一 MFE/MAE 命中率误读为交易收益。
